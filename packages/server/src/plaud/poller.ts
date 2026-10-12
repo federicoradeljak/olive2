@@ -16,6 +16,15 @@ import type { Kysely } from "kysely";
 import type { Database, MeetingRow, PlaudIngestStateRow } from "@olive/shared";
 import { ensureMeetingFolder, meetingPaths } from "../layout.ts";
 import { logger as defaultLogger, type Logger } from "../logger.ts";
+import {
+  computeRetryDelayMs,
+  isRateLimitError,
+  rateLimitErrorFromResponse,
+  resolveRetryPolicy,
+  withRateLimitRetry,
+  type PlaudRetryInfo,
+  type PlaudRetryOptions
+} from "./retry.ts";
 
 const DEFAULT_PAGE_SIZE = 100;
 const DEFAULT_PCS_WAIT_MS = 5 * 60 * 1000;
@@ -51,6 +60,7 @@ export interface PlaudPollerOptions {
   logger?: Logger;
   pageSize?: number;
   pcsWaitMs?: number;
+  retryOptions?: PlaudRetryOptions;
 }
 
 export interface PlaudPollResult {
@@ -235,6 +245,7 @@ export class PlaudPoller {
   private readonly logger: Logger;
   private readonly pageSize: number;
   private readonly pcsWaitMs: number;
+  private readonly retryOptions: PlaudRetryOptions;
   private timer: ReturnType<typeof setInterval> | undefined;
   private inFlight: Promise<PlaudPollResult> | undefined;
   private connected = false;
@@ -252,6 +263,26 @@ export class PlaudPoller {
     this.logger = options.logger ?? defaultLogger;
     this.pageSize = options.pageSize ?? DEFAULT_PAGE_SIZE;
     this.pcsWaitMs = options.pcsWaitMs ?? DEFAULT_PCS_WAIT_MS;
+    this.retryOptions = options.retryOptions ?? {};
+  }
+
+  /** Run one outbound Plaud call, retrying with backoff on HTTP 429. */
+  private withPlaudRetry<T>(operation: () => Promise<T>): Promise<T> {
+    return withRateLimitRetry(operation, {
+      ...this.retryOptions,
+      onRetry: (info) => this.logRetry(info)
+    });
+  }
+
+  private logRetry(info: PlaudRetryInfo): void {
+    this.logger.warn("Plaud API rate limit hit; retrying with backoff", {
+      category: "plaud",
+      attempt: info.attempt,
+      maxRetries: info.maxRetries,
+      delayMs: info.delayMs,
+      error: errorMessage(info.error)
+    });
+    this.retryOptions.onRetry?.(info);
   }
 
   get oauth(): PlaudOAuthManager {
@@ -309,7 +340,7 @@ export class PlaudPoller {
 
     if (!this.connected && !this.client.oauth.getAccessToken) {
       try {
-        await this.client.getCurrentUser();
+        await this.withPlaudRetry(() => this.client.getCurrentUser());
         this.connected = true;
       } catch {
         this.connected = false;
@@ -374,8 +405,16 @@ export class PlaudPoller {
 
   private async discover(): Promise<number> {
     let discovered = 0;
+    const seen = new Set<string>();
 
-    for await (const file of this.client.listFilesIterator({ pageSize: this.pageSize })) {
+    for await (const file of this.iteratePlaudFiles()) {
+      // A rate-limited page restarts the iterator from page 1; skip files we
+      // already handled in this pass so they aren't re-discovered.
+      if (seen.has(file.id)) {
+        continue;
+      }
+      seen.add(file.id);
+
       const existingRecording = await this.db
         .selectFrom("recordings")
         .select("id")
@@ -449,6 +488,34 @@ export class PlaudPoller {
     return discovered;
   }
 
+  /**
+   * Iterate the remote file listing, restarting the paginated iterator with
+   * backoff if a page is throttled. Restarting replays earlier pages, which
+   * `discover` dedupes via its `seen` set and the database guards.
+   */
+  private async *iteratePlaudFiles(): AsyncGenerator<FileSummary> {
+    const policy = resolveRetryPolicy(this.retryOptions);
+    const sleep = this.retryOptions.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    let attempt = 0;
+
+    for (;;) {
+      try {
+        for await (const file of this.client.listFilesIterator({ pageSize: this.pageSize })) {
+          yield file;
+        }
+        return;
+      } catch (error) {
+        if (attempt >= policy.maxRetries || !isRateLimitError(error)) {
+          throw error;
+        }
+        const delayMs = computeRetryDelayMs(error, attempt, policy);
+        attempt += 1;
+        this.logRetry({ attempt, maxRetries: policy.maxRetries, delayMs, error });
+        await sleep(delayMs);
+      }
+    }
+  }
+
   private async fetchPendingAssets(): Promise<{ resolved: number; error: string | null }> {
     const states = await this.db
       .selectFrom("plaud_ingest_state")
@@ -478,7 +545,7 @@ export class PlaudPoller {
       }
 
       try {
-        const detail = await this.client.getFile(state.plaud_file_id);
+        const detail = await this.withPlaudRetry(() => this.client.getFile(state.plaud_file_id));
         const hasContent = contentIsReady(detail);
         const deadlineExpired =
           this.now() >= state.pcs_deadline_at ||
@@ -748,7 +815,13 @@ export class PlaudPoller {
       throw new Error("Plaud recording has no presigned audio URL");
     }
 
-    const response = await this.fetchImpl(detail.presigned_url);
+    const response = await this.withPlaudRetry(async () => {
+      const res = await this.fetchImpl(detail.presigned_url!);
+      if (res.status === 429) {
+        throw rateLimitErrorFromResponse(res);
+      }
+      return res;
+    });
     if (!response.ok) {
       throw new Error(`Audio download failed with HTTP ${response.status}`);
     }

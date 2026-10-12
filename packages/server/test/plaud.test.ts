@@ -4,6 +4,8 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import type { FileDetail, FileSummary } from "@mcowger/plaud-client";
+import { RateLimitError } from "@mcowger/plaud-client";
+import { computeRetryDelayMs, isRateLimitError, parseRetryAfterMs, resolveRetryPolicy } from "../src/plaud/retry.ts";
 import { createApp } from "../src/app.ts";
 import { createDb } from "../src/db.ts";
 import { PlaudPoller, cleanPlaudSummaryMarkdown, summaryToMarkdown, type PlaudClientLike, type PlaudOAuthManager } from "../src/plaud/poller.ts";
@@ -481,6 +483,192 @@ describe("Plaud API", () => {
 
     // Duration should be exactly 252,960 ms (4m 12s)
     expect(repaired.end_time - repaired.start_time).toBe(252_960);
+  });
+});
+
+function noSleepRecorder(): { delays: number[]; sleep: (ms: number) => Promise<void> } {
+  const delays: number[] = [];
+  return {
+    delays,
+    sleep: async (ms: number) => {
+      delays.push(ms);
+    }
+  };
+}
+
+describe("Plaud rate-limit backoff", () => {
+  test("retries a throttled getFile with exponential backoff before succeeding", async () => {
+    const handle = createDb(":memory:");
+    const meetingsDir = await mkdtemp(join(import.meta.dir, "plaud-429-getfile-"));
+    const base = createFakeClient(readyDetail());
+    let getFileCalls = 0;
+    const client: PlaudClientLike = {
+      ...base,
+      getFile: async () => {
+        getFileCalls += 1;
+        if (getFileCalls <= 2) {
+          throw new RateLimitError("Rate limit exceeded.");
+        }
+        return readyDetail();
+      }
+    };
+    const { delays, sleep } = noSleepRecorder();
+    const poller = new PlaudPoller({
+      db: handle.db,
+      meetingsDir,
+      client,
+      fetchImpl: fakeFetch(),
+      now: () => 1_000_000,
+      retryOptions: { baseDelayMs: 1_000, random: () => 1, sleep }
+    });
+
+    const result = await poller.trigger();
+
+    expect(result.discoveryCompleted).toBe(true);
+    expect(result.error).toBeNull();
+    expect(result.resolved).toBe(1);
+    expect(getFileCalls).toBe(3);
+    // Exponential backoff (base * 2^attempt) with 25% jitter at random() = 1.
+    expect(delays).toEqual([750, 1500]);
+    expect((await handle.db.selectFrom("meetings").selectAll().executeTakeFirstOrThrow()).status).toBe("ready");
+
+    await closeDatabase(handle);
+    await rm(meetingsDir, { recursive: true, force: true });
+  });
+
+  test("restarts the paginated listing after a throttled page and honors Retry-After", async () => {
+    const handle = createDb(":memory:");
+    const meetingsDir = await mkdtemp(join(import.meta.dir, "plaud-429-list-"));
+    const base = createFakeClient(readyDetail());
+    let listCalls = 0;
+    const client: PlaudClientLike = {
+      ...base,
+      listFilesIterator: () => {
+        listCalls += 1;
+        if (listCalls === 1) {
+          return (async function* () {
+            throw new RateLimitError("Rate limit exceeded.", 2_000);
+          })();
+        }
+        return (async function* () {
+          yield FIXTURE_FILE;
+        })();
+      }
+    };
+    const { delays, sleep } = noSleepRecorder();
+    const poller = new PlaudPoller({
+      db: handle.db,
+      meetingsDir,
+      client,
+      fetchImpl: fakeFetch(),
+      now: () => 1_000_000,
+      retryOptions: { sleep }
+    });
+
+    const result = await poller.trigger();
+
+    expect(result.discoveryCompleted).toBe(true);
+    expect(result.discovered).toBe(1);
+    expect(result.resolved).toBe(1);
+    expect(listCalls).toBe(2);
+    expect(delays).toEqual([2_000]);
+
+    await closeDatabase(handle);
+    await rm(meetingsDir, { recursive: true, force: true });
+  });
+
+  test("backs off and retries a throttled presigned audio download", async () => {
+    const handle = createDb(":memory:");
+    const meetingsDir = await mkdtemp(join(import.meta.dir, "plaud-429-download-"));
+    const client = createFakeClient(readyDetail());
+    let downloadCalls = 0;
+    const throttledFetch = async (): Promise<Response> => {
+      downloadCalls += 1;
+      if (downloadCalls === 1) {
+        return new Response("rate limited", { status: 429, headers: { "retry-after": "1" } });
+      }
+      return new Response(AUDIO_BYTES, { headers: { "content-type": "audio/mp4" } });
+    };
+    const { delays, sleep } = noSleepRecorder();
+    const poller = new PlaudPoller({
+      db: handle.db,
+      meetingsDir,
+      client,
+      fetchImpl: throttledFetch,
+      now: () => 1_000_000,
+      retryOptions: { sleep }
+    });
+
+    const result = await poller.trigger();
+
+    expect(result.resolved).toBe(1);
+    expect(downloadCalls).toBe(2);
+    expect(delays).toEqual([1_000]);
+    expect(await handle.db.selectFrom("recordings").selectAll().execute()).toHaveLength(1);
+
+    await closeDatabase(handle);
+    await rm(meetingsDir, { recursive: true, force: true });
+  });
+
+  test("gives up after the retry budget and surfaces the rate-limit error", async () => {
+    const handle = createDb(":memory:");
+    const meetingsDir = await mkdtemp(join(import.meta.dir, "plaud-429-exhausted-"));
+    const base = createFakeClient(readyDetail());
+    let getFileCalls = 0;
+    const client: PlaudClientLike = {
+      ...base,
+      getFile: async () => {
+        getFileCalls += 1;
+        throw new RateLimitError("Rate limit exceeded.");
+      }
+    };
+    const { delays, sleep } = noSleepRecorder();
+    const poller = new PlaudPoller({
+      db: handle.db,
+      meetingsDir,
+      client,
+      fetchImpl: fakeFetch(),
+      now: () => 1_000_000,
+      retryOptions: { maxRetries: 2, sleep }
+    });
+
+    const result = await poller.trigger();
+
+    expect(result.discoveryCompleted).toBe(true);
+    expect(result.resolved).toBe(0);
+    expect(result.error).toContain("Rate limit");
+    // 1 initial attempt + 2 retries.
+    expect(getFileCalls).toBe(3);
+    expect(delays).toHaveLength(2);
+
+    await closeDatabase(handle);
+    await rm(meetingsDir, { recursive: true, force: true });
+  });
+});
+
+describe("Plaud rate-limit retry helper", () => {
+  test("classifies common rate-limit error shapes", () => {
+    expect(isRateLimitError(new RateLimitError("Rate limit exceeded."))).toBe(true);
+    expect(isRateLimitError(Object.assign(new Error("boom"), { status: 429 }))).toBe(true);
+    expect(isRateLimitError(Object.assign(new Error("boom"), { statusCode: 429 }))).toBe(true);
+    expect(isRateLimitError(new Error("Too Many Requests"))).toBe(true);
+    expect(isRateLimitError(new Error("connection reset"))).toBe(false);
+    expect(isRateLimitError(new Error("Not authenticated"))).toBe(false);
+  });
+
+  test("honors Retry-After and clamps the computed delay", () => {
+    const policy = resolveRetryPolicy({ baseDelayMs: 1_000, maxDelayMs: 5_000, random: () => 0 });
+
+    // Server-provided delay wins over the exponential schedule.
+    expect(computeRetryDelayMs(new RateLimitError("429", 4_000), 0, policy)).toBe(4_000);
+    // ...but is clamped to maxDelayMs.
+    expect(computeRetryDelayMs(new RateLimitError("429", 9_999), 0, policy)).toBe(5_000);
+    // random() = 0 means full jitter: no 25% reduction.
+    expect(computeRetryDelayMs(new RateLimitError("429"), 2, policy)).toBe(4_000);
+
+    expect(parseRetryAfterMs("2")).toBe(2_000);
+    expect(parseRetryAfterMs(null)).toBeUndefined();
+    expect(parseRetryAfterMs("not-a-date")).toBeUndefined();
   });
 });
 
