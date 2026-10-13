@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import sqlite3
 import tempfile
 import time
 import uuid
@@ -14,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from dbos import DBOS, SetEnqueueOptions, SetWorkflowID
+from dbos._serialization import DefaultSerializer
 from sqlalchemy import Engine, text
 
 from ..logging_db import logger
@@ -50,7 +52,12 @@ from .queues import (
     QUEUE_SUMMARIZE,
     STAGE_QUEUE_SPECS,
 )
-from .runtime import ensure_dbos_launched_async, is_shutting_down
+from .runtime import (
+    ensure_dbos_launched_async,
+    get_existing_dbos_sqlite_path,
+    is_dbos_launched,
+    is_shutting_down,
+)
 
 STAGE_FFMPEG_DECODE = "ffmpeg_decode"
 STAGE_DIARIZE = "diarize"
@@ -71,6 +78,7 @@ class TaskExecutionContext:
     db: Engine | None = None
     now_fn: Callable[[], int] | None = None
     workflow_id: str | None = None
+    has_live_caller: bool = True
 
 
 _TASK_CONTEXTS: dict[str, TaskExecutionContext] = {}
@@ -87,6 +95,59 @@ def unregister_task_context(task_id: str) -> None:
 
 def get_task_context(task_id: str) -> TaskExecutionContext | None:
     return _TASK_CONTEXTS.get(task_id)
+
+
+_RECOVERY_DB: Engine | None = None
+_RECOVERY_PROGRESS_SINK: Callable[[str, dict[str, Any]], Any] | None = None
+_RECOVERY_COMPLETE_SINK: Callable[[str, dict[str, Any], str | None], Any] | None = None
+_RECOVERY_CONFIG_DIR: str | None = None
+_RECOVERY_MEETINGS_DIR: str | None = None
+
+
+def configure_recovery_runtime(
+    db: Engine | None,
+    progress_sink: Callable[[str, dict[str, Any]], Any] | None,
+    complete_sink: Callable[[str, dict[str, Any], str | None], Any] | None = None,
+    *,
+    config_dir: str | None = None,
+    meetings_dir: str | None = None,
+) -> None:
+    """Set process-wide hooks used by steps that DBOS resumes without a live caller."""
+    global _RECOVERY_DB, _RECOVERY_PROGRESS_SINK, _RECOVERY_COMPLETE_SINK
+    global _RECOVERY_CONFIG_DIR, _RECOVERY_MEETINGS_DIR
+    _RECOVERY_DB = db
+    _RECOVERY_PROGRESS_SINK = progress_sink
+    if complete_sink is not None:
+        _RECOVERY_COMPLETE_SINK = complete_sink
+    if config_dir is not None:
+        _RECOVERY_CONFIG_DIR = config_dir
+    if meetings_dir is not None:
+        _RECOVERY_MEETINGS_DIR = meetings_dir
+
+
+def _ensure_task_context(payload: dict[str, Any]) -> bool:
+    """Register a context for a step whose original caller is gone (e.g. after a restart).
+
+    Returns True when this call created the context and the workflow must unregister it.
+    """
+    task_id = str(payload["taskId"])
+    if task_id in _TASK_CONTEXTS:
+        return False
+    meeting_id = payload.get("meetingId")
+    sink = _RECOVERY_PROGRESS_SINK
+    on_progress = (lambda upd: sink(str(meeting_id), upd)) if sink and meeting_id else None
+    wf_id = getattr(DBOS, "workflow_id", None)
+    register_task_context(
+        TaskExecutionContext(
+            task_id=task_id,
+            meeting_id=str(meeting_id) if meeting_id else None,
+            on_progress=on_progress,
+            db=_RECOVERY_DB,
+            workflow_id=str(wf_id) if wf_id else None,
+            has_live_caller=False,
+        )
+    )
+    return True
 
 
 def _is_signal_aborted(signal: Any) -> bool:
@@ -139,6 +200,27 @@ def _update_stage_run(
     job_id = ctx.workflow_id or f"dbos-{task_id[:8]}"
     try:
         with ctx.db.begin() as conn:
+            if status == "running":
+                conn.execute(
+                    text(
+                        """
+                        UPDATE meetings
+                        SET status = 'processing', last_error = NULL, updated_at = :now
+                        WHERE id = :mid AND primary_transcript_artifact_id IS NULL AND status != 'processing'
+                        """
+                    ),
+                    {"now": now_ms, "mid": meeting_id},
+                )
+                conn.execute(
+                    text(
+                        """
+                        UPDATE stage_runs
+                        SET status = 'running', last_error = NULL, finished_at = NULL, updated_at = :now
+                        WHERE meeting_id = :mid AND stage = 'local_transcribe' AND status != 'running'
+                        """
+                    ),
+                    {"now": now_ms, "mid": meeting_id},
+                )
             existing = (
                 conn.execute(
                     text("SELECT id, attempts FROM stage_runs WHERE meeting_id = :mid AND stage = :stage"),
@@ -214,6 +296,7 @@ def _update_stage_run(
 @DBOS.step()
 async def step_decode_audio(payload: dict[str, Any]) -> dict[str, Any]:
     task_id = str(payload["taskId"])
+    _ensure_task_context(payload)
     meeting_id = payload.get("meetingId")
     work_dir = Path(payload["workDir"])
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -277,6 +360,7 @@ async def step_diarize_turns(
     decode_info: dict[str, Any],
 ) -> dict[str, Any]:
     task_id = str(payload["taskId"])
+    _ensure_task_context(payload)
     meeting_id = payload.get("meetingId")
     work_dir = Path(payload["workDir"])
     wav_path = Path(decode_info["wavPath"])
@@ -394,6 +478,7 @@ async def step_embed_and_match_speakers(
     diar_info: dict[str, Any],
 ) -> dict[str, Any]:
     task_id = str(payload["taskId"])
+    _ensure_task_context(payload)
     meeting_id = payload.get("meetingId")
     work_dir = Path(payload["workDir"])
     wav_path = Path(decode_info["wavPath"])
@@ -617,6 +702,7 @@ async def step_transcribe_asr(
     diar_info: dict[str, Any],
 ) -> dict[str, Any]:
     task_id = str(payload["taskId"])
+    _ensure_task_context(payload)
     meeting_id = payload.get("meetingId")
     work_dir = Path(payload["workDir"])
     wav_path = Path(decode_info["wavPath"])
@@ -780,6 +866,7 @@ async def step_align_and_finalize(
     asr_info: dict[str, Any],
 ) -> dict[str, Any]:
     task_id = str(payload["taskId"])
+    _ensure_task_context(payload)
     meeting_id = payload.get("meetingId")
     wav_path = Path(decode_info["wavPath"])
     diar_path = Path(diar_info["diarizationPath"])
@@ -923,81 +1010,100 @@ async def step_align_and_finalize(
 @DBOS.workflow()
 async def local_transcription_workflow(payload: dict[str, Any]) -> dict[str, Any]:
     task_id = str(payload["taskId"])
-    _check_aborted(task_id)
+    adopted = _ensure_task_context(payload)
+    try:
+        _check_aborted(task_id)
 
-    await _emit_progress(
-        task_id,
-        {
-            "stage": "queued",
-            "percent": 2,
-            "message": "Queued for audio decode (ffmpeg)...",
-        },
-    )
-    decode_handle = await DBOS.enqueue_workflow_async(QUEUE_FFMPEG, step_decode_audio, payload)
-    decode_info = await decode_handle.get_result(polling_interval_sec=0.05)
-    _check_aborted(task_id)
+        await _emit_progress(
+            task_id,
+            {
+                "stage": "queued",
+                "percent": 2,
+                "message": "Queued for audio decode (ffmpeg)...",
+            },
+        )
+        decode_handle = await DBOS.enqueue_workflow_async(QUEUE_FFMPEG, step_decode_audio, payload)
+        decode_info = await decode_handle.get_result(polling_interval_sec=0.05)
+        _check_aborted(task_id)
 
-    await _emit_progress(
-        task_id,
-        {
-            "stage": "queued",
-            "percent": 10,
-            "totalMs": decode_info.get("durationMs"),
-            "message": "Audio decoded. Queued for speaker diarization...",
-        },
-    )
-    diar_handle = await DBOS.enqueue_workflow_async(QUEUE_DIARIZE, step_diarize_turns, payload, decode_info)
-    diar_info = await diar_handle.get_result(polling_interval_sec=0.05)
-    _check_aborted(task_id)
+        await _emit_progress(
+            task_id,
+            {
+                "stage": "queued",
+                "percent": 10,
+                "totalMs": decode_info.get("durationMs"),
+                "message": "Audio decoded. Queued for speaker diarization...",
+            },
+        )
+        diar_handle = await DBOS.enqueue_workflow_async(
+            QUEUE_DIARIZE, step_diarize_turns, payload, decode_info
+        )
+        diar_info = await diar_handle.get_result(polling_interval_sec=0.05)
+        _check_aborted(task_id)
 
-    await _emit_progress(
-        task_id,
-        {
-            "stage": "queued",
-            "percent": 33,
-            "totalMs": decode_info.get("durationMs"),
-            "message": "Diarization complete. Queued for speaker matching & ASR...",
-        },
-    )
-    embed_handle = await DBOS.enqueue_workflow_async(
-        QUEUE_SPEAKER_EMBED,
-        step_embed_and_match_speakers,
-        payload,
-        decode_info,
-        diar_info,
-    )
-    asr_handle = await DBOS.enqueue_workflow_async(
-        QUEUE_ASR,
-        step_transcribe_asr,
-        payload,
-        decode_info,
-        diar_info,
-    )
-    embed_info, asr_info = await asyncio.gather(
-        embed_handle.get_result(polling_interval_sec=0.05),
-        asr_handle.get_result(polling_interval_sec=0.05),
-    )
-    _check_aborted(task_id)
+        await _emit_progress(
+            task_id,
+            {
+                "stage": "queued",
+                "percent": 33,
+                "totalMs": decode_info.get("durationMs"),
+                "message": "Diarization complete. Queued for speaker matching & ASR...",
+            },
+        )
+        embed_handle = await DBOS.enqueue_workflow_async(
+            QUEUE_SPEAKER_EMBED,
+            step_embed_and_match_speakers,
+            payload,
+            decode_info,
+            diar_info,
+        )
+        asr_handle = await DBOS.enqueue_workflow_async(
+            QUEUE_ASR,
+            step_transcribe_asr,
+            payload,
+            decode_info,
+            diar_info,
+        )
+        embed_info, asr_info = await asyncio.gather(
+            embed_handle.get_result(polling_interval_sec=0.05),
+            asr_handle.get_result(polling_interval_sec=0.05),
+        )
+        _check_aborted(task_id)
 
-    await _emit_progress(
-        task_id,
-        {
-            "stage": "queued",
-            "percent": 95,
-            "totalMs": decode_info.get("durationMs"),
-            "message": "ASR complete. Queued for alignment & finalization...",
-        },
-    )
-    align_handle = await DBOS.enqueue_workflow_async(
-        QUEUE_ALIGN,
-        step_align_and_finalize,
-        payload,
-        decode_info,
-        diar_info,
-        embed_info,
-        asr_info,
-    )
-    return await align_handle.get_result(polling_interval_sec=0.05)
+        await _emit_progress(
+            task_id,
+            {
+                "stage": "queued",
+                "percent": 95,
+                "totalMs": decode_info.get("durationMs"),
+                "message": "ASR complete. Queued for alignment & finalization...",
+            },
+        )
+        align_handle = await DBOS.enqueue_workflow_async(
+            QUEUE_ALIGN,
+            step_align_and_finalize,
+            payload,
+            decode_info,
+            diar_info,
+            embed_info,
+            asr_info,
+        )
+        res_dict = await align_handle.get_result(polling_interval_sec=0.05)
+        ctx = _TASK_CONTEXTS.get(task_id)
+        meeting_id = payload.get("meetingId")
+        if (ctx is None or not ctx.has_live_caller) and meeting_id and callable(_RECOVERY_COMPLETE_SINK):
+            wf_id = getattr(DBOS, "workflow_id", None)
+            comp_res = _RECOVERY_COMPLETE_SINK(
+                str(meeting_id),
+                res_dict,
+                str(wf_id) if wf_id else None,
+            )
+            if inspect.isawaitable(comp_res):
+                await comp_res
+        return res_dict
+    finally:
+        if adopted:
+            unregister_task_context(task_id)
 
 
 @DBOS.step()
@@ -1358,12 +1464,15 @@ async def run_staged_local_transcription(
         )
 
         if abort_wait_task in done and not result_task.done():
-            try:
-                await DBOS.cancel_workflow_async(wf_id)
-            except Exception:
-                pass
+            if not is_shutting_down():
+                try:
+                    await DBOS.cancel_workflow_async(wf_id)
+                except Exception:
+                    pass
+                result_task.cancel()
+                raise RuntimeError("Transcription cancelled by user")
             result_task.cancel()
-            raise RuntimeError("Transcription cancelled by user")
+            raise RuntimeError("Transcription cancelled: server shutting down")
 
         abort_wait_task.cancel()
         res_dict = await result_task
@@ -1382,6 +1491,332 @@ async def run_staged_local_transcription(
                 pass
 
 
+_DBOS_PROGRESS_CACHE: tuple[float, str, dict[str, dict[str, Any]]] | None = None
+
+
+def invalidate_dbos_progress_cache() -> None:
+    global _DBOS_PROGRESS_CACHE
+    _DBOS_PROGRESS_CACHE = None
+
+
+def get_dbos_active_progress_map(
+    db: Engine | None = None,
+    *,
+    config_dir: str | Path | None = None,
+    meetings_dir: str | Path | None = None,
+) -> dict[str, dict[str, Any]]:
+    global _DBOS_PROGRESS_CACHE
+    if not is_dbos_launched():
+        return {}
+
+    dbos_path = get_existing_dbos_sqlite_path(
+        config_dir=config_dir or _RECOVERY_CONFIG_DIR,
+        meetings_dir=meetings_dir or _RECOVERY_MEETINGS_DIR,
+    )
+    if dbos_path is None or not dbos_path.exists():
+        return {}
+
+    now_mono = time.monotonic()
+    path_key = str(dbos_path)
+    if (
+        _DBOS_PROGRESS_CACHE is not None
+        and _DBOS_PROGRESS_CACHE[1] == path_key
+        and (now_mono - _DBOS_PROGRESS_CACHE[0]) < 0.75
+    ):
+        return dict(_DBOS_PROGRESS_CACHE[2])
+
+    try:
+        with sqlite3.connect(str(dbos_path), timeout=1.0) as sconn:
+            sconn.row_factory = sqlite3.Row
+            rows = sconn.execute(
+                """
+                SELECT workflow_uuid, status, name, queue_name, parent_workflow_id, created_at, priority
+                FROM workflow_status
+                WHERE status IN ('PENDING', 'ENQUEUED', 'DELAYED')
+                ORDER BY COALESCE(priority, 0) ASC, created_at ASC
+                """
+            ).fetchall()
+            if not rows:
+                _DBOS_PROGRESS_CACHE = (now_mono, path_key, {})
+                return {}
+
+            out_map = _build_progress_map(sconn, rows, db)
+    except Exception:
+        return {}
+
+    _DBOS_PROGRESS_CACHE = (now_mono, path_key, out_map)
+    return dict(out_map)
+
+
+_WF_MEETING_CACHE: dict[str, str | None] = {}
+
+
+def _meeting_id_from_inputs(sconn: sqlite3.Connection, wf_id: str) -> str | None:
+    """Read meetingId from a DBOS workflow's recorded input (cached per workflow)."""
+    if wf_id in _WF_MEETING_CACHE:
+        return _WF_MEETING_CACHE[wf_id]
+    mid: str | None = None
+    try:
+        row = sconn.execute("SELECT inputs FROM workflow_input WHERE workflow_uuid = ?", (wf_id,)).fetchone()
+        if row and row[0]:
+            decoded = DefaultSerializer().deserialize(row[0])
+            args = decoded.get("args") or ()
+            first = args[0] if args else {}
+            if isinstance(first, dict) and first.get("meetingId"):
+                mid = str(first["meetingId"])
+    except Exception:
+        mid = None
+    _WF_MEETING_CACHE[wf_id] = mid
+    return mid
+
+
+def _build_progress_map(
+    sconn: sqlite3.Connection,
+    rows: list[sqlite3.Row],
+    db: Engine | None,
+) -> dict[str, dict[str, Any]]:
+    """Derive per-meeting progress from active DBOS workflows."""
+    job_to_meeting: dict[str, str] = {}
+    for ctx in list(_TASK_CONTEXTS.values()):
+        if ctx.workflow_id and ctx.meeting_id:
+            job_to_meeting[ctx.workflow_id] = ctx.meeting_id
+
+    target_db = db or _RECOVERY_DB
+    if target_db is not None:
+        try:
+            with target_db.connect() as conn:
+                sr_rows = (
+                    conn.execute(
+                        text(
+                            "SELECT provider_job_id, meeting_id FROM stage_runs WHERE provider_job_id IS NOT NULL"
+                        )
+                    )
+                    .mappings()
+                    .all()
+                )
+                for r in sr_rows:
+                    jid = str(r["provider_job_id"])
+                    mid = str(r["meeting_id"])
+                    if jid and mid:
+                        job_to_meeting[jid] = mid
+        except Exception:
+            pass
+
+    def _resolve_mid(sconn: sqlite3.Connection, row: sqlite3.Row) -> str | None:
+        wf_id = str(row["workflow_uuid"] or "")
+        parent_id = str(row["parent_workflow_id"] or "")
+        for candidate in (wf_id, parent_id):
+            if not candidate:
+                continue
+            if candidate in job_to_meeting:
+                return job_to_meeting[candidate]
+            if candidate.startswith("local-transcribe:"):
+                parts = candidate.split(":")
+                if len(parts) >= 2 and parts[1]:
+                    return parts[1]
+        if wf_id.startswith("local-") and "-" in wf_id:
+            base = wf_id.rsplit("-", 1)[0]
+            if base in job_to_meeting:
+                return job_to_meeting[base]
+        return _meeting_id_from_inputs(sconn, wf_id)
+
+    waiting_by_queue: dict[str, list[str]] = {}
+    for r in rows:
+        st = str(r["status"] or "")
+        q_name = str(r["queue_name"] or "")
+        if st in ("ENQUEUED", "DELAYED") and q_name:
+            waiting_by_queue.setdefault(q_name, []).append(str(r["workflow_uuid"]))
+
+    out: dict[str, tuple[int, dict[str, Any]]] = {}
+    for r in rows:
+        mid = _resolve_mid(sconn, r)
+        if not mid:
+            continue
+        wf_id = str(r["workflow_uuid"] or "")
+        st = str(r["status"] or "")
+        q_name = str(r["queue_name"] or "")
+        raw_name = str(r["name"] or "")
+        is_active = st == "PENDING"
+
+        q_list = waiting_by_queue.get(q_name, [])
+        q_total = len(q_list)
+        try:
+            q_pos = q_list.index(wf_id) + 1
+        except ValueError:
+            q_pos = 1
+
+        rank = 0
+        prog: dict[str, Any] | None = None
+
+        if q_name == QUEUE_ALIGN or "step_align_and_finalize" in raw_name:
+            if is_active:
+                rank = 90
+                prog = {
+                    "stage": "finalizing",
+                    "percent": 96,
+                    "message": "Aligning words & finalizing transcript...",
+                }
+            else:
+                rank = 80
+                prog = {
+                    "stage": "queued",
+                    "percent": 95,
+                    "message": f"ASR complete. Queued for alignment (#{q_pos} of {q_total} in queue)...",
+                }
+        elif q_name == QUEUE_ASR or "step_transcribe_asr" in raw_name:
+            if is_active:
+                rank = 75
+                prog = {
+                    "stage": "transcribing",
+                    "percent": 40,
+                    "message": "Transcribing speech segments with Cohere ASR...",
+                }
+            else:
+                rank = 60
+                prog = {
+                    "stage": "queued",
+                    "percent": 33,
+                    "message": f"Diarization complete. Queued for ASR (#{q_pos} of {q_total} in queue)...",
+                }
+        elif q_name == QUEUE_SPEAKER_EMBED or "step_embed_and_match_speakers" in raw_name:
+            if is_active:
+                rank = 70
+                prog = {
+                    "stage": "diarizing",
+                    "percent": 38,
+                    "message": "Matching speaker voiceprints against enrolled profiles...",
+                }
+            else:
+                rank = 55
+                prog = {
+                    "stage": "queued",
+                    "percent": 33,
+                    "message": f"Diarization complete. Queued for speaker matching (#{q_pos} of {q_total} in queue)...",
+                }
+        elif q_name == QUEUE_DIARIZE or "step_diarize_turns" in raw_name:
+            if is_active:
+                rank = 50
+                prog = {
+                    "stage": "diarizing",
+                    "percent": 15,
+                    "message": "Diarization (1/4): Running neural speaker segmentation & embeddings...",
+                }
+            else:
+                rank = 40
+                prog = {
+                    "stage": "queued",
+                    "percent": 10,
+                    "message": f"Audio decoded. Queued for speaker diarization (#{q_pos} of {q_total} in queue)...",
+                }
+        elif q_name == QUEUE_FFMPEG or "step_decode_audio" in raw_name:
+            if is_active:
+                rank = 30
+                prog = {
+                    "stage": "decoding",
+                    "percent": 5,
+                    "message": "Decoding 16kHz audio samples...",
+                }
+            else:
+                rank = 20
+                prog = {
+                    "stage": "queued",
+                    "percent": 2,
+                    "message": f"Queued for audio decode (#{q_pos} of {q_total} in queue)...",
+                }
+        elif "local_transcription_workflow" in raw_name:
+            rank = 10
+            prog = {
+                "stage": "queued",
+                "percent": 2,
+                "message": "Queued in transcription pipeline...",
+            }
+
+        if prog is not None:
+            prev = out.get(mid)
+            if prev is None or rank >= prev[0]:
+                out[mid] = (rank, prog)
+
+    return {mid: item[1] for mid, item in out.items()}
+
+
+async def cancel_dbos_workflows_for_meeting(
+    meeting_id: str,
+    *,
+    db: Engine | None = None,
+    config_dir: str | Path | None = None,
+    meetings_dir: str | Path | None = None,
+) -> int:
+    invalidate_dbos_progress_cache()
+    if not is_dbos_launched():
+        return 0
+    dbos_path = get_existing_dbos_sqlite_path(
+        config_dir=config_dir or _RECOVERY_CONFIG_DIR,
+        meetings_dir=meetings_dir or _RECOVERY_MEETINGS_DIR,
+    )
+    if dbos_path is None or not dbos_path.exists():
+        return 0
+
+    parent_ids: set[str] = set()
+    target_db = db or _RECOVERY_DB
+    if target_db is not None:
+        try:
+            with target_db.connect() as conn:
+                rows = (
+                    conn.execute(
+                        text(
+                            "SELECT provider_job_id FROM stage_runs WHERE meeting_id = :mid AND provider_job_id IS NOT NULL"
+                        ),
+                        {"mid": meeting_id},
+                    )
+                    .mappings()
+                    .all()
+                )
+                for r in rows:
+                    if r["provider_job_id"]:
+                        parent_ids.add(str(r["provider_job_id"]))
+        except Exception:
+            pass
+
+    for ctx in list(_TASK_CONTEXTS.values()):
+        if ctx.meeting_id == meeting_id and ctx.workflow_id:
+            parent_ids.add(ctx.workflow_id)
+
+    wf_ids_to_cancel: set[str] = set()
+    try:
+        with sqlite3.connect(str(dbos_path), timeout=1.0) as sconn:
+            sconn.row_factory = sqlite3.Row
+            active_rows = sconn.execute(
+                """
+                SELECT workflow_uuid, parent_workflow_id
+                FROM workflow_status
+                WHERE status IN ('PENDING', 'ENQUEUED', 'DELAYED')
+                """
+            ).fetchall()
+            for r in active_rows:
+                wid = str(r["workflow_uuid"] or "")
+                pid = str(r["parent_workflow_id"] or "")
+                if (
+                    wid in parent_ids
+                    or pid in parent_ids
+                    or wid.startswith(f"local-transcribe:{meeting_id}:")
+                    or pid.startswith(f"local-transcribe:{meeting_id}:")
+                    or any(wid.startswith(f"{p}-") for p in parent_ids)
+                ):
+                    wf_ids_to_cancel.add(wid)
+    except Exception:
+        pass
+
+    cancelled_count = 0
+    for wid in wf_ids_to_cancel:
+        try:
+            await DBOS.cancel_workflow_async(wid)
+            cancelled_count += 1
+        except Exception:
+            pass
+    invalidate_dbos_progress_cache()
+    return cancelled_count
+
+
 __all__ = [
     "QUEUE_ALIGN",
     "QUEUE_ASR",
@@ -1398,8 +1833,12 @@ __all__ = [
     "STAGE_FFMPEG_DECODE",
     "STAGE_SPEAKER_EMBED",
     "TaskExecutionContext",
+    "cancel_dbos_workflows_for_meeting",
+    "configure_recovery_runtime",
     "enqueue_stage_job",
+    "get_dbos_active_progress_map",
     "get_debug_queues_snapshot",
+    "invalidate_dbos_progress_cache",
     "local_transcription_workflow",
     "register_task_context",
     "run_staged_local_transcription",

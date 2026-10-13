@@ -26,6 +26,33 @@ def is_shutting_down() -> bool:
     return _SHUTTING_DOWN.is_set() or bool(getattr(AppStatus, "should_exit", False))
 
 
+def mark_shutting_down() -> None:
+    _SHUTTING_DOWN.set()
+
+
+def is_dbos_launched() -> bool:
+    return bool(_LAUNCHED)
+
+
+def get_existing_dbos_sqlite_path(
+    config_dir: str | Path | None = None,
+    meetings_dir: str | Path | None = None,
+) -> Path | None:
+    if _ACTIVE_DB_URL and _ACTIVE_DB_URL.startswith("sqlite:///"):
+        p = Path(_ACTIVE_DB_URL.replace("sqlite:///", "", 1))
+        if p.exists():
+            return p
+    if config_dir is not None:
+        p = Path(config_dir).resolve() / "dbos.sqlite"
+        if p.exists():
+            return p
+    if meetings_dir is not None and str(meetings_dir).strip():
+        p = Path(meetings_dir).resolve().parent / "dbos.sqlite"
+        if p.exists():
+            return p
+    return None
+
+
 def reset_shutdown_flag() -> None:
     _SHUTTING_DOWN.clear()
     AppStatus.should_exit = False
@@ -198,7 +225,10 @@ def shutdown_dbos() -> None:
 __all__ = [
     "ensure_dbos_launched_async",
     "ensure_dbos_launched_sync",
+    "get_existing_dbos_sqlite_path",
+    "is_dbos_launched",
     "is_shutting_down",
+    "mark_shutting_down",
     "reset_shutdown_flag",
     "resolve_dbos_database_url",
     "shutdown_dbos",

@@ -282,6 +282,20 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                     pass
             await asyncio.to_thread(shutdown_dbos)
 
+    from .workflows.transcription_workflow import configure_recovery_runtime
+
+    configure_recovery_runtime(
+        db=db,
+        progress_sink=lambda meeting_id, update: get_transcription_service().emit_progress(
+            meeting_id, update
+        ),
+        complete_sink=lambda meeting_id, result, wf_id: (
+            get_transcription_service().complete_recovered_local_transcript(meeting_id, result, wf_id)
+        ),
+        config_dir=config_dir,
+        meetings_dir=meetings_dir,
+    )
+
     app = FastAPI(title="Olive API", version="0.2.0", lifespan=lifespan)
 
     @app.api_route("/mcp", methods=["GET", "POST", "DELETE", "OPTIONS"], include_in_schema=False)
@@ -407,13 +421,14 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         if not detail:
             return JSONResponse({"error": "Meeting not found"}, status_code=404)
 
+        svc = get_transcription_service()
         active_progress = (
             _call_sync(
-                transcription_service,
+                svc,
                 ("get_transcription_progress", "getTranscriptionProgress"),
                 meeting_id,
             )
-            if transcription_service is not None
+            if svc is not None
             else None
         )
         summary_gen = (

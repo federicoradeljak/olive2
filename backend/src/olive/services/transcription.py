@@ -33,7 +33,12 @@ from ..providers.speechmatics import (
     transcript_to_text,
 )
 from ..schemas import EnrolledSpeaker, Transcript, TranscriptionProgressUpdate
-from ..workflows import QUEUE_SUMMARIZE, enqueue_stage_job, ensure_dbos_launched_async
+from ..workflows import (
+    QUEUE_SUMMARIZE,
+    enqueue_stage_job,
+    ensure_dbos_launched_async,
+    get_dbos_active_progress_map,
+)
 
 STAGE_SPEECHMATICS_TRANSCRIBE = "speechmatics_transcribe"
 STAGE_LOCAL_TRANSCRIBE = "local_transcribe"
@@ -167,12 +172,20 @@ class TranscriptionService:
     emitProgress = emit_progress
 
     def get_transcription_progress(self, meeting_id: str) -> TranscriptionProgressUpdate | None:
-        return self._active_progress.get(meeting_id)
+        live = self._active_progress.get(meeting_id)
+        if live is not None:
+            return live
+        dbos_prog = get_dbos_active_progress_map(self.db).get(meeting_id)
+        return TranscriptionProgressUpdate.model_validate(dbos_prog) if dbos_prog else None
 
     getTranscriptionProgress = get_transcription_progress
 
     def get_all_active_transcription_progress(self) -> dict[str, dict[str, Any]]:
-        return {mid: prog.model_dump(exclude_none=True) for mid, prog in self._active_progress.items()}
+        merged = get_dbos_active_progress_map(self.db)
+        merged.update(
+            {mid: prog.model_dump(exclude_none=True) for mid, prog in self._active_progress.items()}
+        )
+        return merged
 
     getAllActiveTranscriptionProgress = get_all_active_transcription_progress
 
@@ -783,6 +796,93 @@ class TranscriptionService:
             }
 
     transcribeMeetingLocal = transcribe_meeting_local
+
+    async def complete_recovered_local_transcript(
+        self,
+        meeting_id: str,
+        result: dict[str, Any],
+        workflow_id: str | None,
+    ) -> None:
+        """Persist a local transcript that DBOS finished after a restart (no live caller)."""
+        with self.db.connect() as conn:
+            meeting = (
+                conn.execute(text("SELECT * FROM meetings WHERE id = :id"), {"id": meeting_id})
+                .mappings()
+                .first()
+            )
+            recording = (
+                conn.execute(
+                    text("SELECT id FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"),
+                    {"mid": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
+        if not meeting:
+            return
+
+        transcript = Transcript.model_validate(result["transcript"])
+        discovered = [
+            d if isinstance(d, DiscoveredSpeakerVoiceprint) else DiscoveredSpeakerVoiceprint(**d)
+            for d in result.get("discoveredSpeakers", [])
+        ]
+        paths = ensure_meeting_folder(
+            meeting_paths(self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"])
+        )
+        rec_id = recording["id"] if recording else None
+        json_art_id = await self._ensure_artifact(
+            meeting_id,
+            rec_id,
+            "transcript",
+            "json",
+            "transcripts/local.json",
+            f"{json.dumps(transcript.model_dump(exclude_none=True), indent=2)}\n",
+            paths.transcripts_dir,
+            PROVIDER_LOCAL,
+        )
+        await self._ensure_artifact(
+            meeting_id,
+            rec_id,
+            "transcript",
+            "txt",
+            "transcripts/local.txt",
+            f"{transcript_to_text(transcript)}\n",
+            paths.transcripts_dir,
+            PROVIDER_LOCAL,
+        )
+        await self._persist_local_discovered_speakers(meeting_id, json_art_id, discovered)
+
+        now = self.now()
+        with self.db.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    UPDATE meetings
+                    SET primary_transcript_artifact_id = :aid, status = 'ready',
+                        last_error = NULL, updated_at = :now
+                    WHERE id = :id
+                    """
+                ),
+                {"aid": json_art_id, "now": now, "id": meeting_id},
+            )
+            conn.execute(
+                text(
+                    """
+                    UPDATE stage_runs
+                    SET status = 'done', last_error = NULL, finished_at = :now, updated_at = :now
+                    WHERE meeting_id = :mid AND stage = :stage AND status = 'running'
+                    """
+                ),
+                {"now": now, "mid": meeting_id, "stage": STAGE_LOCAL_TRANSCRIBE},
+            )
+        self.emit_progress(
+            meeting_id,
+            {"stage": "done", "percent": 100, "message": "Transcription completed successfully."},
+        )
+        self.logger.info(
+            "Persisted recovered local transcript",
+            {"category": "transcription", "meetingId": meeting_id, "workflowId": workflow_id},
+        )
 
     async def transcribe_meeting_speechmatics(
         self,
