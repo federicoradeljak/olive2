@@ -43,6 +43,7 @@ from .queues import (
     QUEUE_ASR,
     QUEUE_DIARIZE,
     QUEUE_FFMPEG,
+    QUEUE_PIPELINE,
     QUEUE_PLAUD_SYNC,
     QUEUE_SPEAKER_EMBED,
     QUEUE_SPEECHMATICS,
@@ -924,14 +925,40 @@ async def local_transcription_workflow(payload: dict[str, Any]) -> dict[str, Any
     task_id = str(payload["taskId"])
     _check_aborted(task_id)
 
+    await _emit_progress(
+        task_id,
+        {
+            "stage": "queued",
+            "percent": 2,
+            "message": "Queued for audio decode (ffmpeg)...",
+        },
+    )
     decode_handle = await DBOS.enqueue_workflow_async(QUEUE_FFMPEG, step_decode_audio, payload)
-    decode_info = await decode_handle.get_result()
+    decode_info = await decode_handle.get_result(polling_interval_sec=0.05)
     _check_aborted(task_id)
 
+    await _emit_progress(
+        task_id,
+        {
+            "stage": "queued",
+            "percent": 10,
+            "totalMs": decode_info.get("durationMs"),
+            "message": "Audio decoded. Queued for speaker diarization...",
+        },
+    )
     diar_handle = await DBOS.enqueue_workflow_async(QUEUE_DIARIZE, step_diarize_turns, payload, decode_info)
-    diar_info = await diar_handle.get_result()
+    diar_info = await diar_handle.get_result(polling_interval_sec=0.05)
     _check_aborted(task_id)
 
+    await _emit_progress(
+        task_id,
+        {
+            "stage": "queued",
+            "percent": 33,
+            "totalMs": decode_info.get("durationMs"),
+            "message": "Diarization complete. Queued for speaker matching & ASR...",
+        },
+    )
     embed_handle = await DBOS.enqueue_workflow_async(
         QUEUE_SPEAKER_EMBED,
         step_embed_and_match_speakers,
@@ -947,11 +974,20 @@ async def local_transcription_workflow(payload: dict[str, Any]) -> dict[str, Any
         diar_info,
     )
     embed_info, asr_info = await asyncio.gather(
-        embed_handle.get_result(),
-        asr_handle.get_result(),
+        embed_handle.get_result(polling_interval_sec=0.05),
+        asr_handle.get_result(polling_interval_sec=0.05),
     )
     _check_aborted(task_id)
 
+    await _emit_progress(
+        task_id,
+        {
+            "stage": "queued",
+            "percent": 95,
+            "totalMs": decode_info.get("durationMs"),
+            "message": "ASR complete. Queued for alignment & finalization...",
+        },
+    )
     align_handle = await DBOS.enqueue_workflow_async(
         QUEUE_ALIGN,
         step_align_and_finalize,
@@ -961,7 +997,7 @@ async def local_transcription_workflow(payload: dict[str, Any]) -> dict[str, Any
         embed_info,
         asr_info,
     )
-    return await align_handle.get_result()
+    return await align_handle.get_result(polling_interval_sec=0.05)
 
 
 @DBOS.step()
@@ -1077,7 +1113,7 @@ async def get_debug_queues_snapshot(
                                    sr.attempts, sr.started_at, sr.updated_at
                             FROM stage_runs sr
                             LEFT JOIN meetings m ON m.id = sr.meeting_id
-                            WHERE sr.status IN ('running', 'pending')
+                            WHERE sr.status = 'running'
                             ORDER BY sr.updated_at DESC
                             """
                         )
@@ -1176,8 +1212,9 @@ async def get_debug_queues_snapshot(
         waiting_jobs = [_serialize_wf(w, idx + 1) for idx, w in enumerate(waiting_raw)]
         recent_jobs = [_serialize_wf(w) for w in recent_raw]
 
-        total_active += len(active_jobs)
-        total_waiting += len(waiting_jobs)
+        if spec.name != QUEUE_PIPELINE:
+            total_active += len(active_jobs)
+            total_waiting += len(waiting_jobs)
 
         queues_out.append(
             {
@@ -1197,8 +1234,8 @@ async def get_debug_queues_snapshot(
             [
                 w
                 for w in all_wfs
-                if not getattr(w, "queue_name", None)
-                and getattr(w, "status", None) in ("PENDING", "ENQUEUED")
+                if getattr(w, "queue_name", None) in (None, QUEUE_PIPELINE)
+                and getattr(w, "status", None) == "PENDING"
             ],
             key=lambda w: int(getattr(w, "created_at", None) or 0),
             reverse=True,
@@ -1296,10 +1333,23 @@ async def run_staged_local_transcription(
         if _is_signal_aborted(signal):
             raise RuntimeError("Transcription cancelled by user")
 
-        with SetWorkflowID(wf_id):
-            wf_handle = await DBOS.start_workflow_async(local_transcription_workflow, payload)
+        await _emit_progress(
+            task_id,
+            {
+                "stage": "queued",
+                "percent": 0,
+                "message": "Queued in transcription pipeline...",
+            },
+        )
+        dedup_key = f"pipeline:{meeting_id}" if meeting_id else None
+        with SetWorkflowID(wf_id), SetEnqueueOptions(deduplication_id=dedup_key):
+            wf_handle = await DBOS.enqueue_workflow_async(
+                QUEUE_PIPELINE,
+                local_transcription_workflow,
+                payload,
+            )
 
-        result_task = asyncio.create_task(wf_handle.get_result())
+        result_task = asyncio.create_task(wf_handle.get_result(polling_interval_sec=0.05))
         abort_wait_task = asyncio.create_task(abort_Event.wait())
 
         done, _ = await asyncio.wait(
@@ -1337,6 +1387,7 @@ __all__ = [
     "QUEUE_ASR",
     "QUEUE_DIARIZE",
     "QUEUE_FFMPEG",
+    "QUEUE_PIPELINE",
     "QUEUE_PLAUD_SYNC",
     "QUEUE_SPEAKER_EMBED",
     "QUEUE_SPEECHMATICS",

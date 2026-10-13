@@ -5261,7 +5261,11 @@ function DebugQueuesPage() {
     return () => clearInterval(timer);
   }, [fetchSnapshot, paused]);
 
-  const activeTranscriptionEntries = Object.entries(snapshot?.activeTranscriptions || {});
+  const allTranscriptionEntries = Object.entries(snapshot?.activeTranscriptions || {});
+  const activeTranscriptionEntries = allTranscriptionEntries.filter(
+    ([, prog]) => prog.stage !== "queued"
+  );
+  const queuedTranscriptionCount = allTranscriptionEntries.length - activeTranscriptionEntries.length;
 
   return (
     <div className="min-h-screen bg-stone-950 text-stone-100 p-6 font-sans">
@@ -5366,11 +5370,20 @@ function DebugQueuesPage() {
               </div>
             </div>
 
-            {(activeTranscriptionEntries.length > 0 || snapshot.runningStageRuns.length > 0) && (
+            {(activeTranscriptionEntries.length > 0 ||
+              queuedTranscriptionCount > 0 ||
+              snapshot.runningStageRuns.length > 0) && (
               <div className="rounded-xl border border-amber-500/30 bg-amber-950/10 p-4 space-y-3">
-                <h2 className="text-xs font-semibold uppercase tracking-wider text-amber-300">
-                  Live Pipeline Activity
-                </h2>
+                <div className="flex items-center justify-between gap-2">
+                  <h2 className="text-xs font-semibold uppercase tracking-wider text-amber-300">
+                    Live Pipeline Activity
+                  </h2>
+                  {queuedTranscriptionCount > 0 && (
+                    <span className="rounded-full bg-sky-950/80 border border-sky-800/60 px-2.5 py-0.5 text-[11px] font-mono text-sky-300">
+                      +{queuedTranscriptionCount} queued in pipeline
+                    </span>
+                  )}
+                </div>
                 {activeTranscriptionEntries.map(([mid, prog]) => (
                   <div
                     key={mid}

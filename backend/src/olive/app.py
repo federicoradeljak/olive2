@@ -1934,12 +1934,19 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         async def spa_fallback(full_path: str) -> Response:
             if full_path.startswith("api/"):
                 return JSONResponse({"error": "Not found"}, status_code=404)
+            no_cache_headers = {"Cache-Control": "no-cache, no-store, must-revalidate"}
             candidate = _safe_web_path(str(web_root), full_path)
             if candidate and candidate.is_file():
+                if candidate.name == "index.html":
+                    return FileResponse(candidate, headers=no_cache_headers)
                 return FileResponse(candidate)
             index_path = Path(str(web_root)) / "index.html"
             if index_path.is_file():
-                return FileResponse(index_path, media_type="text/html; charset=utf-8")
+                return FileResponse(
+                    index_path,
+                    media_type="text/html; charset=utf-8",
+                    headers=no_cache_headers,
+                )
             return JSONResponse({"error": "Not found"}, status_code=404)
 
     return app
