@@ -9,6 +9,7 @@ import threading
 from pathlib import Path
 
 from dbos import DBOS, DBOSConfig
+from sse_starlette.sse import AppStatus
 
 from ..settings import resolve_paths
 from .queues import STAGE_QUEUE_SPECS
@@ -17,7 +18,17 @@ _RUNTIME_LOCK = threading.RLock()
 _ACTIVE_DB_URL: str | None = None
 _ACTIVE_LOOP: asyncio.AbstractEventLoop | None = None
 _LAUNCHED: bool = False
+_SHUTTING_DOWN = threading.Event()
 _TEMP_DIRS: list[tempfile.TemporaryDirectory[str]] = []
+
+
+def is_shutting_down() -> bool:
+    return _SHUTTING_DOWN.is_set() or bool(getattr(AppStatus, "should_exit", False))
+
+
+def reset_shutdown_flag() -> None:
+    _SHUTTING_DOWN.clear()
+    AppStatus.should_exit = False
 
 
 def _is_default_home_config(path_str: str) -> bool:
@@ -90,6 +101,7 @@ async def ensure_dbos_launched_async(
     target_url = resolve_dbos_database_url(config_dir=config_dir, meetings_dir=meetings_dir)
 
     with _RUNTIME_LOCK:
+        _SHUTTING_DOWN.clear()
         if (
             _LAUNCHED
             and _ACTIVE_LOOP is loop
@@ -165,6 +177,7 @@ def ensure_dbos_launched_sync(
 
 def shutdown_dbos() -> None:
     global _ACTIVE_DB_URL, _ACTIVE_LOOP, _LAUNCHED
+    _SHUTTING_DOWN.set()
     with _RUNTIME_LOCK:
         if _LAUNCHED:
             try:
@@ -185,6 +198,8 @@ def shutdown_dbos() -> None:
 __all__ = [
     "ensure_dbos_launched_async",
     "ensure_dbos_launched_sync",
+    "is_shutting_down",
+    "reset_shutdown_flag",
     "resolve_dbos_database_url",
     "shutdown_dbos",
 ]

@@ -207,6 +207,20 @@ class TranscriptionService:
 
     setDefaultProvider = set_default_provider
 
+    def stop(self) -> None:
+        for job in list(self._active_jobs.values()):
+            try:
+                job.abort_controller.abort()
+            except Exception:
+                pass
+        self._active_jobs.clear()
+        stop_fn = getattr(self.local_pipeline, "stop", None)
+        if callable(stop_fn):
+            try:
+                stop_fn()
+            except Exception:
+                pass
+
     async def _auto_summarize(self, meeting_id: str) -> None:
         if not self.summary_service:
             return

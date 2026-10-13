@@ -68,6 +68,7 @@ def run_server() -> None:
         host=runtime_config.bind_host,
         port=runtime_config.bind_port,
         log_config=get_uvicorn_log_config(),
+        timeout_graceful_shutdown=2,
     )
 
 

@@ -15,6 +15,8 @@ from .queues import (
 from .runtime import (
     ensure_dbos_launched_async,
     ensure_dbos_launched_sync,
+    is_shutting_down,
+    reset_shutdown_flag,
     resolve_dbos_database_url,
     shutdown_dbos,
 )
@@ -59,8 +61,10 @@ __all__ = [
     "TaskExecutionContext",
     "enqueue_stage_job",
     "ensure_dbos_launched_async",
-    "get_debug_queues_snapshot",
     "ensure_dbos_launched_sync",
+    "get_debug_queues_snapshot",
+    "is_shutting_down",
+    "reset_shutdown_flag",
     "local_transcription_workflow",
     "register_task_context",
     "resolve_dbos_database_url",

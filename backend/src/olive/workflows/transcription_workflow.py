@@ -49,7 +49,7 @@ from .queues import (
     QUEUE_SUMMARIZE,
     STAGE_QUEUE_SPECS,
 )
-from .runtime import ensure_dbos_launched_async
+from .runtime import ensure_dbos_launched_async, is_shutting_down
 
 STAGE_FFMPEG_DECODE = "ffmpeg_decode"
 STAGE_DIARIZE = "diarize"
@@ -99,6 +99,8 @@ def _is_signal_aborted(signal: Any) -> bool:
 
 
 def _check_aborted(task_id: str) -> None:
+    if is_shutting_down():
+        raise RuntimeError("Transcription cancelled: server shutting down")
     ctx = _TASK_CONTEXTS.get(task_id)
     if ctx is not None and _is_signal_aborted(ctx.signal):
         raise RuntimeError("Transcription cancelled by user")

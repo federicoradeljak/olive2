@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -261,7 +262,27 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         opts.get("templateService") or opts.get("template_service") or TemplateService(db)
     )
 
-    app = FastAPI(title="Olive API", version="0.2.0")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        from .workflows import reset_shutdown_flag, shutdown_dbos
+
+        reset_shutdown_flag()
+        try:
+            yield
+        finally:
+            if plaud_poller is not None and hasattr(plaud_poller, "stop"):
+                try:
+                    plaud_poller.stop()
+                except Exception:
+                    pass
+            if transcription_service is not None and hasattr(transcription_service, "stop"):
+                try:
+                    transcription_service.stop()
+                except Exception:
+                    pass
+            await asyncio.to_thread(shutdown_dbos)
+
+    app = FastAPI(title="Olive API", version="0.2.0", lifespan=lifespan)
 
     @app.api_route("/mcp", methods=["GET", "POST", "DELETE", "OPTIONS"], include_in_schema=False)
     async def mcp_endpoint(request: Request) -> Response:
@@ -875,14 +896,18 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                     meeting_id,
                     listener,
                 )
+                from .workflows import is_shutting_down
+
                 try:
-                    while True:
+                    while not is_shutting_down():
                         try:
-                            item = await asyncio.wait_for(queue.get(), timeout=3.0)
-                            if item is None:
+                            item = await asyncio.wait_for(queue.get(), timeout=1.0)
+                            if item is None or is_shutting_down():
                                 break
                             yield item
                         except TimeoutError:
+                            if is_shutting_down():
+                                break
                             yield {"event": "ping", "data": "{}"}
                 finally:
                     if callable(unsub):

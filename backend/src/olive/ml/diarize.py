@@ -271,6 +271,10 @@ class PyannoteSpeakerDiarizer:
             completed: int | None = None,
         ) -> None:
             nonlocal last_batch_time
+            from ..workflows.runtime import is_shutting_down
+
+            if is_shutting_down():
+                raise RuntimeError("Transcription cancelled: server shutting down")
             now = time.perf_counter()
             if step_name not in step_timers:
                 step_timers[step_name] = now
@@ -449,6 +453,7 @@ class PyannoteSpeakerDiarizer:
         raw_segments: list[tuple[float, float, int]] = []
         running_loop = asyncio.get_running_loop()
         try:
+            self._ensure_pipeline_sync()
             raw_segments = await asyncio.to_thread(
                 self._run_pyannote_sync,
                 arr,
@@ -600,7 +605,11 @@ class PyannoteSpeakerDiarizer:
                 if inspect.isawaitable(res):
                     await res
 
+            from ..workflows.runtime import is_shutting_down
+
             for idx in selected_indices:
+                if is_shutting_down():
+                    raise RuntimeError("Transcription cancelled: server shutting down")
                 seg = candidate_segments[idx]
                 clip = seg.samples
                 if len(clip) > max_clip_samples:

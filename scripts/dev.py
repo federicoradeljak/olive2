@@ -52,7 +52,9 @@ def wait_for_local_server(port: int, timeout_sec: float = 30.0) -> None:
         except Exception:
             consecutive_ok = 0
         time.sleep(0.5)
-    raise RuntimeError(f"Server did not become ready at {url} within {timeout_sec:.0f}s")
+    raise RuntimeError(
+        f"Server did not become ready at {url} within {timeout_sec:.0f}s"
+    )
 
 
 def main() -> None:
@@ -71,7 +73,9 @@ def main() -> None:
     )
     default_backend_port = int(os.environ.get("OLIVE_BIND_PORT") or "4471")
     backend_port = 4472 if public_port == default_backend_port else default_backend_port
-    api_target = os.environ.get("OLIVE_API_TARGET") or f"http://127.0.0.1:{backend_port}"
+    api_target = (
+        os.environ.get("OLIVE_API_TARGET") or f"http://127.0.0.1:{backend_port}"
+    )
 
     remove_frpc_url_file(worktree_name)
 
@@ -96,6 +100,8 @@ def main() -> None:
             "uvicorn",
             "olive.main:app",
             "--reload",
+            "--timeout-graceful-shutdown",
+            "2",
             "--log-config",
             "uvicorn_log_config.json",
             "--host",
@@ -105,6 +111,7 @@ def main() -> None:
         ],
         cwd=str(BACKEND_DIR),
         env=backend_env,
+        start_new_session=True,
     )
 
     web_proc = subprocess.Popen(
@@ -120,6 +127,7 @@ def main() -> None:
         ],
         cwd=str(FRONTEND_DIR),
         env=frontend_env,
+        start_new_session=True,
     )
 
     frpc_proc: subprocess.Popen[bytes] | None = None
@@ -135,7 +143,9 @@ def main() -> None:
         server_addr = (os.environ.get("FRPC_SERVER_ADDR") or "").strip()
         token = (os.environ.get("FRPC_AUTH_TOKEN") or "").strip()
         if not server_addr and not token:
-            print("[frpc] Tunnel disabled: FRPC_SERVER_ADDR and FRPC_AUTH_TOKEN are not set.")
+            print(
+                "[frpc] Tunnel disabled: FRPC_SERVER_ADDR and FRPC_AUTH_TOKEN are not set."
+            )
             return
         if not server_addr or not token:
             print(
@@ -218,17 +228,23 @@ def main() -> None:
         for p in procs:
             if p.poll() is None:
                 try:
-                    p.terminate()
+                    os.killpg(p.pid, signal.SIGTERM)
                 except Exception:
-                    pass
+                    try:
+                        p.terminate()
+                    except Exception:
+                        pass
         for p in procs:
             try:
-                p.wait(timeout=5.0)
+                p.wait(timeout=3.0)
             except Exception:
                 try:
-                    p.kill()
+                    os.killpg(p.pid, signal.SIGKILL)
                 except Exception:
-                    pass
+                    try:
+                        p.kill()
+                    except Exception:
+                        pass
 
     signal.signal(signal.SIGINT, lambda s, f: (cleanup(s, f), sys.exit(0)))  # type: ignore[misc]
     signal.signal(signal.SIGTERM, lambda s, f: (cleanup(s, f), sys.exit(0)))  # type: ignore[misc]
@@ -244,7 +260,9 @@ def main() -> None:
                 if f_code is not None and not shutting_down:
                     remove_frpc_url_file(worktree_name)
                     if f_code != 0:
-                        print(f"[frpc] Tunnel exited with code {f_code}.", file=sys.stderr)
+                        print(
+                            f"[frpc] Tunnel exited with code {f_code}.", file=sys.stderr
+                        )
                     frpc_proc = None
             if s_code is not None:
                 cleanup()
