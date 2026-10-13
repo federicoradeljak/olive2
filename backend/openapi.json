@@ -1721,6 +1721,22 @@
           }
         }
       }
+    },
+    "/api/debug/queues": {
+      "get": {
+        "summary": "Get Debug Queues Route",
+        "operationId": "get_debug_queues_route_api_debug_queues_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {

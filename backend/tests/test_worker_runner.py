@@ -351,6 +351,26 @@ async def test_post_transcribe_background_returns_202_and_streams_progress(
                 await asyncio.sleep(0.05)
             else:
                 pytest.fail("Background transcription did not reach ready status")
+
+            debug_res = await client.get("/api/debug/queues")
+            assert debug_res.status_code == 200
+            debug_data = debug_res.json()
+            assert debug_data["summary"]["totalQueues"] == 8
+            queue_names = [q["name"] for q in debug_data["queues"]]
+            assert queue_names == [
+                "plaud_sync",
+                "ffmpeg",
+                "diarize",
+                "speaker_embed",
+                "asr",
+                "align",
+                "speechmatics",
+                "summarize",
+            ]
+            ffmpeg_q = next(q for q in debug_data["queues"] if q["name"] == "ffmpeg")
+            assert len(ffmpeg_q["recentJobs"]) >= 1
+            assert ffmpeg_q["recentJobs"][0]["name"] == "step_decode_audio"
+            assert ffmpeg_q["recentJobs"][0]["meetingTitle"] == "Background 202 Meeting"
     finally:
         runner.stop()
         handle.engine.dispose()

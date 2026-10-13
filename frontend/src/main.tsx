@@ -1,4 +1,4 @@
-import React, { Fragment, StrictMode, useEffect, useMemo, useRef, useState } from "react";
+import React, { Fragment, StrictMode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { ReactElement } from "react";
 import { marked } from "marked";
@@ -5159,8 +5159,430 @@ export function BackupRestoreView({ onRestoreComplete }: { onRestoreComplete: ()
   );
 }
 
+interface DebugQueueJob {
+  workflowId: string;
+  name: string;
+  rawName: string;
+  status: string;
+  queueName: string | null;
+  parentWorkflowId: string | null;
+  meetingId: string | null;
+  meetingTitle: string | null;
+  createdAt: number | null;
+  dequeuedAt: number | null;
+  completedAt: number | null;
+  elapsedMs: number | null;
+  waitingMs: number | null;
+  queuePosition: number | null;
+  deduplicationId: string | null;
+  priority: number | null;
+  recoveryAttempts: number | null;
+  error: string | null;
+}
+
+interface DebugStageQueue {
+  name: string;
+  workerConcurrency: number;
+  activeCount: number;
+  waitingCount: number;
+  activeJobs: DebugQueueJob[];
+  waitingJobs: DebugQueueJob[];
+  recentJobs: DebugQueueJob[];
+}
+
+interface DebugQueuesSnapshot {
+  timestamp: number;
+  dbosDatabaseUrl: string;
+  summary: {
+    totalQueues: number;
+    totalActiveJobs: number;
+    totalWaitingJobs: number;
+    activeParentWorkflows: number;
+  };
+  queues: DebugStageQueue[];
+  activeWorkflows: DebugQueueJob[];
+  activeTranscriptions: Record<string, TranscriptionProgressUpdate>;
+  runningStageRuns: Array<{
+    id: string;
+    meetingId: string;
+    meetingTitle: string | null;
+    stage: string;
+    status: string;
+    jobId: string | null;
+    attempts: number;
+    startedAt: number | null;
+    elapsedMs: number | null;
+  }>;
+}
+
+function formatDurationCompact(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined) return "—";
+  if (ms < 1000) return `${ms}ms`;
+  const sec = ms / 1000;
+  if (sec < 60) return `${sec.toFixed(1)}s`;
+  const mins = Math.floor(sec / 60);
+  const remSec = Math.round(sec % 60);
+  return `${mins}m ${remSec}s`;
+}
+
+function DebugQueuesPage() {
+  const [snapshot, setSnapshot] = useState<DebugQueuesSnapshot | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [paused, setPaused] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  const fetchSnapshot = useCallback(async () => {
+    try {
+      const res = await fetch("/api/debug/queues");
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.error || `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as DebugQueuesSnapshot;
+      setSnapshot(data);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchSnapshot();
+    if (paused) return;
+    const timer = setInterval(() => {
+      void fetchSnapshot();
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [fetchSnapshot, paused]);
+
+  const activeTranscriptionEntries = Object.entries(snapshot?.activeTranscriptions || {});
+
+  return (
+    <div className="min-h-screen bg-stone-950 text-stone-100 p-6 font-sans">
+      <div className="max-w-7xl mx-auto space-y-6">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-stone-800 pb-4">
+          <div>
+            <div className="flex items-center gap-3">
+              <h1 className="text-xl font-bold tracking-tight text-stone-100 font-mono">
+                /debug · DBOS Stage Queues
+              </h1>
+              <span
+                className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                  paused
+                    ? "bg-stone-800 text-stone-400"
+                    : "bg-emerald-950/80 text-emerald-300 border border-emerald-800/60"
+                }`}
+              >
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${
+                    paused ? "bg-stone-500" : "bg-emerald-400 animate-pulse"
+                  }`}
+                />
+                {paused ? "Paused" : "Live (1.5s)"}
+              </span>
+            </div>
+            {snapshot && (
+              <p className="text-xs text-stone-400 font-mono mt-1">
+                DB: {snapshot.dbosDatabaseUrl} · Updated{" "}
+                {new Date(snapshot.timestamp).toLocaleTimeString()}
+              </p>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2">
+            <a
+              href="/"
+              className="rounded-lg border border-stone-800 bg-stone-900 px-3 py-1.5 text-xs font-medium text-stone-300 hover:bg-stone-800 transition"
+            >
+              ← Back to Olive
+            </a>
+            <button
+              type="button"
+              onClick={() => setPaused((p) => !p)}
+              className="rounded-lg border border-stone-700 bg-stone-900 px-3 py-1.5 text-xs font-medium text-stone-200 hover:bg-stone-800 transition"
+            >
+              {paused ? "Resume Polling" : "Pause Polling"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void fetchSnapshot()}
+              className="rounded-lg bg-amber-400 px-3 py-1.5 text-xs font-semibold text-stone-950 hover:bg-amber-300 transition"
+            >
+              Refresh Now
+            </button>
+          </div>
+        </div>
+
+        {error && (
+          <div className="rounded-xl border border-red-800/70 bg-red-950/40 p-4 text-xs text-red-200 font-mono">
+            Error loading queue state: {error}
+          </div>
+        )}
+
+        {loading && !snapshot ? (
+          <div className="text-sm text-stone-400 font-mono">Loading DBOS queue state…</div>
+        ) : null}
+
+        {snapshot && (
+          <>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="rounded-xl border border-stone-800 bg-stone-900/70 p-4">
+                <div className="text-xs text-stone-400">Stage Queues</div>
+                <div className="text-2xl font-bold font-mono text-stone-100 mt-1">
+                  {snapshot.summary.totalQueues}
+                </div>
+              </div>
+              <div className="rounded-xl border border-stone-800 bg-stone-900/70 p-4">
+                <div className="text-xs text-stone-400">Active Stage Jobs</div>
+                <div
+                  className={`text-2xl font-bold font-mono mt-1 ${
+                    snapshot.summary.totalActiveJobs > 0 ? "text-amber-300" : "text-stone-100"
+                  }`}
+                >
+                  {snapshot.summary.totalActiveJobs}
+                </div>
+              </div>
+              <div className="rounded-xl border border-stone-800 bg-stone-900/70 p-4">
+                <div className="text-xs text-stone-400">Waiting in Queues</div>
+                <div
+                  className={`text-2xl font-bold font-mono mt-1 ${
+                    snapshot.summary.totalWaitingJobs > 0 ? "text-sky-300" : "text-stone-100"
+                  }`}
+                >
+                  {snapshot.summary.totalWaitingJobs}
+                </div>
+              </div>
+              <div className="rounded-xl border border-stone-800 bg-stone-900/70 p-4">
+                <div className="text-xs text-stone-400">Active Parent Workflows</div>
+                <div className="text-2xl font-bold font-mono text-stone-100 mt-1">
+                  {snapshot.summary.activeParentWorkflows}
+                </div>
+              </div>
+            </div>
+
+            {(activeTranscriptionEntries.length > 0 || snapshot.runningStageRuns.length > 0) && (
+              <div className="rounded-xl border border-amber-500/30 bg-amber-950/10 p-4 space-y-3">
+                <h2 className="text-xs font-semibold uppercase tracking-wider text-amber-300">
+                  Live Pipeline Activity
+                </h2>
+                {activeTranscriptionEntries.map(([mid, prog]) => (
+                  <div
+                    key={mid}
+                    className="rounded-lg border border-stone-800 bg-stone-900/90 p-3 flex flex-wrap items-center justify-between gap-3 text-xs"
+                  >
+                    <div className="space-y-0.5">
+                      <div className="font-mono text-stone-200">
+                        Meeting <span className="text-amber-300">{mid}</span> · Stage{" "}
+                        <span className="font-semibold text-stone-100">{prog.stage}</span>
+                      </div>
+                      <div className="text-stone-400">{prog.message}</div>
+                    </div>
+                    <div className="font-mono text-sm font-bold text-amber-300">
+                      {prog.percent ?? 0}%
+                    </div>
+                  </div>
+                ))}
+                {snapshot.runningStageRuns.length > 0 && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {snapshot.runningStageRuns.map((sr) => (
+                      <div
+                        key={sr.id}
+                        className="rounded-lg border border-stone-800 bg-stone-900/70 px-3 py-2 flex items-center justify-between text-xs font-mono"
+                      >
+                        <div className="truncate">
+                          <span className="text-amber-300">{sr.stage}</span> ·{" "}
+                          <span className="text-stone-200">
+                            {sr.meetingTitle || sr.meetingId}
+                          </span>{" "}
+                          <span className="text-stone-500">({sr.jobId || sr.id.slice(0, 8)})</span>
+                        </div>
+                        <span className="text-stone-400 ml-2 shrink-0">
+                          {formatDurationCompact(sr.elapsedMs)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {snapshot.queues.map((q) => {
+                const isBusy = q.activeCount > 0;
+                const hasWaiting = q.waitingCount > 0;
+                return (
+                  <div
+                    key={q.name}
+                    className={`rounded-xl border p-4 space-y-3 ${
+                      isBusy
+                        ? "border-amber-500/50 bg-stone-900/90"
+                        : hasWaiting
+                        ? "border-sky-500/40 bg-stone-900/80"
+                        : "border-stone-800 bg-stone-900/50"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2.5">
+                        <span className="font-mono text-sm font-bold text-stone-100">
+                          {q.name}
+                        </span>
+                        <span
+                          className={`rounded px-2 py-0.5 text-[11px] font-mono font-semibold ${
+                            isBusy
+                              ? "bg-amber-400/20 text-amber-300 border border-amber-400/30"
+                              : hasWaiting
+                              ? "bg-sky-400/20 text-sky-300 border border-sky-400/30"
+                              : "bg-stone-800 text-stone-400"
+                          }`}
+                        >
+                          {isBusy ? "ACTIVE" : hasWaiting ? "QUEUED" : "IDLE"}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 text-xs font-mono text-stone-400">
+                        <span>
+                          Workers: <strong className="text-stone-200">{q.activeCount}</strong>/
+                          {q.workerConcurrency}
+                        </span>
+                        <span>
+                          Depth: <strong className="text-stone-200">{q.waitingCount}</strong>
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <div className="text-[11px] font-semibold uppercase tracking-wider text-stone-400">
+                        Currently Active ({q.activeJobs.length})
+                      </div>
+                      {q.activeJobs.length === 0 ? (
+                        <div className="rounded-lg border border-stone-800/70 bg-stone-950/50 px-3 py-2 text-xs text-stone-500 font-mono">
+                          No active job
+                        </div>
+                      ) : (
+                        q.activeJobs.map((job) => (
+                          <div
+                            key={job.workflowId}
+                            className="rounded-lg border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-xs font-mono space-y-1"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-semibold text-amber-200">{job.name}</span>
+                              <span className="text-amber-300">
+                                {formatDurationCompact(job.elapsedMs)}
+                              </span>
+                            </div>
+                            <div className="text-stone-300 truncate">
+                              ID: <span className="text-stone-400">{job.workflowId}</span>
+                            </div>
+                            {(job.meetingTitle || job.meetingId) && (
+                              <div className="text-stone-300 truncate">
+                                Meeting:{" "}
+                                <span className="text-stone-100">
+                                  {job.meetingTitle || job.meetingId}
+                                </span>
+                                {job.meetingTitle && job.meetingId ? (
+                                  <span className="text-stone-500"> ({job.meetingId})</span>
+                                ) : null}
+                              </div>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <div className="text-[11px] font-semibold uppercase tracking-wider text-stone-400">
+                        Waiting Queue ({q.waitingJobs.length})
+                      </div>
+                      {q.waitingJobs.length === 0 ? (
+                        <div className="rounded-lg border border-stone-800/70 bg-stone-950/50 px-3 py-2 text-xs text-stone-500 font-mono">
+                          Queue empty
+                        </div>
+                      ) : (
+                        <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                          {q.waitingJobs.map((job) => (
+                            <div
+                              key={job.workflowId}
+                              className="rounded-lg border border-sky-500/30 bg-sky-950/20 px-3 py-2 text-xs font-mono space-y-1"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span>
+                                  <span className="text-sky-300 font-bold">
+                                    #{job.queuePosition}
+                                  </span>{" "}
+                                  <span className="text-stone-100 font-semibold">{job.name}</span>
+                                </span>
+                                <span className="text-stone-400">
+                                  wait {formatDurationCompact(job.waitingMs)}
+                                </span>
+                              </div>
+                              <div className="text-stone-400 truncate">ID: {job.workflowId}</div>
+                              {(job.meetingTitle || job.meetingId) && (
+                                <div className="text-stone-300 truncate">
+                                  Meeting: {job.meetingTitle || job.meetingId}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {q.recentJobs.length > 0 && (
+                      <details className="group pt-1">
+                        <summary className="cursor-pointer text-[11px] font-mono text-stone-400 hover:text-stone-200 select-none">
+                          Recent jobs ({q.recentJobs.length})
+                        </summary>
+                        <div className="mt-2 space-y-1 max-h-40 overflow-y-auto">
+                          {q.recentJobs.map((job) => (
+                            <div
+                              key={job.workflowId}
+                              className="rounded border border-stone-800 bg-stone-950/80 px-2.5 py-1.5 text-[11px] font-mono flex items-center justify-between gap-2"
+                            >
+                              <div className="truncate">
+                                <span
+                                  className={`mr-2 ${
+                                    job.status === "SUCCESS"
+                                      ? "text-emerald-400"
+                                      : job.status === "CANCELLED"
+                                      ? "text-stone-400"
+                                      : "text-red-400"
+                                  }`}
+                                >
+                                  {job.status}
+                                </span>
+                                <span className="text-stone-200">{job.name}</span>
+                                {job.meetingTitle || job.meetingId ? (
+                                  <span className="text-stone-400">
+                                    {" "}
+                                    · {job.meetingTitle || job.meetingId}
+                                  </span>
+                                ) : null}
+                                <span className="text-stone-500"> ({job.workflowId})</span>
+                              </div>
+                              <span className="text-stone-400 shrink-0">
+                                {formatDurationCompact(job.elapsedMs)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const isDebugRoute =
+  typeof window !== "undefined" &&
+  (window.location.pathname === "/debug" || window.location.pathname.startsWith("/debug/"));
+
 createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>
+  <StrictMode>{isDebugRoute ? <DebugQueuesPage /> : <App />}</StrictMode>
 );

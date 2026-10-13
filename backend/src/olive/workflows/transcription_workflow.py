@@ -47,7 +47,9 @@ from .queues import (
     QUEUE_SPEAKER_EMBED,
     QUEUE_SPEECHMATICS,
     QUEUE_SUMMARIZE,
+    STAGE_QUEUE_SPECS,
 )
+from .runtime import ensure_dbos_launched_async
 
 STAGE_FFMPEG_DECODE = "ffmpeg_decode"
 STAGE_DIARIZE = "diarize"
@@ -966,7 +968,8 @@ async def step_enhance_audio_file(source_path: str, target_path: str) -> bool:
 
 
 @DBOS.step()
-async def step_run_registered_job(job_id: str) -> Any:
+async def step_run_registered_job(job_id: str, metadata: dict[str, Any] | None = None) -> Any:
+    _ = metadata
     fn = _GENERIC_JOBS.pop(job_id, None)
     if fn is None:
         return None
@@ -982,13 +985,220 @@ async def enqueue_stage_job(
     *,
     deduplication_id: str | None = None,
     workflow_id: str | None = None,
+    label: str | None = None,
+    meeting_id: str | None = None,
 ) -> Any:
     job_id = str(uuid.uuid4())
     _GENERIC_JOBS[job_id] = fn
     wf_id = workflow_id or f"job:{queue_name}:{job_id}"
+    meta = {"label": label or queue_name, "meetingId": meeting_id}
     with SetWorkflowID(wf_id), SetEnqueueOptions(deduplication_id=deduplication_id):
-        handle = await DBOS.enqueue_workflow_async(queue_name, step_run_registered_job, job_id)
+        handle = await DBOS.enqueue_workflow_async(queue_name, step_run_registered_job, job_id, meta)
     return handle
+
+
+def _extract_job_details(wf: Any) -> tuple[str, str | None]:
+    raw_name = str(getattr(wf, "name", "") or "job")
+    short_name = raw_name.split(".")[-1].replace("<temp>.", "")
+    meeting_id: str | None = None
+
+    inp = getattr(wf, "input", None)
+    if isinstance(inp, dict):
+        args = inp.get("args") or ()
+        for arg in args:
+            if isinstance(arg, dict):
+                if not meeting_id and arg.get("meetingId"):
+                    meeting_id = str(arg["meetingId"])
+                if short_name == "step_run_registered_job" and arg.get("label"):
+                    short_name = str(arg["label"])
+
+    wf_id = str(getattr(wf, "workflow_id", "") or "")
+    if not meeting_id and wf_id.startswith("local-transcribe:"):
+        parts = wf_id.split(":")
+        if len(parts) >= 2 and parts[1]:
+            meeting_id = parts[1]
+
+    return short_name, meeting_id
+
+
+async def get_debug_queues_snapshot(
+    db: Engine | None = None,
+    *,
+    config_dir: str | Path | None = None,
+    meetings_dir: str | Path | None = None,
+    active_transcriptions: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    now_ms = int(time.time() * 1000)
+    dbos_url = await ensure_dbos_launched_async(config_dir=config_dir, meetings_dir=meetings_dir)
+
+    recent_wfs, queued_wfs = await asyncio.gather(
+        DBOS.list_workflows_async(limit=200, sort_desc=True, load_input=True, load_output=False),
+        DBOS.list_queued_workflows_async(load_input=True, load_output=False),
+    )
+
+    by_id: dict[str, Any] = {}
+    for w in recent_wfs:
+        by_id[str(w.workflow_id)] = w
+    for w in queued_wfs:
+        by_id[str(w.workflow_id)] = w
+
+    all_wfs = list(by_id.values())
+
+    meeting_titles: dict[str, str] = {}
+    running_stage_runs: list[dict[str, Any]] = []
+    if db is not None:
+        try:
+            with db.connect() as conn:
+                m_rows = conn.execute(text("SELECT id, title FROM meetings")).mappings().all()
+                for r in m_rows:
+                    meeting_titles[str(r["id"])] = str(r["title"])
+
+                sr_rows = (
+                    conn.execute(
+                        text(
+                            """
+                            SELECT sr.id, sr.meeting_id, m.title AS meeting_title,
+                                   sr.stage, sr.status, sr.provider_job_id,
+                                   sr.attempts, sr.started_at, sr.updated_at
+                            FROM stage_runs sr
+                            LEFT JOIN meetings m ON m.id = sr.meeting_id
+                            WHERE sr.status IN ('running', 'pending')
+                            ORDER BY sr.updated_at DESC
+                            """
+                        )
+                    )
+                    .mappings()
+                    .all()
+                )
+                for sr in sr_rows:
+                    started_at = sr.get("started_at")
+                    running_stage_runs.append(
+                        {
+                            "id": sr["id"],
+                            "meetingId": sr["meeting_id"],
+                            "meetingTitle": sr.get("meeting_title")
+                            or meeting_titles.get(str(sr["meeting_id"])),
+                            "stage": sr["stage"],
+                            "status": sr["status"],
+                            "jobId": sr.get("provider_job_id"),
+                            "attempts": int(sr.get("attempts") or 1),
+                            "startedAt": started_at,
+                            "elapsedMs": max(0, now_ms - int(started_at)) if started_at else None,
+                        }
+                    )
+        except Exception:
+            pass
+
+    def _serialize_wf(w: Any, queue_position: int | None = None) -> dict[str, Any]:
+        step_name, meeting_id = _extract_job_details(w)
+        created_at = getattr(w, "created_at", None)
+        dequeued_at = getattr(w, "dequeued_at", None)
+        completed_at = getattr(w, "completed_at", None)
+        err_obj = getattr(w, "error", None)
+        ref_start = dequeued_at or created_at
+        elapsed_ms = max(0, (completed_at or now_ms) - int(ref_start)) if ref_start is not None else None
+        waiting_ms = max(0, (dequeued_at or now_ms) - int(created_at)) if created_at is not None else None
+        return {
+            "workflowId": str(w.workflow_id),
+            "name": step_name,
+            "rawName": str(getattr(w, "name", "") or ""),
+            "status": str(getattr(w, "status", "") or ""),
+            "queueName": getattr(w, "queue_name", None),
+            "parentWorkflowId": getattr(w, "parent_workflow_id", None),
+            "meetingId": meeting_id,
+            "meetingTitle": meeting_titles.get(meeting_id) if meeting_id else None,
+            "createdAt": created_at,
+            "dequeuedAt": dequeued_at,
+            "completedAt": completed_at,
+            "elapsedMs": elapsed_ms,
+            "waitingMs": waiting_ms,
+            "queuePosition": queue_position,
+            "deduplicationId": getattr(w, "deduplication_id", None),
+            "priority": getattr(w, "priority", None),
+            "recoveryAttempts": getattr(w, "recovery_attempts", None),
+            "error": str(err_obj) if err_obj else None,
+        }
+
+    queues_out: list[dict[str, Any]] = []
+    total_active = 0
+    total_waiting = 0
+
+    for spec in STAGE_QUEUE_SPECS:
+        q_wfs = [w for w in all_wfs if getattr(w, "queue_name", None) == spec.name]
+        active_raw = sorted(
+            [w for w in q_wfs if getattr(w, "status", None) == "PENDING"],
+            key=lambda w: int(getattr(w, "dequeued_at", None) or getattr(w, "created_at", None) or 0),
+        )
+        waiting_raw = sorted(
+            [w for w in q_wfs if getattr(w, "status", None) in ("ENQUEUED", "DELAYED")],
+            key=lambda w: (
+                int(getattr(w, "priority", None) or 0),
+                int(getattr(w, "created_at", None) or 0),
+            ),
+        )
+        recent_raw = sorted(
+            [
+                w
+                for w in q_wfs
+                if getattr(w, "status", None)
+                in ("SUCCESS", "ERROR", "CANCELLED", "MAX_RECOVERY_ATTEMPTS_EXCEEDED")
+            ],
+            key=lambda w: int(
+                getattr(w, "completed_at", None)
+                or getattr(w, "updated_at", None)
+                or getattr(w, "created_at", None)
+                or 0
+            ),
+            reverse=True,
+        )[:8]
+
+        active_jobs = [_serialize_wf(w) for w in active_raw]
+        waiting_jobs = [_serialize_wf(w, idx + 1) for idx, w in enumerate(waiting_raw)]
+        recent_jobs = [_serialize_wf(w) for w in recent_raw]
+
+        total_active += len(active_jobs)
+        total_waiting += len(waiting_jobs)
+
+        queues_out.append(
+            {
+                "name": spec.name,
+                "workerConcurrency": spec.worker_concurrency,
+                "activeCount": len(active_jobs),
+                "waitingCount": len(waiting_jobs),
+                "activeJobs": active_jobs,
+                "waitingJobs": waiting_jobs,
+                "recentJobs": recent_jobs,
+            }
+        )
+
+    parent_wfs = [
+        _serialize_wf(w)
+        for w in sorted(
+            [
+                w
+                for w in all_wfs
+                if not getattr(w, "queue_name", None)
+                and getattr(w, "status", None) in ("PENDING", "ENQUEUED")
+            ],
+            key=lambda w: int(getattr(w, "created_at", None) or 0),
+            reverse=True,
+        )
+    ]
+
+    return {
+        "timestamp": now_ms,
+        "dbosDatabaseUrl": dbos_url,
+        "summary": {
+            "totalQueues": len(queues_out),
+            "totalActiveJobs": total_active,
+            "totalWaitingJobs": total_waiting,
+            "activeParentWorkflows": len(parent_wfs),
+        },
+        "queues": queues_out,
+        "activeWorkflows": parent_wfs,
+        "activeTranscriptions": active_transcriptions or {},
+        "runningStageRuns": running_stage_runs,
+    }
 
 
 async def run_staged_local_transcription(
@@ -1118,6 +1328,7 @@ __all__ = [
     "STAGE_SPEAKER_EMBED",
     "TaskExecutionContext",
     "enqueue_stage_job",
+    "get_debug_queues_snapshot",
     "local_transcription_workflow",
     "register_task_context",
     "run_staged_local_transcription",

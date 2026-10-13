@@ -1861,6 +1861,31 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=500)
 
+    @app.get("/api/debug/queues")
+    async def get_debug_queues_route() -> JSONResponse:
+        try:
+            from .workflows import get_debug_queues_snapshot
+
+            active_map: dict[str, Any] = {}
+            if transcription_service is not None:
+                try:
+                    active_map = _call_sync(
+                        transcription_service,
+                        ("get_all_active_transcription_progress", "getAllActiveTranscriptionProgress"),
+                    )
+                except Exception:
+                    active_map = {}
+
+            snapshot = await get_debug_queues_snapshot(
+                db,
+                config_dir=config_dir,
+                meetings_dir=meetings_dir,
+                active_transcriptions=active_map,
+            )
+            return JSONResponse(snapshot)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
     @app.delete("/api/logs")
     async def delete_logs_route(request: Request) -> JSONResponse:
         try:
