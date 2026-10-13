@@ -829,8 +829,10 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
   const [search, setSearch] = useState("");
   const [showUploadModal, setShowUploadModal] = useState(false);
 
-  const fetchMeetings = async () => {
-    setLoading(true);
+  const fetchMeetings = async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent && meetings.length === 0) {
+      setLoading(true);
+    }
     setError(null);
     try {
       const url = search.trim() ? `/api/meetings?search=${encodeURIComponent(search.trim())}` : "/api/meetings";
@@ -863,7 +865,13 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
     try {
       const res = await fetch(`/api/meetings/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Failed to delete meeting");
-      await fetchMeetings();
+      setMeetings((prev) => prev.filter((m) => m.id !== id));
+      setActiveProgressMap((prev) => {
+        if (!(id in prev)) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
     }
@@ -1147,7 +1155,9 @@ function MeetingDetailView({
   };
 
   const fetchDetail = async () => {
-    setLoading(true);
+    if (!detail) {
+      setLoading(true);
+    }
     try {
       const [res, cfgRes] = await Promise.all([
         fetch(`/api/meetings/${meetingId}`),
