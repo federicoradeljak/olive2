@@ -1,6 +1,7 @@
 .agents/skills/
 .env
 node_modules/
+vendor/llama/
 packages/web/dist/
 packages/web/src/styles.generated.css
 *.sqlite

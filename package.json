@@ -11,6 +11,7 @@
     "build": "bun run build:web",
     "build:web": "bun run packages/web/build.ts",
     "deploy:staging": "bun run scripts/deploy-staging.ts",
+    "fetch:llama": "bun run scripts/fetch-llama.ts",
     "dev": "bun run dev.ts",
     "check": "bun run --parallel typecheck build",
     "dev:server": "bun --watch packages/server/src/index.ts",

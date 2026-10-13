@@ -1,15 +1,22 @@
 # syntax=docker/dockerfile:1
 
-# Stage 1: Fetch Llama.cpp Vulkan Binaries (~30MB archive)
-FROM oven/bun:1.4.0 AS llama-fetcher
+# Stage 1: Fetch llama.cpp builds for every platform the image may run on.
+# Runs on the build host's architecture; the Linux build is chosen by TARGETARCH.
+FROM --platform=$BUILDPLATFORM oven/bun:1.4.0 AS llama-fetcher
+ARG TARGETARCH
 WORKDIR /llama
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates tar && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /llama/bin && \
-    curl -sL "https://github.com/ggml-org/llama.cpp/releases/download/b10453/llama-b10453-bin-ubuntu-vulkan-x64.tar.gz" -o /llama/llama.tar.gz && \
-    tar -xzf /llama/llama.tar.gz -C /llama/bin --strip-components=1 && \
-    rm /llama/llama.tar.gz
+COPY scripts/fetch-llama.ts ./scripts/
+COPY packages/server/src/providers/local/llama-targets.ts ./packages/server/src/providers/local/
+
+RUN case "$TARGETARCH" in \
+      amd64) LINUX_TARGET=linux-x64-vulkan ;; \
+      arm64) LINUX_TARGET=linux-arm64-vulkan ;; \
+      *) echo "Unsupported TARGETARCH: $TARGETARCH" && exit 1 ;; \
+    esac && \
+    bun scripts/fetch-llama.ts darwin-arm64-metal "$LINUX_TARGET"
 
 # Stage 2: Application Dependencies and Web Build
 FROM oven/bun:1.4.0 AS app-builder
@@ -48,13 +55,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy built application and node_modules
 COPY --from=app-builder /app /app
 
-# Copy llama.cpp Vulkan binary suite
-COPY --from=llama-fetcher /llama/bin /usr/local/llama
+# Copy llama.cpp builds (vendor/llama/b10453/<target>/); the server picks one at runtime by platform
+COPY --from=llama-fetcher /llama/vendor/llama /app/vendor/llama
 
-ENV PATH="/usr/local/llama:${PATH}" \
-    LD_LIBRARY_PATH="/usr/local/llama:${LD_LIBRARY_PATH}" \
-    LLAMA_SERVER_BIN="/usr/local/llama/llama-server" \
-    NODE_ENV=production \
+ENV NODE_ENV=production \
     PORT=4470 \
     OLIVE_DATA_DIR=/app/data \
     OLIVE_CONFIG_DIR=/app/data/config \

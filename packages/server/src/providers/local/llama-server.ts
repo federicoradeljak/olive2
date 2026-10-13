@@ -5,6 +5,7 @@ import { cpus } from "node:os";
 import type { TranscriptWord } from "@olive/shared";
 import { logger } from "../../logger.ts";
 import { encodeWav } from "./wav.ts";
+import { currentLlamaTarget, llamaTargetDir } from "./llama-targets.ts";
 
 export interface LlamaServerOptions {
   binPath?: string;
@@ -32,7 +33,8 @@ export class LlamaServerManager {
     this.port = options.port ?? Number(process.env.LLAMA_SERVER_PORT || 18090);
     this.host = options.host ?? "127.0.0.1";
     this.modelRepo = options.modelRepo ?? process.env.LLAMA_MODEL_REPO ?? "ggml-org/Qwen3-ASR-1.7B-GGUF";
-    this.gpuLayers = options.gpuLayers ?? (existsSync("/dev/dri") ? 99 : 0);
+    const onMetal = currentLlamaTarget() === "darwin-arm64-metal";
+    this.gpuLayers = options.gpuLayers ?? (onMetal || existsSync("/dev/dri") ? 99 : 0);
     const numCores = cpus()?.length ?? 4;
     const defaultThreads = Math.max(1, Math.min(8, numCores > 2 ? numCores - 2 : numCores));
     this.threads = options.threads ?? (process.env.LLAMA_THREADS ? Number(process.env.LLAMA_THREADS) : defaultThreads);
@@ -61,11 +63,10 @@ export class LlamaServerManager {
       return process.env.LLAMA_SERVER_BIN;
     }
 
+    const target = currentLlamaTarget();
     const candidatePaths = [
-      "/usr/local/llama/llama-server",
-      "/usr/local/bin/llama-server",
-      "/tmp/opencode/llama-vulkan/llama-b10453/llama-server",
-      "/tmp/opencode/llama/llama-b10453/llama-server"
+      ...(target ? [join(llamaTargetDir(target), "llama-server")] : []),
+      "/usr/local/bin/llama-server"
     ];
 
     for (const p of candidatePaths) {
@@ -136,7 +137,8 @@ export class LlamaServerManager {
         stdio: ["ignore", "pipe", "pipe"],
         env: {
           ...process.env,
-          LD_LIBRARY_PATH: `${join(bin, "..")}:${process.env.LD_LIBRARY_PATH || ""}`
+          LD_LIBRARY_PATH: `${join(bin, "..")}:${process.env.LD_LIBRARY_PATH || ""}`,
+          DYLD_LIBRARY_PATH: `${join(bin, "..")}:${process.env.DYLD_LIBRARY_PATH || ""}`
         }
       });
       this.process.unref();
