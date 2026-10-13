@@ -81,6 +81,49 @@ async def test_manages_settings_and_custom_model_definitions(tmp_path: Path) -> 
     local_llama = next((m for m in models if m.id == "local-llama"), None)
     assert local_llama is not None
     assert local_llama.source == "custom"
+
+    # Saving an API key and then updating other settings without apiKey must preserve apiKey
+    await service.update_settings(
+        {
+            "defaultProvider": "google",
+            "defaultModel": "gemini-2.5-flash",
+            "providers": {
+                "google": {
+                    "apiKey": "sk-secret-preserved-key",
+                    "baseUrl": "https://plexus.home.cowger.us/v1",
+                }
+            },
+        }
+    )
+    after_model_change = await service.update_settings(
+        {
+            "defaultProvider": "google",
+            "defaultModel": "gemini-2.5-pro",
+            "defaultThinkingLevel": "high",
+            "providers": {
+                "google": {
+                    "baseUrl": "https://plexus.home.cowger.us/v1",
+                }
+            },
+        }
+    )
+    assert after_model_change.providers["google"].apiKey == "sk-secret-preserved-key"
+    assert after_model_change.providers["google"].baseUrl == "https://plexus.home.cowger.us/v1"
+    assert after_model_change.defaultModel == "gemini-2.5-pro"
+
+    # Empty or masked apiKey also preserves the stored key
+    after_empty_key = await service.update_settings(
+        {
+            "providers": {
+                "google": {
+                    "apiKey": "",
+                    "baseUrl": "https://plexus.home.cowger.us",
+                }
+            }
+        }
+    )
+    assert after_empty_key.providers["google"].apiKey == "sk-secret-preserved-key"
+    assert after_empty_key.providers["google"].baseUrl == "https://plexus.home.cowger.us"
     handle.engine.dispose()
 
 

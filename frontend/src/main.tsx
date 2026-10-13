@@ -3965,6 +3965,7 @@ function LlmSettingsModal({
   const [thinkingLevel, setThinkingLevel] = useState<string>("off");
   const [apiKey, setApiKey] = useState<string>("");
   const [baseUrl, setBaseUrl] = useState<string>("");
+  const [savedProviders, setSavedProviders] = useState<Record<string, { hasApiKey?: boolean; baseUrl?: string }>>({});
   const [localClusteringThreshold, setLocalClusteringThreshold] = useState<number>(0.50);
   const [localSimilarityThreshold, setLocalSimilarityThreshold] = useState<number>(0.45);
   const [localAsrModel, setLocalAsrModel] = useState<string>("onnx-community/cohere-transcribe-03-2026-ONNX");
@@ -3996,6 +3997,7 @@ function LlmSettingsModal({
         if (config.defaultThinkingLevel) {
           setThinkingLevel(config.defaultThinkingLevel);
         }
+        setSavedProviders(config.providers || {});
         const provConfig = config.providers?.[config.defaultProvider || "google"];
         setBaseUrl(provConfig?.baseUrl || "");
       }
@@ -4041,6 +4043,8 @@ function LlmSettingsModal({
 
   const handleProviderChange = (pId: string) => {
     setSelectedProvider(pId);
+    setApiKey("");
+    setBaseUrl(savedProviders[pId]?.baseUrl || "");
     setTestResult(null);
     const providerModels = models.filter((m) => m.provider === pId);
     if (providerModels.length > 0) {
@@ -4130,7 +4134,7 @@ function LlmSettingsModal({
         providers: {
           [selectedProvider]: {
             ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
-            ...(baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {})
+            baseUrl: baseUrl.trim()
           }
         }
       };

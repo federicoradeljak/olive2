@@ -29,7 +29,7 @@ from ..schemas import (
     LlmThinkingLevel,
     UpdateLlmSettingsInput,
 )
-from ..settings import resolve_paths
+from ..settings import is_masked_secret, resolve_paths
 
 PROVIDER_ENV_KEY_MAP: dict[str, list[str]] = {
     "google": ["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"],
@@ -725,16 +725,43 @@ class LlmService:
     getSettings = get_settings
 
     async def update_settings(self, raw_input: dict[str, Any] | UpdateLlmSettingsInput) -> LlmSettings:
+        raw_providers_input = (
+            raw_input.get("providers")
+            if isinstance(raw_input, dict) and isinstance(raw_input.get("providers"), dict)
+            else None
+        )
         inp = (
             raw_input
             if isinstance(raw_input, UpdateLlmSettingsInput)
             else UpdateLlmSettingsInput.model_validate(raw_input)
         )
         current = await self.get_settings()
-        merged_providers = {
-            **{k: v.model_dump(exclude_none=True) for k, v in current.providers.items()},
-            **{k: v.model_dump(exclude_none=True) for k, v in (inp.providers or {}).items()},
+        merged_providers: dict[str, dict[str, Any]] = {
+            k: v.model_dump(exclude_none=True) for k, v in current.providers.items()
         }
+        for prov_id, incoming in (inp.providers or {}).items():
+            existing = dict(merged_providers.get(prov_id) or {})
+            raw_prov_candidate = (
+                raw_providers_input.get(prov_id) if isinstance(raw_providers_input, dict) else None
+            )
+            raw_prov: dict[str, Any] = raw_prov_candidate if isinstance(raw_prov_candidate, dict) else {}
+
+            if incoming.apiKey is not None:
+                trimmed_key = incoming.apiKey.strip()
+                if trimmed_key and not is_masked_secret(trimmed_key):
+                    existing["apiKey"] = trimmed_key
+
+            if "baseUrl" in raw_prov or incoming.baseUrl is not None:
+                trimmed_url = (incoming.baseUrl or "").strip()
+                if trimmed_url:
+                    existing["baseUrl"] = trimmed_url
+                else:
+                    existing.pop("baseUrl", None)
+
+            if incoming.headers is not None:
+                existing["headers"] = incoming.headers
+
+            merged_providers[prov_id] = existing
         updated = LlmSettings.model_validate(
             {
                 "defaultProvider": inp.defaultProvider or current.defaultProvider,
