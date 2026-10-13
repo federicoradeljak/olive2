@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from olive.app import create_app
 from olive.db import create_db
-from olive.services.llm import LlmService
+from olive.services.llm import LlmService, normalize_provider_base_url
 
 
 async def test_lists_models_across_multiple_providers_with_metadata(tmp_path: Path) -> None:
@@ -93,6 +93,17 @@ async def test_resolves_models_with_custom_base_url_overrides(tmp_path: Path) ->
     )
     model = await service.resolve_model("groq", "llama-3.3-70b-versatile")
     assert model["baseUrl"] == "https://custom-groq-proxy.internal/v1"
+
+    for suffix in ("", "/v1", "/v1/", "/v1beta", "/v1/messages", "/v1/chat/completions"):
+        url = f"https://plexus.home.cowger.us{suffix}"
+        assert normalize_provider_base_url("google", url) == "https://plexus.home.cowger.us"
+        assert normalize_provider_base_url("anthropic", url) == "https://plexus.home.cowger.us"
+        assert normalize_provider_base_url("openai", url) == "https://plexus.home.cowger.us/v1"
+        assert normalize_provider_base_url("groq", url) == "https://plexus.home.cowger.us/v1"
+    assert (
+        normalize_provider_base_url("openrouter", "https://openrouter.ai/api/v1/chat/completions")
+        == "https://openrouter.ai/api/v1"
+    )
     handle.engine.dispose()
 
 

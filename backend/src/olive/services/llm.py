@@ -58,7 +58,7 @@ PROVIDER_PRIORITY: dict[str, int] = {
 }
 
 DEFAULT_PROVIDER_BASE_URL: dict[str, str] = {
-    "google": "https://generativelanguage.googleapis.com/v1beta",
+    "google": "https://generativelanguage.googleapis.com",
     "anthropic": "https://api.anthropic.com",
     "openai": "https://api.openai.com/v1",
     "groq": "https://api.groq.com/openai/v1",
@@ -71,72 +71,571 @@ DEFAULT_PROVIDER_BASE_URL: dict[str, str] = {
     "xai": "https://api.x.ai/v1",
 }
 
+_ENDPOINT_SUFFIX_RE = re.compile(
+    r"(?:/v1/chat/completions|/chat/completions|/v1/messages|/messages|/v1/responses|/responses|/v1beta/models|/v1beta1|/v1beta|/v1alpha|/v1)+$",
+    re.IGNORECASE,
+)
+
+
+def normalize_provider_base_url(provider: str, base_url: str | None) -> str | None:
+    """Normalize a user-supplied base URL for the target provider's SDK.
+
+    - ``google`` / ``gemini`` (``google-genai`` SDK) appends ``/v1beta/models/...`` itself,
+      so ``/v1``, ``/v1beta``, ``/v1/messages``, or ``/v1/chat/completions`` are stripped.
+    - ``anthropic`` (``anthropic`` SDK) appends ``/v1/messages`` itself, so ``/v1`` and
+      ``/v1/messages`` are stripped.
+    - OpenAI-compatible SDKs (``openai``, ``groq``, ``openrouter``, etc.) append
+      ``/chat/completions`` directly and require a trailing ``/v1`` path segment.
+    """
+    if not base_url or not base_url.strip():
+        return None
+
+    cleaned = base_url.strip().rstrip("/")
+    if not cleaned:
+        return None
+
+    prov = provider.strip().lower()
+    root = _ENDPOINT_SUFFIX_RE.sub("", cleaned).rstrip("/")
+    if not root:
+        root = cleaned
+
+    if prov in ("google", "gemini", "anthropic"):
+        return root
+
+    if re.search(r"/v\d+(?:alpha|beta\d*)?$", root, re.IGNORECASE):
+        return root
+    return f"{root}/v1"
+
+
 # Built-in snapshot of models across major providers (offline fallback for models.dev)
 BUILTIN_CATALOG: list[dict[str, Any]] = [
     # Google Gemini
-    {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash", "provider": "google", "api": "google-generative-ai", "contextWindow": 1048576, "maxTokens": 65536, "reasoning": True, "cost": {"input": 0.15, "output": 0.60}},
-    {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro", "provider": "google", "api": "google-generative-ai", "contextWindow": 1048576, "maxTokens": 65536, "reasoning": True, "cost": {"input": 1.25, "output": 10.0}},
-    {"id": "gemini-2.5-flash-lite", "name": "Gemini 2.5 Flash Lite", "provider": "google", "api": "google-generative-ai", "contextWindow": 1048576, "maxTokens": 65536, "reasoning": True, "cost": {"input": 0.10, "output": 0.40}},
-    {"id": "gemini-2.0-flash", "name": "Gemini 2.0 Flash", "provider": "google", "api": "google-generative-ai", "contextWindow": 1048576, "maxTokens": 8192, "reasoning": False, "cost": {"input": 0.10, "output": 0.40}},
-    {"id": "gemini-2.0-flash-lite", "name": "Gemini 2.0 Flash Lite", "provider": "google", "api": "google-generative-ai", "contextWindow": 1048576, "maxTokens": 8192, "reasoning": False, "cost": {"input": 0.075, "output": 0.30}},
-    {"id": "gemini-3.7-flash", "name": "Gemini 3.7 Flash", "provider": "google", "api": "google-generative-ai", "contextWindow": 1048576, "maxTokens": 65536, "reasoning": True, "cost": {"input": 0.15, "output": 0.60}},
-    {"id": "gemini-1.5-pro", "name": "Gemini 1.5 Pro", "provider": "google", "api": "google-generative-ai", "contextWindow": 2097152, "maxTokens": 8192, "reasoning": False, "cost": {"input": 1.25, "output": 5.0}},
-    {"id": "gemini-1.5-flash", "name": "Gemini 1.5 Flash", "provider": "google", "api": "google-generative-ai", "contextWindow": 1048576, "maxTokens": 8192, "reasoning": False, "cost": {"input": 0.075, "output": 0.30}},
+    {
+        "id": "gemini-2.5-flash",
+        "name": "Gemini 2.5 Flash",
+        "provider": "google",
+        "api": "google-generative-ai",
+        "contextWindow": 1048576,
+        "maxTokens": 65536,
+        "reasoning": True,
+        "cost": {"input": 0.15, "output": 0.60},
+    },
+    {
+        "id": "gemini-2.5-pro",
+        "name": "Gemini 2.5 Pro",
+        "provider": "google",
+        "api": "google-generative-ai",
+        "contextWindow": 1048576,
+        "maxTokens": 65536,
+        "reasoning": True,
+        "cost": {"input": 1.25, "output": 10.0},
+    },
+    {
+        "id": "gemini-2.5-flash-lite",
+        "name": "Gemini 2.5 Flash Lite",
+        "provider": "google",
+        "api": "google-generative-ai",
+        "contextWindow": 1048576,
+        "maxTokens": 65536,
+        "reasoning": True,
+        "cost": {"input": 0.10, "output": 0.40},
+    },
+    {
+        "id": "gemini-2.0-flash",
+        "name": "Gemini 2.0 Flash",
+        "provider": "google",
+        "api": "google-generative-ai",
+        "contextWindow": 1048576,
+        "maxTokens": 8192,
+        "reasoning": False,
+        "cost": {"input": 0.10, "output": 0.40},
+    },
+    {
+        "id": "gemini-2.0-flash-lite",
+        "name": "Gemini 2.0 Flash Lite",
+        "provider": "google",
+        "api": "google-generative-ai",
+        "contextWindow": 1048576,
+        "maxTokens": 8192,
+        "reasoning": False,
+        "cost": {"input": 0.075, "output": 0.30},
+    },
+    {
+        "id": "gemini-3.7-flash",
+        "name": "Gemini 3.7 Flash",
+        "provider": "google",
+        "api": "google-generative-ai",
+        "contextWindow": 1048576,
+        "maxTokens": 65536,
+        "reasoning": True,
+        "cost": {"input": 0.15, "output": 0.60},
+    },
+    {
+        "id": "gemini-1.5-pro",
+        "name": "Gemini 1.5 Pro",
+        "provider": "google",
+        "api": "google-generative-ai",
+        "contextWindow": 2097152,
+        "maxTokens": 8192,
+        "reasoning": False,
+        "cost": {"input": 1.25, "output": 5.0},
+    },
+    {
+        "id": "gemini-1.5-flash",
+        "name": "Gemini 1.5 Flash",
+        "provider": "google",
+        "api": "google-generative-ai",
+        "contextWindow": 1048576,
+        "maxTokens": 8192,
+        "reasoning": False,
+        "cost": {"input": 0.075, "output": 0.30},
+    },
     # Anthropic
-    {"id": "claude-sonnet-4-20250514", "name": "Claude Sonnet 4", "provider": "anthropic", "api": "anthropic-messages", "contextWindow": 200000, "maxTokens": 64000, "reasoning": True, "cost": {"input": 3.0, "output": 15.0}},
-    {"id": "claude-opus-4-20250514", "name": "Claude Opus 4", "provider": "anthropic", "api": "anthropic-messages", "contextWindow": 200000, "maxTokens": 32000, "reasoning": True, "cost": {"input": 15.0, "output": 75.0}},
-    {"id": "claude-3-7-sonnet-20250219", "name": "Claude 3.7 Sonnet", "provider": "anthropic", "api": "anthropic-messages", "contextWindow": 200000, "maxTokens": 64000, "reasoning": True, "cost": {"input": 3.0, "output": 15.0}},
-    {"id": "claude-3-5-sonnet-20241022", "name": "Claude 3.5 Sonnet", "provider": "anthropic", "api": "anthropic-messages", "contextWindow": 200000, "maxTokens": 8192, "reasoning": False, "cost": {"input": 3.0, "output": 15.0}},
-    {"id": "claude-3-5-haiku-20241022", "name": "Claude 3.5 Haiku", "provider": "anthropic", "api": "anthropic-messages", "contextWindow": 200000, "maxTokens": 8192, "reasoning": False, "cost": {"input": 0.80, "output": 4.0}},
-    {"id": "claude-3-opus-20240229", "name": "Claude 3 Opus", "provider": "anthropic", "api": "anthropic-messages", "contextWindow": 200000, "maxTokens": 4096, "reasoning": False, "cost": {"input": 15.0, "output": 75.0}},
-    {"id": "claude-3-haiku-20240307", "name": "Claude 3 Haiku", "provider": "anthropic", "api": "anthropic-messages", "contextWindow": 200000, "maxTokens": 4096, "reasoning": False, "cost": {"input": 0.25, "output": 1.25}},
+    {
+        "id": "claude-sonnet-4-20250514",
+        "name": "Claude Sonnet 4",
+        "provider": "anthropic",
+        "api": "anthropic-messages",
+        "contextWindow": 200000,
+        "maxTokens": 64000,
+        "reasoning": True,
+        "cost": {"input": 3.0, "output": 15.0},
+    },
+    {
+        "id": "claude-opus-4-20250514",
+        "name": "Claude Opus 4",
+        "provider": "anthropic",
+        "api": "anthropic-messages",
+        "contextWindow": 200000,
+        "maxTokens": 32000,
+        "reasoning": True,
+        "cost": {"input": 15.0, "output": 75.0},
+    },
+    {
+        "id": "claude-3-7-sonnet-20250219",
+        "name": "Claude 3.7 Sonnet",
+        "provider": "anthropic",
+        "api": "anthropic-messages",
+        "contextWindow": 200000,
+        "maxTokens": 64000,
+        "reasoning": True,
+        "cost": {"input": 3.0, "output": 15.0},
+    },
+    {
+        "id": "claude-3-5-sonnet-20241022",
+        "name": "Claude 3.5 Sonnet",
+        "provider": "anthropic",
+        "api": "anthropic-messages",
+        "contextWindow": 200000,
+        "maxTokens": 8192,
+        "reasoning": False,
+        "cost": {"input": 3.0, "output": 15.0},
+    },
+    {
+        "id": "claude-3-5-haiku-20241022",
+        "name": "Claude 3.5 Haiku",
+        "provider": "anthropic",
+        "api": "anthropic-messages",
+        "contextWindow": 200000,
+        "maxTokens": 8192,
+        "reasoning": False,
+        "cost": {"input": 0.80, "output": 4.0},
+    },
+    {
+        "id": "claude-3-opus-20240229",
+        "name": "Claude 3 Opus",
+        "provider": "anthropic",
+        "api": "anthropic-messages",
+        "contextWindow": 200000,
+        "maxTokens": 4096,
+        "reasoning": False,
+        "cost": {"input": 15.0, "output": 75.0},
+    },
+    {
+        "id": "claude-3-haiku-20240307",
+        "name": "Claude 3 Haiku",
+        "provider": "anthropic",
+        "api": "anthropic-messages",
+        "contextWindow": 200000,
+        "maxTokens": 4096,
+        "reasoning": False,
+        "cost": {"input": 0.25, "output": 1.25},
+    },
     # OpenAI
-    {"id": "gpt-4o", "name": "GPT-4o", "provider": "openai", "api": "openai-completions", "contextWindow": 128000, "maxTokens": 16384, "reasoning": False, "cost": {"input": 2.5, "output": 10.0}},
-    {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "provider": "openai", "api": "openai-completions", "contextWindow": 128000, "maxTokens": 16384, "reasoning": False, "cost": {"input": 0.15, "output": 0.60}},
-    {"id": "gpt-4.1", "name": "GPT-4.1", "provider": "openai", "api": "openai-completions", "contextWindow": 1047576, "maxTokens": 32768, "reasoning": False, "cost": {"input": 2.0, "output": 8.0}},
-    {"id": "gpt-4.1-mini", "name": "GPT-4.1 Mini", "provider": "openai", "api": "openai-completions", "contextWindow": 1047576, "maxTokens": 32768, "reasoning": False, "cost": {"input": 0.40, "output": 1.60}},
-    {"id": "gpt-4.1-nano", "name": "GPT-4.1 Nano", "provider": "openai", "api": "openai-completions", "contextWindow": 1047576, "maxTokens": 32768, "reasoning": False, "cost": {"input": 0.10, "output": 0.40}},
-    {"id": "gpt-4-turbo", "name": "GPT-4 Turbo", "provider": "openai", "api": "openai-completions", "contextWindow": 128000, "maxTokens": 4096, "reasoning": False, "cost": {"input": 10.0, "output": 30.0}},
-    {"id": "o3", "name": "OpenAI o3", "provider": "openai", "api": "openai-completions", "contextWindow": 200000, "maxTokens": 100000, "reasoning": True, "cost": {"input": 2.0, "output": 8.0}},
-    {"id": "o3-mini", "name": "OpenAI o3-mini", "provider": "openai", "api": "openai-completions", "contextWindow": 200000, "maxTokens": 100000, "reasoning": True, "cost": {"input": 1.1, "output": 4.4}},
-    {"id": "o4-mini", "name": "OpenAI o4-mini", "provider": "openai", "api": "openai-completions", "contextWindow": 200000, "maxTokens": 100000, "reasoning": True, "cost": {"input": 1.1, "output": 4.4}},
-    {"id": "o1", "name": "OpenAI o1", "provider": "openai", "api": "openai-completions", "contextWindow": 200000, "maxTokens": 100000, "reasoning": True, "cost": {"input": 15.0, "output": 60.0}},
+    {
+        "id": "gpt-4o",
+        "name": "GPT-4o",
+        "provider": "openai",
+        "api": "openai-completions",
+        "contextWindow": 128000,
+        "maxTokens": 16384,
+        "reasoning": False,
+        "cost": {"input": 2.5, "output": 10.0},
+    },
+    {
+        "id": "gpt-4o-mini",
+        "name": "GPT-4o Mini",
+        "provider": "openai",
+        "api": "openai-completions",
+        "contextWindow": 128000,
+        "maxTokens": 16384,
+        "reasoning": False,
+        "cost": {"input": 0.15, "output": 0.60},
+    },
+    {
+        "id": "gpt-4.1",
+        "name": "GPT-4.1",
+        "provider": "openai",
+        "api": "openai-completions",
+        "contextWindow": 1047576,
+        "maxTokens": 32768,
+        "reasoning": False,
+        "cost": {"input": 2.0, "output": 8.0},
+    },
+    {
+        "id": "gpt-4.1-mini",
+        "name": "GPT-4.1 Mini",
+        "provider": "openai",
+        "api": "openai-completions",
+        "contextWindow": 1047576,
+        "maxTokens": 32768,
+        "reasoning": False,
+        "cost": {"input": 0.40, "output": 1.60},
+    },
+    {
+        "id": "gpt-4.1-nano",
+        "name": "GPT-4.1 Nano",
+        "provider": "openai",
+        "api": "openai-completions",
+        "contextWindow": 1047576,
+        "maxTokens": 32768,
+        "reasoning": False,
+        "cost": {"input": 0.10, "output": 0.40},
+    },
+    {
+        "id": "gpt-4-turbo",
+        "name": "GPT-4 Turbo",
+        "provider": "openai",
+        "api": "openai-completions",
+        "contextWindow": 128000,
+        "maxTokens": 4096,
+        "reasoning": False,
+        "cost": {"input": 10.0, "output": 30.0},
+    },
+    {
+        "id": "o3",
+        "name": "OpenAI o3",
+        "provider": "openai",
+        "api": "openai-completions",
+        "contextWindow": 200000,
+        "maxTokens": 100000,
+        "reasoning": True,
+        "cost": {"input": 2.0, "output": 8.0},
+    },
+    {
+        "id": "o3-mini",
+        "name": "OpenAI o3-mini",
+        "provider": "openai",
+        "api": "openai-completions",
+        "contextWindow": 200000,
+        "maxTokens": 100000,
+        "reasoning": True,
+        "cost": {"input": 1.1, "output": 4.4},
+    },
+    {
+        "id": "o4-mini",
+        "name": "OpenAI o4-mini",
+        "provider": "openai",
+        "api": "openai-completions",
+        "contextWindow": 200000,
+        "maxTokens": 100000,
+        "reasoning": True,
+        "cost": {"input": 1.1, "output": 4.4},
+    },
+    {
+        "id": "o1",
+        "name": "OpenAI o1",
+        "provider": "openai",
+        "api": "openai-completions",
+        "contextWindow": 200000,
+        "maxTokens": 100000,
+        "reasoning": True,
+        "cost": {"input": 15.0, "output": 60.0},
+    },
     # Groq
-    {"id": "llama-3.3-70b-versatile", "name": "Llama 3.3 70B Versatile", "provider": "groq", "api": "openai-completions", "contextWindow": 128000, "maxTokens": 32768, "reasoning": False, "cost": {"input": 0.59, "output": 0.79}},
-    {"id": "llama-3.1-8b-instant", "name": "Llama 3.1 8B Instant", "provider": "groq", "api": "openai-completions", "contextWindow": 128000, "maxTokens": 8192, "reasoning": False, "cost": {"input": 0.05, "output": 0.08}},
-    {"id": "deepseek-r1-distill-llama-70b", "name": "DeepSeek R1 Distill Llama 70B", "provider": "groq", "api": "openai-completions", "contextWindow": 128000, "maxTokens": 16384, "reasoning": True, "cost": {"input": 0.75, "output": 0.99}},
-    {"id": "qwen-qwq-32b", "name": "Qwen QwQ 32B", "provider": "groq", "api": "openai-completions", "contextWindow": 128000, "maxTokens": 16384, "reasoning": True, "cost": {"input": 0.29, "output": 0.39}},
-    {"id": "gemma2-9b-it", "name": "Gemma 2 9B IT", "provider": "groq", "api": "openai-completions", "contextWindow": 8192, "maxTokens": 8192, "reasoning": False, "cost": {"input": 0.20, "output": 0.20}},
+    {
+        "id": "llama-3.3-70b-versatile",
+        "name": "Llama 3.3 70B Versatile",
+        "provider": "groq",
+        "api": "openai-completions",
+        "contextWindow": 128000,
+        "maxTokens": 32768,
+        "reasoning": False,
+        "cost": {"input": 0.59, "output": 0.79},
+    },
+    {
+        "id": "llama-3.1-8b-instant",
+        "name": "Llama 3.1 8B Instant",
+        "provider": "groq",
+        "api": "openai-completions",
+        "contextWindow": 128000,
+        "maxTokens": 8192,
+        "reasoning": False,
+        "cost": {"input": 0.05, "output": 0.08},
+    },
+    {
+        "id": "deepseek-r1-distill-llama-70b",
+        "name": "DeepSeek R1 Distill Llama 70B",
+        "provider": "groq",
+        "api": "openai-completions",
+        "contextWindow": 128000,
+        "maxTokens": 16384,
+        "reasoning": True,
+        "cost": {"input": 0.75, "output": 0.99},
+    },
+    {
+        "id": "qwen-qwq-32b",
+        "name": "Qwen QwQ 32B",
+        "provider": "groq",
+        "api": "openai-completions",
+        "contextWindow": 128000,
+        "maxTokens": 16384,
+        "reasoning": True,
+        "cost": {"input": 0.29, "output": 0.39},
+    },
+    {
+        "id": "gemma2-9b-it",
+        "name": "Gemma 2 9B IT",
+        "provider": "groq",
+        "api": "openai-completions",
+        "contextWindow": 8192,
+        "maxTokens": 8192,
+        "reasoning": False,
+        "cost": {"input": 0.20, "output": 0.20},
+    },
     # OpenRouter
-    {"id": "anthropic/claude-3.7-sonnet", "name": "Claude 3.7 Sonnet (OpenRouter)", "provider": "openrouter", "api": "openai-completions", "contextWindow": 200000, "maxTokens": 64000, "reasoning": True},
-    {"id": "google/gemini-2.5-pro", "name": "Gemini 2.5 Pro (OpenRouter)", "provider": "openrouter", "api": "openai-completions", "contextWindow": 1048576, "maxTokens": 65536, "reasoning": True},
-    {"id": "google/gemini-2.5-flash", "name": "Gemini 2.5 Flash (OpenRouter)", "provider": "openrouter", "api": "openai-completions", "contextWindow": 1048576, "maxTokens": 65536, "reasoning": True},
-    {"id": "openai/gpt-4o", "name": "GPT-4o (OpenRouter)", "provider": "openrouter", "api": "openai-completions", "contextWindow": 128000, "maxTokens": 16384, "reasoning": False},
-    {"id": "deepseek/deepseek-r1", "name": "DeepSeek R1 (OpenRouter)", "provider": "openrouter", "api": "openai-completions", "contextWindow": 128000, "maxTokens": 32768, "reasoning": True},
-    {"id": "meta-llama/llama-3.3-70b-instruct", "name": "Llama 3.3 70B Instruct (OpenRouter)", "provider": "openrouter", "api": "openai-completions", "contextWindow": 128000, "maxTokens": 32768, "reasoning": False},
+    {
+        "id": "anthropic/claude-3.7-sonnet",
+        "name": "Claude 3.7 Sonnet (OpenRouter)",
+        "provider": "openrouter",
+        "api": "openai-completions",
+        "contextWindow": 200000,
+        "maxTokens": 64000,
+        "reasoning": True,
+    },
+    {
+        "id": "google/gemini-2.5-pro",
+        "name": "Gemini 2.5 Pro (OpenRouter)",
+        "provider": "openrouter",
+        "api": "openai-completions",
+        "contextWindow": 1048576,
+        "maxTokens": 65536,
+        "reasoning": True,
+    },
+    {
+        "id": "google/gemini-2.5-flash",
+        "name": "Gemini 2.5 Flash (OpenRouter)",
+        "provider": "openrouter",
+        "api": "openai-completions",
+        "contextWindow": 1048576,
+        "maxTokens": 65536,
+        "reasoning": True,
+    },
+    {
+        "id": "openai/gpt-4o",
+        "name": "GPT-4o (OpenRouter)",
+        "provider": "openrouter",
+        "api": "openai-completions",
+        "contextWindow": 128000,
+        "maxTokens": 16384,
+        "reasoning": False,
+    },
+    {
+        "id": "deepseek/deepseek-r1",
+        "name": "DeepSeek R1 (OpenRouter)",
+        "provider": "openrouter",
+        "api": "openai-completions",
+        "contextWindow": 128000,
+        "maxTokens": 32768,
+        "reasoning": True,
+    },
+    {
+        "id": "meta-llama/llama-3.3-70b-instruct",
+        "name": "Llama 3.3 70B Instruct (OpenRouter)",
+        "provider": "openrouter",
+        "api": "openai-completions",
+        "contextWindow": 128000,
+        "maxTokens": 32768,
+        "reasoning": False,
+    },
     # DeepSeek
-    {"id": "deepseek-chat", "name": "DeepSeek V3 Chat", "provider": "deepseek", "api": "openai-completions", "contextWindow": 64000, "maxTokens": 8192, "reasoning": False, "cost": {"input": 0.27, "output": 1.10}},
-    {"id": "deepseek-reasoner", "name": "DeepSeek R1 Reasoner", "provider": "deepseek", "api": "openai-completions", "contextWindow": 64000, "maxTokens": 8192, "reasoning": True, "cost": {"input": 0.55, "output": 2.19}},
+    {
+        "id": "deepseek-chat",
+        "name": "DeepSeek V3 Chat",
+        "provider": "deepseek",
+        "api": "openai-completions",
+        "contextWindow": 64000,
+        "maxTokens": 8192,
+        "reasoning": False,
+        "cost": {"input": 0.27, "output": 1.10},
+    },
+    {
+        "id": "deepseek-reasoner",
+        "name": "DeepSeek R1 Reasoner",
+        "provider": "deepseek",
+        "api": "openai-completions",
+        "contextWindow": 64000,
+        "maxTokens": 8192,
+        "reasoning": True,
+        "cost": {"input": 0.55, "output": 2.19},
+    },
     # Mistral
-    {"id": "mistral-large-latest", "name": "Mistral Large", "provider": "mistral", "api": "openai-completions", "contextWindow": 128000, "maxTokens": 8192, "reasoning": False, "cost": {"input": 2.0, "output": 6.0}},
-    {"id": "mistral-small-latest", "name": "Mistral Small", "provider": "mistral", "api": "openai-completions", "contextWindow": 32000, "maxTokens": 8192, "reasoning": False, "cost": {"input": 0.1, "output": 0.3}},
-    {"id": "codestral-latest", "name": "Codestral", "provider": "mistral", "api": "openai-completions", "contextWindow": 256000, "maxTokens": 8192, "reasoning": False, "cost": {"input": 0.3, "output": 0.9}},
-    {"id": "ministral-8b-latest", "name": "Ministral 8B", "provider": "mistral", "api": "openai-completions", "contextWindow": 128000, "maxTokens": 8192, "reasoning": False, "cost": {"input": 0.1, "output": 0.1}},
+    {
+        "id": "mistral-large-latest",
+        "name": "Mistral Large",
+        "provider": "mistral",
+        "api": "openai-completions",
+        "contextWindow": 128000,
+        "maxTokens": 8192,
+        "reasoning": False,
+        "cost": {"input": 2.0, "output": 6.0},
+    },
+    {
+        "id": "mistral-small-latest",
+        "name": "Mistral Small",
+        "provider": "mistral",
+        "api": "openai-completions",
+        "contextWindow": 32000,
+        "maxTokens": 8192,
+        "reasoning": False,
+        "cost": {"input": 0.1, "output": 0.3},
+    },
+    {
+        "id": "codestral-latest",
+        "name": "Codestral",
+        "provider": "mistral",
+        "api": "openai-completions",
+        "contextWindow": 256000,
+        "maxTokens": 8192,
+        "reasoning": False,
+        "cost": {"input": 0.3, "output": 0.9},
+    },
+    {
+        "id": "ministral-8b-latest",
+        "name": "Ministral 8B",
+        "provider": "mistral",
+        "api": "openai-completions",
+        "contextWindow": 128000,
+        "maxTokens": 8192,
+        "reasoning": False,
+        "cost": {"input": 0.1, "output": 0.1},
+    },
     # xAI
-    {"id": "grok-3", "name": "Grok 3", "provider": "xai", "api": "openai-completions", "contextWindow": 131072, "maxTokens": 16384, "reasoning": False, "cost": {"input": 3.0, "output": 15.0}},
-    {"id": "grok-3-mini", "name": "Grok 3 Mini", "provider": "xai", "api": "openai-completions", "contextWindow": 131072, "maxTokens": 16384, "reasoning": True, "cost": {"input": 0.3, "output": 0.5}},
-    {"id": "grok-2-1212", "name": "Grok 2", "provider": "xai", "api": "openai-completions", "contextWindow": 131072, "maxTokens": 16384, "reasoning": False, "cost": {"input": 2.0, "output": 10.0}},
+    {
+        "id": "grok-3",
+        "name": "Grok 3",
+        "provider": "xai",
+        "api": "openai-completions",
+        "contextWindow": 131072,
+        "maxTokens": 16384,
+        "reasoning": False,
+        "cost": {"input": 3.0, "output": 15.0},
+    },
+    {
+        "id": "grok-3-mini",
+        "name": "Grok 3 Mini",
+        "provider": "xai",
+        "api": "openai-completions",
+        "contextWindow": 131072,
+        "maxTokens": 16384,
+        "reasoning": True,
+        "cost": {"input": 0.3, "output": 0.5},
+    },
+    {
+        "id": "grok-2-1212",
+        "name": "Grok 2",
+        "provider": "xai",
+        "api": "openai-completions",
+        "contextWindow": 131072,
+        "maxTokens": 16384,
+        "reasoning": False,
+        "cost": {"input": 2.0, "output": 10.0},
+    },
     # Cerebras
-    {"id": "llama-3.3-70b", "name": "Llama 3.3 70B (Cerebras)", "provider": "cerebras", "api": "openai-completions", "contextWindow": 128000, "maxTokens": 8192, "reasoning": False},
-    {"id": "llama3.1-8b", "name": "Llama 3.1 8B (Cerebras)", "provider": "cerebras", "api": "openai-completions", "contextWindow": 128000, "maxTokens": 8192, "reasoning": False},
-    {"id": "qwen-3-32b", "name": "Qwen 3 32B (Cerebras)", "provider": "cerebras", "api": "openai-completions", "contextWindow": 32768, "maxTokens": 8192, "reasoning": True},
+    {
+        "id": "llama-3.3-70b",
+        "name": "Llama 3.3 70B (Cerebras)",
+        "provider": "cerebras",
+        "api": "openai-completions",
+        "contextWindow": 128000,
+        "maxTokens": 8192,
+        "reasoning": False,
+    },
+    {
+        "id": "llama3.1-8b",
+        "name": "Llama 3.1 8B (Cerebras)",
+        "provider": "cerebras",
+        "api": "openai-completions",
+        "contextWindow": 128000,
+        "maxTokens": 8192,
+        "reasoning": False,
+    },
+    {
+        "id": "qwen-3-32b",
+        "name": "Qwen 3 32B (Cerebras)",
+        "provider": "cerebras",
+        "api": "openai-completions",
+        "contextWindow": 32768,
+        "maxTokens": 8192,
+        "reasoning": True,
+    },
     # Together
-    {"id": "meta-llama/Llama-3.3-70B-Instruct-Turbo", "name": "Llama 3.3 70B Instruct Turbo", "provider": "together", "api": "openai-completions", "contextWindow": 131072, "maxTokens": 8192, "reasoning": False},
-    {"id": "deepseek-ai/DeepSeek-R1", "name": "DeepSeek R1 (Together)", "provider": "together", "api": "openai-completions", "contextWindow": 128000, "maxTokens": 16384, "reasoning": True},
-    {"id": "Qwen/Qwen2.5-72B-Instruct-Turbo", "name": "Qwen 2.5 72B Instruct Turbo", "provider": "together", "api": "openai-completions", "contextWindow": 128000, "maxTokens": 8192, "reasoning": False},
+    {
+        "id": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        "name": "Llama 3.3 70B Instruct Turbo",
+        "provider": "together",
+        "api": "openai-completions",
+        "contextWindow": 131072,
+        "maxTokens": 8192,
+        "reasoning": False,
+    },
+    {
+        "id": "deepseek-ai/DeepSeek-R1",
+        "name": "DeepSeek R1 (Together)",
+        "provider": "together",
+        "api": "openai-completions",
+        "contextWindow": 128000,
+        "maxTokens": 16384,
+        "reasoning": True,
+    },
+    {
+        "id": "Qwen/Qwen2.5-72B-Instruct-Turbo",
+        "name": "Qwen 2.5 72B Instruct Turbo",
+        "provider": "together",
+        "api": "openai-completions",
+        "contextWindow": 128000,
+        "maxTokens": 8192,
+        "reasoning": False,
+    },
     # Fireworks
-    {"id": "accounts/fireworks/models/llama-v3p3-70b-instruct", "name": "Llama 3.3 70B Instruct (Fireworks)", "provider": "fireworks", "api": "openai-completions", "contextWindow": 131072, "maxTokens": 16384, "reasoning": False},
-    {"id": "accounts/fireworks/models/deepseek-r1", "name": "DeepSeek R1 (Fireworks)", "provider": "fireworks", "api": "openai-completions", "contextWindow": 128000, "maxTokens": 16384, "reasoning": True},
+    {
+        "id": "accounts/fireworks/models/llama-v3p3-70b-instruct",
+        "name": "Llama 3.3 70B Instruct (Fireworks)",
+        "provider": "fireworks",
+        "api": "openai-completions",
+        "contextWindow": 131072,
+        "maxTokens": 16384,
+        "reasoning": False,
+    },
+    {
+        "id": "accounts/fireworks/models/deepseek-r1",
+        "name": "DeepSeek R1 (Fireworks)",
+        "provider": "fireworks",
+        "api": "openai-completions",
+        "contextWindow": 128000,
+        "maxTokens": 16384,
+        "reasoning": True,
+    },
 ]
 
 
@@ -186,9 +685,11 @@ class LlmService:
 
     async def get_settings(self) -> LlmSettings:
         with self.db.connect() as conn:
-            row = conn.execute(
-                text("SELECT value FROM sync_state WHERE key = 'llm_settings'")
-            ).mappings().first()
+            row = (
+                conn.execute(text("SELECT value FROM sync_state WHERE key = 'llm_settings'"))
+                .mappings()
+                .first()
+            )
 
         if row and row.get("value"):
             try:
@@ -223,9 +724,7 @@ class LlmService:
 
     getSettings = get_settings
 
-    async def update_settings(
-        self, raw_input: dict[str, Any] | UpdateLlmSettingsInput
-    ) -> LlmSettings:
+    async def update_settings(self, raw_input: dict[str, Any] | UpdateLlmSettingsInput) -> LlmSettings:
         inp = (
             raw_input
             if isinstance(raw_input, UpdateLlmSettingsInput)
@@ -234,26 +733,17 @@ class LlmService:
         current = await self.get_settings()
         merged_providers = {
             **{k: v.model_dump(exclude_none=True) for k, v in current.providers.items()},
-            **{
-                k: v.model_dump(exclude_none=True)
-                for k, v in (inp.providers or {}).items()
-            },
+            **{k: v.model_dump(exclude_none=True) for k, v in (inp.providers or {}).items()},
         }
         updated = LlmSettings.model_validate(
             {
                 "defaultProvider": inp.defaultProvider or current.defaultProvider,
                 "defaultModel": inp.defaultModel or current.defaultModel,
-                "defaultThinkingLevel": inp.defaultThinkingLevel
-                or current.defaultThinkingLevel
-                or "off",
+                "defaultThinkingLevel": inp.defaultThinkingLevel or current.defaultThinkingLevel or "off",
                 "providers": merged_providers,
                 "customModels": [
                     c.model_dump(exclude_none=True)
-                    for c in (
-                        inp.customModels
-                        if inp.customModels is not None
-                        else current.customModels
-                    )
+                    for c in (inp.customModels if inp.customModels is not None else current.customModels)
                 ],
             }
         )
@@ -369,9 +859,7 @@ class LlmService:
             return candidate
         return supported[0] if supported else "low"
 
-    async def list_models(
-        self, filter_opts: dict[str, Any] | None = None
-    ) -> list[LlmModelCatalogItem]:
+    async def list_models(self, filter_opts: dict[str, Any] | None = None) -> list[LlmModelCatalogItem]:
         f = filter_opts or {}
         settings = await self.get_settings()
         catalog_map: dict[str, LlmModelCatalogItem] = {}
@@ -582,9 +1070,7 @@ class LlmService:
         }
         return mapping.get(provider.lower(), provider.lower())
 
-    async def generate_text(
-        self, raw_options: dict[str, Any] | LlmGenerateOptions
-    ) -> LlmGenerateResult:
+    async def generate_text(self, raw_options: dict[str, Any] | LlmGenerateOptions) -> LlmGenerateResult:
         opts = (
             raw_options
             if isinstance(raw_options, LlmGenerateOptions)
@@ -617,6 +1103,15 @@ class LlmService:
             model_info, opts.thinkingLevel, settings.defaultThinkingLevel
         )
 
+        provider_cfg = settings.providers.get(provider)
+        default_base = DEFAULT_PROVIDER_BASE_URL.get(provider)
+        resolved_base = model_info.get("baseUrl")
+        raw_custom_base = (
+            opts.baseUrlOverride
+            or (provider_cfg.baseUrl if provider_cfg else None)
+            or (resolved_base if resolved_base and resolved_base != default_base else None)
+        )
+        custom_base = normalize_provider_base_url(provider, raw_custom_base)
         any_provider = self._map_any_llm_provider(provider)
         kwargs: dict[str, Any] = {
             "model": model_id,
@@ -624,8 +1119,6 @@ class LlmService:
             "messages": messages,
             "api_key": api_key,
         }
-        provider_cfg = settings.providers.get(provider)
-        custom_base = opts.baseUrlOverride or (provider_cfg.baseUrl if provider_cfg else None)
         if custom_base:
             kwargs["api_base"] = custom_base
         if provider_cfg and provider_cfg.headers:
@@ -651,7 +1144,9 @@ class LlmService:
             response: Any = await any_llm.acompletion(**kwargs)
         except Exception as exc:
             err_msg = str(exc)
-            logger.error("LLM completion call failed", {"provider": provider, "model": model_id, "error": err_msg})
+            logger.error(
+                "LLM completion call failed", {"provider": provider, "model": model_id, "error": err_msg}
+            )
             raise RuntimeError(f"LLM call failed ({provider}/{model_id}): {err_msg}") from exc
 
         choice = response.choices[0] if getattr(response, "choices", None) else None
@@ -662,7 +1157,11 @@ class LlmService:
         usage_obj = getattr(response, "usage", None)
         in_tok = int(getattr(usage_obj, "prompt_tokens", 0) or 0) if usage_obj else 0
         out_tok = int(getattr(usage_obj, "completion_tokens", 0) or 0) if usage_obj else 0
-        tot_tok = int(getattr(usage_obj, "total_tokens", in_tok + out_tok) or (in_tok + out_tok)) if usage_obj else 0
+        tot_tok = (
+            int(getattr(usage_obj, "total_tokens", in_tok + out_tok) or (in_tok + out_tok))
+            if usage_obj
+            else 0
+        )
 
         duration_ms = max(1, int(time.time() * 1000) - start_ms)
         return LlmGenerateResult(
@@ -716,6 +1215,15 @@ class LlmService:
             model_info, opts.thinkingLevel, settings.defaultThinkingLevel
         )
 
+        provider_cfg = settings.providers.get(provider)
+        default_base = DEFAULT_PROVIDER_BASE_URL.get(provider)
+        resolved_base = model_info.get("baseUrl")
+        raw_custom_base = (
+            opts.baseUrlOverride
+            or (provider_cfg.baseUrl if provider_cfg else None)
+            or (resolved_base if resolved_base and resolved_base != default_base else None)
+        )
+        custom_base = normalize_provider_base_url(provider, raw_custom_base)
         any_provider = self._map_any_llm_provider(provider)
         kwargs: dict[str, Any] = {
             "model": model_id,
@@ -724,8 +1232,6 @@ class LlmService:
             "api_key": api_key,
             "stream": True,
         }
-        provider_cfg = settings.providers.get(provider)
-        custom_base = opts.baseUrlOverride or (provider_cfg.baseUrl if provider_cfg else None)
         if custom_base:
             kwargs["api_base"] = custom_base
         if provider_cfg and provider_cfg.headers:
