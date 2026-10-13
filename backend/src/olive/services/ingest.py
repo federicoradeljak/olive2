@@ -82,15 +82,11 @@ class IngestService:
         self.db = db
         self.meetings_dir = meetings_dir
         self.transcription_service = transcription_service
-        self.default_transcription_provider: Literal["speechmatics", "local"] = (
-            default_transcription_provider
-        )
+        self.default_transcription_provider: Literal["speechmatics", "local"] = default_transcription_provider
         self.logger = logger or default_logger
         self.now = now or (lambda: int(time.time() * 1000))
 
-    def set_default_transcription_provider(
-        self, provider: Literal["speechmatics", "local"]
-    ) -> None:
+    def set_default_transcription_provider(self, provider: Literal["speechmatics", "local"]) -> None:
         self.default_transcription_provider = provider
 
     async def ingest_audio(self, options: dict[str, Any]) -> dict[str, Any]:
@@ -114,16 +110,24 @@ class IngestService:
 
         # 1. SHA-256 Deduplication check
         with self.db.connect() as conn:
-            existing_rec = conn.execute(
-                text("SELECT * FROM recordings WHERE sha256 = :sha256"),
-                {"sha256": sha256},
-            ).mappings().first()
+            existing_rec = (
+                conn.execute(
+                    text("SELECT * FROM recordings WHERE sha256 = :sha256"),
+                    {"sha256": sha256},
+                )
+                .mappings()
+                .first()
+            )
 
             if existing_rec:
-                existing_meeting = conn.execute(
-                    text("SELECT * FROM meetings WHERE id = :id"),
-                    {"id": existing_rec["meeting_id"]},
-                ).mappings().first()
+                existing_meeting = (
+                    conn.execute(
+                        text("SELECT * FROM meetings WHERE id = :id"),
+                        {"id": existing_rec["meeting_id"]},
+                    )
+                    .mappings()
+                    .first()
+                )
                 if existing_meeting:
                     self.logger.info(
                         "Audio upload deduplicated via SHA-256",
@@ -149,7 +153,9 @@ class IngestService:
         meeting_id = str(uuid.uuid4())
         recording_id = str(uuid.uuid4())
         source = options.get("source") or "upload"
-        duration_ms = options.get("durationMs") if options.get("durationMs") is not None else options.get("duration_ms")
+        duration_ms = (
+            options.get("durationMs") if options.get("durationMs") is not None else options.get("duration_ms")
+        )
         end_time = start_time + int(duration_ms or 0)
 
         raw_title = (options.get("title") or "").strip()
@@ -162,9 +168,7 @@ class IngestService:
             title = f"Audio Recording {datetime.fromtimestamp(start_time / 1000.0).strftime('%Y-%m-%d')}"
 
         # 3. Write audio bytes to disk
-        paths = ensure_meeting_folder(
-            meeting_paths(self.meetings_dir, start_time, title, meeting_id)
-        )
+        paths = ensure_meeting_folder(meeting_paths(self.meetings_dir, start_time, title, meeting_id))
         relative_path = f"audio/{recording_id}.{extension}"
         dest_path = Path(paths.folder) / relative_path
 
@@ -230,10 +234,14 @@ class IngestService:
                     "created_at": current_time,
                 },
             )
-            created_meeting = conn.execute(
-                text("SELECT * FROM meetings WHERE id = :id"),
-                {"id": meeting_id},
-            ).mappings().one()
+            created_meeting = (
+                conn.execute(
+                    text("SELECT * FROM meetings WHERE id = :id"),
+                    {"id": meeting_id},
+                )
+                .mappings()
+                .one()
+            )
 
         self.logger.info(
             "Audio ingested successfully",
@@ -248,9 +256,7 @@ class IngestService:
         )
 
         # 5. Trigger automatic transcription if requested
-        auto_transcribe = bool(
-            options.get("autoTranscribe") or options.get("auto_transcribe")
-        )
+        auto_transcribe = bool(options.get("autoTranscribe") or options.get("auto_transcribe"))
         if auto_transcribe and self.transcription_service is not None:
             provider = (
                 options.get("transcriptionProvider")

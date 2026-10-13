@@ -1234,8 +1234,18 @@ function MeetingDetailView({
           }, 2500);
         });
 
-        eventSource.addEventListener("error", () => {
-          // auto reconnect
+        eventSource.addEventListener("error", (e) => {
+          if (isClosed) return;
+          if (e instanceof MessageEvent && e.data) {
+            try {
+              const data = JSON.parse(e.data);
+              setError(data.error || data.message || "Transcription failed");
+            } catch {}
+            setTranscribing(false);
+            setTimeout(() => {
+              if (!isClosed) setTranscriptionProgress(null);
+            }, 3500);
+          }
         });
       } catch (err) {
         console.warn("Could not connect to SSE progress stream:", err);
@@ -1339,14 +1349,14 @@ function MeetingDetailView({
     const modelId = "onnx-community/cohere-transcribe-03-2026-ONNX";
 
     try {
-      const res = await fetch(`/api/meetings/${meetingId}/transcribe?stream=true`, {
+      const res = await fetch(`/api/meetings/${meetingId}/transcribe`, {
         method: "POST",
         signal: abortController.signal,
         headers: {
-          "content-type": "application/json",
-          "accept": "text/event-stream"
+          "content-type": "application/json"
         },
         body: JSON.stringify({
+          background: true,
           provider: isLocal ? "local" : "speechmatics",
           modelId: isLocal ? modelId : undefined,
           poll: true,
@@ -1360,93 +1370,15 @@ function MeetingDetailView({
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || `HTTP ${res.status}`);
       }
-
-      // Stream SSE progress updates if readable stream is returned
-      if (res.body) {
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        try {
-          while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-
-            const blocks = buffer.replace(/\r\n/g, "\n").split("\n\n");
-            buffer = blocks.pop() || "";
-
-            for (const block of blocks) {
-              const lines = block.split("\n");
-              let event = "message";
-              let dataStr = "";
-
-              for (const line of lines) {
-                if (line.startsWith("event:")) {
-                  event = line.replace(/^event:\s*/, "").trim();
-                } else if (line.startsWith("data:")) {
-                  dataStr += line.replace(/^data:\s*/, "").trim();
-                }
-              }
-
-              if (event === "ping") continue;
-
-              if (dataStr) {
-                try {
-                  const data = JSON.parse(dataStr);
-                  if (event === "progress" || event === "result") {
-                    setTranscriptionProgress(data);
-                  } else if (event === "cancelled") {
-                    setTranscriptionProgress({
-                      stage: "done",
-                      percent: 0,
-                      message: "Transcription was cancelled."
-                    });
-                    setTranscribing(false);
-                  } else if (event === "error") {
-                    setError(data.error || data.message || "Transcription failed");
-                    setTranscribing(false);
-                  }
-                } catch {
-                  // ignore partial JSON
-                }
-              }
-            }
-          }
-        } catch (streamErr: any) {
-          if (abortController.signal.aborted || streamErr?.name === "AbortError") {
-            // Client explicitly cancelled
-            return;
-          }
-          // If stream disconnected while backend is still processing, poll meeting status
-          console.warn("SSE stream interrupted, falling back to status polling...", streamErr);
-          setTranscriptionProgress({
-            stage: "transcribing",
-            percent: 60,
-            message: "Finalizing transcription on server..."
-          });
-          for (let i = 0; i < 30; i++) {
-            if (abortController.signal.aborted) break;
-            await new Promise((r) => setTimeout(r, 2000));
-            const check = await fetch(`/api/meetings/${meetingId}`).then((r) => r.json()).catch(() => null);
-            if (check?.meeting?.status === "ready" || check?.transcriptContent) {
-              break;
-            }
-          }
-        }
-      }
-
-      await fetchDetail();
     } catch (err: any) {
       if (abortController.signal.aborted || err?.name === "AbortError") {
-        // User cancelled, ignore fetch abortion error
         return;
       }
+      setTranscribing(false);
+      setTranscriptionProgress(null);
       alert(`Transcription error: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       transcriptionAbortRef.current = null;
-      setTranscribing(false);
-      setTimeout(() => setTranscriptionProgress(null), 4000);
     }
   };
 

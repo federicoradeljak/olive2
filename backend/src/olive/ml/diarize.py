@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import gc
 import inspect
 import math
@@ -73,9 +74,7 @@ def _patch_pipeline_for_fast_cpu(pipe: Any, step_sec: float = 2.5) -> None:
             min_num_samples = pipe._embedding.min_num_samples
             num_samples = duration * pipe._embedding.sample_rate
             min_num_frames = math.ceil(num_frames * min_num_samples / num_samples)
-            clean_frames = 1.0 * (
-                np.sum(binary_segmentations.data, axis=2, keepdims=True) < 2
-            )
+            clean_frames = 1.0 * (np.sum(binary_segmentations.data, axis=2, keepdims=True) < 2)
             clean_segmentations = SlidingWindowFeature(
                 binary_segmentations.data * clean_frames,
                 binary_segmentations.sliding_window,
@@ -91,21 +90,15 @@ def _patch_pipeline_for_fast_cpu(pipe: Any, step_sec: float = 2.5) -> None:
             masks_np = np.nan_to_num(masks, nan=0.0).astype(np.float32)
             clean_np = np.nan_to_num(clean_masks, nan=0.0).astype(np.float32)
             waveform: torch.Tensor | None = None
-            for s_idx, (mask, clean_mask) in enumerate(
-                zip(masks_np.T, clean_np.T, strict=False)
-            ):
+            for s_idx, (mask, clean_mask) in enumerate(zip(masks_np.T, clean_np.T, strict=False)):
                 # Skip speaker slots that have 0 active frames in this window
                 if float(np.sum(mask)) <= 0.0:
                     continue
-                used_mask = (
-                    clean_mask if float(np.sum(clean_mask)) > min_num_frames else mask
-                )
+                used_mask = clean_mask if float(np.sum(clean_mask)) > min_num_frames else mask
                 if waveform is None:
                     waveform, _ = pipe._audio.crop(file, chunk, mode="pad")
                 assert waveform is not None
-                active_items.append(
-                    (c_idx, s_idx, waveform[None], torch.from_numpy(used_mask)[None])
-                )
+                active_items.append((c_idx, s_idx, waveform[None], torch.from_numpy(used_mask)[None]))
 
         dim = int(pipe._embedding.dimension)
         embeddings = np.full((num_chunks, num_speakers, dim), np.nan, dtype=np.float32)
@@ -297,11 +290,7 @@ class PyannoteSpeakerDiarizer:
                         }
                     )
                 else:
-                    num_chunks = (
-                        int(step_artifact.data.shape[0])
-                        if hasattr(step_artifact, "data")
-                        else None
-                    )
+                    num_chunks = int(step_artifact.data.shape[0]) if hasattr(step_artifact, "data") else None
                     logger.info(
                         "Diarization (1/4): Neural speech segmentation complete",
                         {
@@ -421,7 +410,7 @@ class PyannoteSpeakerDiarizer:
                 raw_segments.append((start_s, end_s, spk_idx))
         return raw_segments if raw_segments else all_turns
 
-    async def diarize(
+    async def segment_turns(
         self,
         samples: np.ndarray | list[float],
         sample_rate: int = 16000,
@@ -429,7 +418,7 @@ class PyannoteSpeakerDiarizer:
         expected_speaker_count: int | None = None,
         on_progress: Callable[[dict[str, Any]], Any] | None = None,
         meeting_id: str | None = None,
-    ) -> list[LocalSpeakerSegment]:
+    ) -> list[dict[str, Any]]:
         arr = np.asarray(samples, dtype=np.float32)
         if arr.ndim > 1:
             arr = arr.mean(axis=1).astype(np.float32)
@@ -441,7 +430,6 @@ class PyannoteSpeakerDiarizer:
             sample_rate = 16000
 
         total_duration_ms = int(round((len(arr) / float(sample_rate)) * 1000))
-        diarize_t0 = time.perf_counter()
 
         logger.info(
             "Starting neural speaker diarization",
@@ -456,11 +444,12 @@ class PyannoteSpeakerDiarizer:
 
         raw_segments: list[tuple[float, float, int]] = []
         try:
-            raw_segments = self._run_pyannote_sync(
+            raw_segments = await asyncio.to_thread(
+                self._run_pyannote_sync,
                 arr,
                 expected_speaker_count,
-                progress_cb=on_progress,
-                meeting_id=meeting_id,
+                on_progress,
+                meeting_id,
             )
         except Exception as exc:
             logger.warn(
@@ -474,16 +463,7 @@ class PyannoteSpeakerDiarizer:
             raw_segments = []
 
         if not raw_segments:
-            emb = await self.embedding_extractor.extract(arr, sample_rate)
-            return [
-                LocalSpeakerSegment(
-                    startMs=0,
-                    endMs=total_duration_ms,
-                    speakerId="Speaker 1",
-                    samples=arr,
-                    embedding=emb,
-                )
-            ]
+            return [{"startMs": 0, "endMs": total_duration_ms, "speakerId": "Speaker 1"}]
 
         raw_segments.sort(key=lambda t: t[0])
         coalesced_raw: list[tuple[float, float, int]] = []
@@ -497,10 +477,8 @@ class PyannoteSpeakerDiarizer:
                 cur_s, cur_e, cur_spk = nxt_s, nxt_e, nxt_spk
         coalesced_raw.append((cur_s, cur_e, cur_spk))
 
-        # Build segments and select up to MAX_VOICEPRINT_TURNS_PER_CLUSTER longest turns per speaker
-        # for 256-d WeSpeaker ResNet293-LM voiceprint extraction.
-        candidate_segments: list[LocalSpeakerSegment] = []
-        turns_by_cluster: dict[str, list[int]] = {}
+        turns: list[dict[str, Any]] = []
+        speaker_clusters: set[str] = set()
         for start_s, end_s, spk_idx in coalesced_raw:
             start_ms = int(round(start_s * 1000))
             end_ms = int(round(end_s * 1000))
@@ -508,8 +486,62 @@ class PyannoteSpeakerDiarizer:
             end_sample = min(len(arr), int(np.ceil(end_s * sample_rate)))
             if end_sample <= start_sample:
                 continue
-            seg_samples = arr[start_sample:end_sample]
             speaker_id = f"Speaker {spk_idx + 1}"
+            speaker_clusters.add(speaker_id)
+            turns.append(
+                {
+                    "startMs": start_ms,
+                    "endMs": end_ms,
+                    "speakerId": speaker_id,
+                }
+            )
+
+        if not turns:
+            return [{"startMs": 0, "endMs": total_duration_ms, "speakerId": "Speaker 1"}]
+
+        logger.info(
+            "Coalesced diarization turns across speaker clusters",
+            {
+                "category": "transcription",
+                "meetingId": meeting_id,
+                "rawTurns": len(raw_segments),
+                "coalescedTurns": len(turns),
+                "speakerClusters": len(speaker_clusters),
+            },
+        )
+        return turns
+
+    async def extract_cluster_voiceprints(
+        self,
+        samples: np.ndarray | list[float],
+        turns: list[dict[str, Any]],
+        sample_rate: int = 16000,
+        on_progress: Callable[[dict[str, Any]], Any] | None = None,
+        meeting_id: str | None = None,
+    ) -> tuple[list[LocalSpeakerSegment], dict[str, VoiceprintVector]]:
+        arr = np.asarray(samples, dtype=np.float32)
+        if arr.ndim > 1:
+            arr = arr.mean(axis=1).astype(np.float32)
+        if arr.size == 0 or not turns:
+            return [], {}
+
+        if sample_rate != 16000:
+            arr = resample(arr, sample_rate, 16000)
+            sample_rate = 16000
+
+        total_duration_ms = int(round((len(arr) / float(sample_rate)) * 1000))
+        candidate_segments: list[LocalSpeakerSegment] = []
+        turns_by_cluster: dict[str, list[int]] = {}
+
+        for turn in turns:
+            start_ms = int(turn["startMs"])
+            end_ms = int(turn["endMs"])
+            speaker_id = str(turn.get("speakerId") or "Speaker 1")
+            start_sample = max(0, int((start_ms / 1000.0) * sample_rate))
+            end_sample = min(len(arr), int(np.ceil((end_ms / 1000.0) * sample_rate)))
+            if end_sample <= start_sample:
+                continue
+            seg_samples = arr[start_sample:end_sample]
             seg_idx = len(candidate_segments)
             candidate_segments.append(
                 LocalSpeakerSegment(
@@ -524,30 +556,19 @@ class PyannoteSpeakerDiarizer:
 
         if not candidate_segments:
             emb = await self.embedding_extractor.extract(arr, sample_rate)
-            return [
-                LocalSpeakerSegment(
-                    startMs=0,
-                    endMs=total_duration_ms,
-                    speakerId="Speaker 1",
-                    samples=arr,
-                    embedding=emb,
-                )
-            ]
-
-        logger.info(
-            "Coalesced diarization turns across speaker clusters",
-            {
-                "category": "transcription",
-                "meetingId": meeting_id,
-                "rawTurns": len(raw_segments),
-                "coalescedTurns": len(candidate_segments),
-                "speakerClusters": len(turns_by_cluster),
-            },
-        )
+            seg = LocalSpeakerSegment(
+                startMs=0,
+                endMs=total_duration_ms,
+                speakerId="Speaker 1",
+                samples=arr,
+                embedding=emb,
+            )
+            return [seg], {"Speaker 1": emb}
 
         vp_t0 = time.perf_counter()
         max_clip_samples = int(MAX_VOICEPRINT_TURN_SECONDS * sample_rate)
         num_clusters = len(turns_by_cluster)
+        cluster_centroids: dict[str, VoiceprintVector] = {}
 
         for cluster_i, (speaker_id, seg_indices) in enumerate(turns_by_cluster.items(), 1):
             ranked_indices = sorted(
@@ -590,23 +611,58 @@ class PyannoteSpeakerDiarizer:
                 )
 
             cluster_centroid: VoiceprintVector = merge_weighted_voiceprint_vectors(weighted_vectors)
+            cluster_centroids[speaker_id] = cluster_centroid
             for idx in seg_indices:
                 if candidate_segments[idx].embedding is None:
                     candidate_segments[idx].embedding = cluster_centroid
 
         logger.info(
-            "Completed neural speaker diarization & WeSpeaker voiceprint extraction",
+            "Completed WeSpeaker voiceprint extraction",
             {
                 "category": "transcription",
                 "meetingId": meeting_id,
                 "speakerClusters": num_clusters,
                 "coalescedTurns": len(candidate_segments),
                 "voiceprintElapsedMs": int(round((time.perf_counter() - vp_t0) * 1000)),
-                "totalDiarizationElapsedMs": int(round((time.perf_counter() - diarize_t0) * 1000)),
             },
         )
+        return candidate_segments, cluster_centroids
 
-        return candidate_segments
+    async def diarize(
+        self,
+        samples: np.ndarray | list[float],
+        sample_rate: int = 16000,
+        clustering_threshold_override: float | None = None,
+        expected_speaker_count: int | None = None,
+        on_progress: Callable[[dict[str, Any]], Any] | None = None,
+        meeting_id: str | None = None,
+    ) -> list[LocalSpeakerSegment]:
+        arr = np.asarray(samples, dtype=np.float32)
+        if arr.ndim > 1:
+            arr = arr.mean(axis=1).astype(np.float32)
+        if arr.size == 0:
+            return []
+
+        if sample_rate != 16000:
+            arr = resample(arr, sample_rate, 16000)
+            sample_rate = 16000
+
+        turns = await self.segment_turns(
+            arr,
+            sample_rate,
+            clustering_threshold_override=clustering_threshold_override,
+            expected_speaker_count=expected_speaker_count,
+            on_progress=on_progress,
+            meeting_id=meeting_id,
+        )
+        segments, _ = await self.extract_cluster_voiceprints(
+            arr,
+            turns,
+            sample_rate,
+            on_progress=on_progress,
+            meeting_id=meeting_id,
+        )
+        return segments
 
     def release(self, clear_cache: bool = False) -> None:
         global _CACHED_PIPELINE

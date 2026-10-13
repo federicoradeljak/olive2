@@ -38,6 +38,7 @@ from ..schemas import (
     TranscriptWord,
     coalesce_speaker_segments,
 )
+from ..workflows import QUEUE_SPEECHMATICS, enqueue_stage_job, ensure_dbos_launched_async
 
 MAX_ENROLLMENT_CLIPS = 8
 MIN_CONFIRM_DURATION_SEC = 3.0
@@ -184,16 +185,16 @@ class SpeakerService:
             or WeSpeakerEmbeddingExtractor()
         )
         self.logger: Logger = logger or opts.get("logger") or default_logger
-        self.now: Callable[[], int] = (
-            now or opts.get("now") or (lambda: int(time.time() * 1000))
-        )
+        self.now: Callable[[], int] = now or opts.get("now") or (lambda: int(time.time() * 1000))
 
     async def ensure_embedding_model_current(self) -> bool:
         """Checks `local_embedding_model` in `sync_state` and triggers a rebuild if changed."""
         with self.db.connect() as conn:
-            row = conn.execute(
-                text("SELECT value FROM sync_state WHERE key = 'local_embedding_model'")
-            ).mappings().first()
+            row = (
+                conn.execute(text("SELECT value FROM sync_state WHERE key = 'local_embedding_model'"))
+                .mappings()
+                .first()
+            )
 
         if row and row.get("value") == WESPEAKER_MODEL_TAG:
             return False
@@ -330,17 +331,33 @@ class SpeakerService:
                     "id": speaker_row["id"],
                 },
             )
-            updated_row = conn.execute(
-                text("SELECT * FROM speakers WHERE id = :id"),
-                {"id": speaker_row["id"]},
-            ).mappings().one()
+            updated_row = (
+                conn.execute(
+                    text("SELECT * FROM speakers WHERE id = :id"),
+                    {"id": speaker_row["id"]},
+                )
+                .mappings()
+                .one()
+            )
 
         if self.client and self.client.is_configured and not provider_ids.get("speechmatics"):
-            asyncio.create_task(
-                self._enroll_speechmatics_clip_background(
-                    speaker_row["id"], clip_wav_bytes, clip_filename
-                )
-            )
+
+            async def _enqueue_sm_enroll() -> None:
+                try:
+                    await ensure_dbos_launched_async(config_dir=self.config_dir)
+                    await enqueue_stage_job(
+                        QUEUE_SPEECHMATICS,
+                        lambda: self._enroll_speechmatics_clip_background(
+                            speaker_row["id"], clip_wav_bytes, clip_filename
+                        ),
+                        deduplication_id=f"sm-enroll:{speaker_row['id']}:{clip_filename}",
+                    )
+                except Exception:
+                    await self._enroll_speechmatics_clip_background(
+                        speaker_row["id"], clip_wav_bytes, clip_filename
+                    )
+
+            asyncio.create_task(_enqueue_sm_enroll())
 
         return {
             "status": status,
@@ -385,10 +402,14 @@ class SpeakerService:
                                     extracted_ids.append(sid)
                     if extracted_ids:
                         with self.db.begin() as conn:
-                            s_row = conn.execute(
-                                text("SELECT * FROM speakers WHERE id = :id"),
-                                {"id": speaker_id},
-                            ).mappings().first()
+                            s_row = (
+                                conn.execute(
+                                    text("SELECT * FROM speakers WHERE id = :id"),
+                                    {"id": speaker_id},
+                                )
+                                .mappings()
+                                .first()
+                            )
                             if s_row:
                                 pids = _parse_json_field(s_row.get("provider_ids"), {})
                                 cur_sm = list(
@@ -415,15 +436,17 @@ class SpeakerService:
 
     async def list_speakers(self) -> list[dict[str, Any]]:
         with self.db.connect() as conn:
-            rows = conn.execute(
-                text("SELECT * FROM speakers ORDER BY name ASC")
-            ).mappings().all()
-            counts = conn.execute(
-                text(
-                    "SELECT speaker_id, COUNT(meeting_id) AS cnt "
-                    "FROM meeting_speakers GROUP BY speaker_id"
+            rows = conn.execute(text("SELECT * FROM speakers ORDER BY name ASC")).mappings().all()
+            counts = (
+                conn.execute(
+                    text(
+                        "SELECT speaker_id, COUNT(meeting_id) AS cnt "
+                        "FROM meeting_speakers GROUP BY speaker_id"
+                    )
                 )
-            ).mappings().all()
+                .mappings()
+                .all()
+            )
         count_map = {c["speaker_id"]: int(c["cnt"]) for c in counts}
         return [
             {
@@ -437,25 +460,33 @@ class SpeakerService:
 
     async def get_speaker(self, speaker_id: str) -> dict[str, Any] | None:
         with self.db.connect() as conn:
-            row = conn.execute(
-                text("SELECT * FROM speakers WHERE id = :id"),
-                {"id": speaker_id},
-            ).mappings().first()
+            row = (
+                conn.execute(
+                    text("SELECT * FROM speakers WHERE id = :id"),
+                    {"id": speaker_id},
+                )
+                .mappings()
+                .first()
+            )
             if not row:
                 return None
 
-            meeting_links = conn.execute(
-                text(
-                    """
+            meeting_links = (
+                conn.execute(
+                    text(
+                        """
                     SELECT meetings.id, meetings.title, meetings.start_time
                     FROM meeting_speakers
                     INNER JOIN meetings ON meetings.id = meeting_speakers.meeting_id
                     WHERE meeting_speakers.speaker_id = :sid
                     ORDER BY meetings.start_time DESC
                     """
-                ),
-                {"sid": speaker_id},
-            ).mappings().all()
+                    ),
+                    {"sid": speaker_id},
+                )
+                .mappings()
+                .all()
+            )
 
         return {
             "speaker": _to_speaker_dict(row),
@@ -471,9 +502,7 @@ class SpeakerService:
 
     getSpeaker = get_speaker
 
-    async def backfill_voiceprints(
-        self, options: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
+    async def backfill_voiceprints(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
         opts = options or {}
         current_time = self.now()
         speaker_id = opts.get("speakerId") or opts.get("speaker_id")
@@ -481,10 +510,14 @@ class SpeakerService:
 
         with self.db.connect() as conn:
             if speaker_id:
-                rows = conn.execute(
-                    text("SELECT * FROM speakers WHERE id = :id"),
-                    {"id": speaker_id},
-                ).mappings().all()
+                rows = (
+                    conn.execute(
+                        text("SELECT * FROM speakers WHERE id = :id"),
+                        {"id": speaker_id},
+                    )
+                    .mappings()
+                    .all()
+                )
             else:
                 rows = conn.execute(text("SELECT * FROM speakers")).mappings().all()
 
@@ -513,9 +546,7 @@ class SpeakerService:
                                     16000,
                                 )
                                 if len(decoded.samples) / 16000.0 >= 2.0:
-                                    emb = await self.local_embedding_extractor.extract(
-                                        decoded.samples, 16000
-                                    )
+                                    emb = await self.local_embedding_extractor.extract(decoded.samples, 16000)
                                     clip_vectors.append(emb)
                         except Exception as exc:
                             self.logger.warn(
@@ -576,9 +607,7 @@ class SpeakerService:
             with self.db.begin() as conn:
                 if changed:
                     conn.execute(
-                        text(
-                            "UPDATE speakers SET provider_ids = :pids, enrolled_at = :eat WHERE id = :id"
-                        ),
+                        text("UPDATE speakers SET provider_ids = :pids, enrolled_at = :eat WHERE id = :id"),
                         {
                             "pids": json.dumps(pids),
                             "eat": row.get("enrolled_at") or current_time,
@@ -586,10 +615,14 @@ class SpeakerService:
                         },
                     )
                     updated_count += 1
-                upd_row = conn.execute(
-                    text("SELECT * FROM speakers WHERE id = :id"),
-                    {"id": row["id"]},
-                ).mappings().one()
+                upd_row = (
+                    conn.execute(
+                        text("SELECT * FROM speakers WHERE id = :id"),
+                        {"id": row["id"]},
+                    )
+                    .mappings()
+                    .one()
+                )
                 updated_speakers.append(_to_speaker_dict(upd_row))
 
         return {
@@ -600,19 +633,21 @@ class SpeakerService:
 
     backfillVoiceprints = backfill_voiceprints
 
-    async def rebuild_speaker_profiles(
-        self, options: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
+    async def rebuild_speaker_profiles(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
         opts = options or {}
         current_time = self.now()
         speaker_id = opts.get("speakerId") or opts.get("speaker_id")
 
         with self.db.connect() as conn:
             if speaker_id:
-                rows = conn.execute(
-                    text("SELECT * FROM speakers WHERE id = :id"),
-                    {"id": speaker_id},
-                ).mappings().all()
+                rows = (
+                    conn.execute(
+                        text("SELECT * FROM speakers WHERE id = :id"),
+                        {"id": speaker_id},
+                    )
+                    .mappings()
+                    .all()
+                )
             else:
                 rows = conn.execute(text("SELECT * FROM speakers")).mappings().all()
 
@@ -663,9 +698,7 @@ class SpeakerService:
             seen_hashes: set[str] = set()
 
             for clip in speaker_clips:
-                sharing_speakers = {
-                    c["speakerId"] for c in clips_by_hash.get(clip["sha256"], [])
-                }
+                sharing_speakers = {c["speakerId"] for c in clips_by_hash.get(clip["sha256"], [])}
                 is_cross_contaminated = len(sharing_speakers) > 1
                 is_duplicate = clip["sha256"] in seen_hashes
                 is_duration_invalid = clip["durationSec"] < 2.5 or clip["durationSec"] > 35.0
@@ -728,10 +761,14 @@ class SpeakerService:
                         "id": row["id"],
                     },
                 )
-                upd_row = conn.execute(
-                    text("SELECT * FROM speakers WHERE id = :id"),
-                    {"id": row["id"]},
-                ).mappings().one()
+                upd_row = (
+                    conn.execute(
+                        text("SELECT * FROM speakers WHERE id = :id"),
+                        {"id": row["id"]},
+                    )
+                    .mappings()
+                    .one()
+                )
 
             updated_speakers_count += 1
             updated_speakers.append(_to_speaker_dict(upd_row))
@@ -750,10 +787,14 @@ class SpeakerService:
         self, meeting_id: str, action_desc: str
     ) -> tuple[Mapping[Any, Any], Mapping[Any, Any], Path, Path, Any]:
         with self.db.connect() as conn:
-            meeting = conn.execute(
-                text("SELECT * FROM meetings WHERE id = :id"),
-                {"id": meeting_id},
-            ).mappings().first()
+            meeting = (
+                conn.execute(
+                    text("SELECT * FROM meetings WHERE id = :id"),
+                    {"id": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
             if not meeting:
                 raise ValueError(f"Meeting not found: {meeting_id}")
             if not self.meetings_dir:
@@ -761,26 +802,34 @@ class SpeakerService:
 
             transcript_art: Mapping[Any, Any] | None = None
             if meeting.get("primary_transcript_artifact_id"):
-                transcript_art = conn.execute(
-                    text("SELECT * FROM artifacts WHERE id = :id"),
-                    {"id": meeting["primary_transcript_artifact_id"]},
-                ).mappings().first()
+                transcript_art = (
+                    conn.execute(
+                        text("SELECT * FROM artifacts WHERE id = :id"),
+                        {"id": meeting["primary_transcript_artifact_id"]},
+                    )
+                    .mappings()
+                    .first()
+                )
 
             if (
                 not transcript_art
                 or transcript_art["kind"] != "transcript"
                 or transcript_art["format"] != "json"
             ):
-                transcript_art = conn.execute(
-                    text(
-                        """
+                transcript_art = (
+                    conn.execute(
+                        text(
+                            """
                         SELECT * FROM artifacts
                         WHERE meeting_id = :mid AND kind = 'transcript' AND format = 'json'
                         ORDER BY created_at DESC LIMIT 1
                         """
-                    ),
-                    {"mid": meeting_id},
-                ).mappings().first()
+                        ),
+                        {"mid": meeting_id},
+                    )
+                    .mappings()
+                    .first()
+                )
 
             if not transcript_art:
                 raise ValueError(f"No JSON transcript artifact found for meeting {meeting_id}")
@@ -803,10 +852,14 @@ class SpeakerService:
     ) -> Mapping[Any, Any]:
         with self.db.begin() as conn:
             if speaker_id:
-                row = conn.execute(
-                    text("SELECT * FROM speakers WHERE id = :id"),
-                    {"id": speaker_id},
-                ).mappings().first()
+                row = (
+                    conn.execute(
+                        text("SELECT * FROM speakers WHERE id = :id"),
+                        {"id": speaker_id},
+                    )
+                    .mappings()
+                    .first()
+                )
                 if not row:
                     raise ValueError(f"Target speaker not found: {speaker_id}")
                 return row
@@ -832,10 +885,14 @@ class SpeakerService:
                     ),
                     {"id": new_id, "name": trimmed, "now": current_time},
                 )
-                return conn.execute(
-                    text("SELECT * FROM speakers WHERE id = :id"),
-                    {"id": new_id},
-                ).mappings().one()
+                return (
+                    conn.execute(
+                        text("SELECT * FROM speakers WHERE id = :id"),
+                        {"id": new_id},
+                    )
+                    .mappings()
+                    .one()
+                )
 
         raise ValueError("Either speakerId or speakerName must be provided")
 
@@ -861,12 +918,14 @@ class SpeakerService:
         meeting_id = str(options.get("meetingId") or options.get("meeting_id") or "")
         from_label = str(options.get("fromLabel") or options.get("from_label") or "")
         adopt_voiceprint = (
-            bool(options["adoptVoiceprint"]) if "adoptVoiceprint" in options and options["adoptVoiceprint"] is not None else True
+            bool(options["adoptVoiceprint"])
+            if "adoptVoiceprint" in options and options["adoptVoiceprint"] is not None
+            else True
         )
         current_time = self.now()
 
-        meeting, transcript_art, folder, json_path, parsed_data = (
-            self._load_meeting_transcript_artifact(meeting_id, "reassign meeting transcript")
+        meeting, transcript_art, folder, json_path, parsed_data = self._load_meeting_transcript_artifact(
+            meeting_id, "reassign meeting transcript"
         )
         target_speaker_row = self._resolve_or_create_speaker(
             speaker_id=options.get("toSpeakerId") or options.get("to_speaker_id"),
@@ -904,10 +963,16 @@ class SpeakerService:
                 extracted_voiceprints_count += len(extracted_ids)
 
             with self.db.connect() as conn:
-                recording = conn.execute(
-                    text("SELECT * FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"),
-                    {"mid": meeting_id},
-                ).mappings().first()
+                recording = (
+                    conn.execute(
+                        text(
+                            "SELECT * FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"
+                        ),
+                        {"mid": meeting_id},
+                    )
+                    .mappings()
+                    .first()
+                )
 
             if recording:
                 audio_full = folder / recording["path"]
@@ -928,7 +993,11 @@ class SpeakerService:
                             is_single = seg_idx_opt is not None and options.get("scope") == "single"
                             matching_segs = (
                                 [segments[int(seg_idx_opt)]]
-                                if (is_single and seg_idx_opt is not None and 0 <= int(seg_idx_opt) < len(segments))
+                                if (
+                                    is_single
+                                    and seg_idx_opt is not None
+                                    and 0 <= int(seg_idx_opt) < len(segments)
+                                )
                                 else [
                                     s
                                     for s in segments
@@ -966,27 +1035,33 @@ class SpeakerService:
 
             if extracted_ids:
                 with self.db.begin() as conn:
-                    cur_row = conn.execute(
-                        text("SELECT * FROM speakers WHERE id = :id"),
-                        {"id": target_speaker_row["id"]},
-                    ).mappings().one()
+                    cur_row = (
+                        conn.execute(
+                            text("SELECT * FROM speakers WHERE id = :id"),
+                            {"id": target_speaker_row["id"]},
+                        )
+                        .mappings()
+                        .one()
+                    )
                     cur_pids = _parse_json_field(cur_row.get("provider_ids"), {})
                     cur_sm = list(dict.fromkeys([*(cur_pids.get("speechmatics") or []), *extracted_ids]))
                     cur_pids["speechmatics"] = cur_sm
                     conn.execute(
-                        text(
-                            "UPDATE speakers SET provider_ids = :pids, enrolled_at = :eat WHERE id = :id"
-                        ),
+                        text("UPDATE speakers SET provider_ids = :pids, enrolled_at = :eat WHERE id = :id"),
                         {
                             "pids": json.dumps(cur_pids),
                             "eat": cur_row.get("enrolled_at") or current_time,
                             "id": target_speaker_row["id"],
                         },
                     )
-                    target_speaker_row = conn.execute(
-                        text("SELECT * FROM speakers WHERE id = :id"),
-                        {"id": target_speaker_row["id"]},
-                    ).mappings().one()
+                    target_speaker_row = (
+                        conn.execute(
+                            text("SELECT * FROM speakers WHERE id = :id"),
+                            {"id": target_speaker_row["id"]},
+                        )
+                        .mappings()
+                        .one()
+                    )
 
         seg_idx_opt = options.get("segmentIndex")
         is_single = seg_idx_opt is not None and options.get("scope") == "single"
@@ -1047,25 +1122,28 @@ class SpeakerService:
                     for s in updated_transcript.segments
                     if (s.speaker or "").strip()
                 }
-                cur_ms = conn.execute(
-                    text(
-                        """
+                cur_ms = (
+                    conn.execute(
+                        text(
+                            """
                         SELECT speakers.id, speakers.name, speakers.enrolled_at,
                                speakers.enrollment_clip_paths
                         FROM meeting_speakers
                         INNER JOIN speakers ON speakers.id = meeting_speakers.speaker_id
                         WHERE meeting_speakers.meeting_id = :mid
                         """
-                    ),
-                    {"mid": meeting_id},
-                ).mappings().all()
+                        ),
+                        {"mid": meeting_id},
+                    )
+                    .mappings()
+                    .all()
+                )
 
                 for sp in cur_ms:
                     if sp["name"].strip().lower() not in distinct_names:
                         conn.execute(
                             text(
-                                "DELETE FROM meeting_speakers "
-                                "WHERE meeting_id = :mid AND speaker_id = :sid"
+                                "DELETE FROM meeting_speakers WHERE meeting_id = :mid AND speaker_id = :sid"
                             ),
                             {"mid": meeting_id, "sid": sp["id"]},
                         )
@@ -1074,13 +1152,10 @@ class SpeakerService:
                             {"sid": sp["id"]},
                         ).first()
                         is_placeholder = (
-                            _is_placeholder_name(sp["name"])
-                            or sp["name"].strip().lower() == normalized_from
+                            _is_placeholder_name(sp["name"]) or sp["name"].strip().lower() == normalized_from
                         )
                         clips = _parse_json_field(sp.get("enrollment_clip_paths"), [])
-                        if not other_links and (
-                            is_placeholder or (not clips and not sp.get("enrolled_at"))
-                        ):
+                        if not other_links and (is_placeholder or (not clips and not sp.get("enrolled_at"))):
                             conn.execute(
                                 text("DELETE FROM speakers WHERE id = :sid"),
                                 {"sid": sp["id"]},
@@ -1105,8 +1180,8 @@ class SpeakerService:
         segment_index = int(options["segmentIndex"])
         current_time = self.now()
 
-        meeting, transcript_art, folder, json_path, parsed_data = (
-            self._load_meeting_transcript_artifact(meeting_id, "confirm meeting segment")
+        meeting, transcript_art, folder, json_path, parsed_data = self._load_meeting_transcript_artifact(
+            meeting_id, "confirm meeting segment"
         )
         extracted = _extract_transcript_segments(parsed_data)
         segments: list[TranscriptSegment] = extracted["segments"]
@@ -1117,9 +1192,7 @@ class SpeakerService:
 
         segment = segments[segment_index]
         target_name = (
-            (options.get("speakerName") or "").strip()
-            or (segment.speaker or "").strip()
-            or "Speaker"
+            (options.get("speakerName") or "").strip() or (segment.speaker or "").strip() or "Speaker"
         )
         target_speaker_row = self._resolve_or_create_speaker(
             speaker_id=options.get("speakerId"),
@@ -1139,10 +1212,14 @@ class SpeakerService:
         similarity: float | None = None
 
         with self.db.connect() as conn:
-            recording = conn.execute(
-                text("SELECT * FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"),
-                {"mid": meeting_id},
-            ).mappings().first()
+            recording = (
+                conn.execute(
+                    text("SELECT * FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"),
+                    {"mid": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
 
         if recording:
             audio_full = folder / recording["path"]
@@ -1236,8 +1313,8 @@ class SpeakerService:
         meeting_id = str(options.get("meetingId") or options.get("meeting_id") or "")
         segment_index = int(options["segmentIndex"])
 
-        _meeting, transcript_art, folder, json_path, parsed_data = (
-            self._load_meeting_transcript_artifact(meeting_id, "unassign meeting segment")
+        _meeting, transcript_art, folder, json_path, parsed_data = self._load_meeting_transcript_artifact(
+            meeting_id, "unassign meeting segment"
         )
         extracted = _extract_transcript_segments(parsed_data)
         segments: list[TranscriptSegment] = extracted["segments"]
@@ -1267,27 +1344,27 @@ class SpeakerService:
             folder, json_path, transcript_art["path"], updated_transcript, is_array_format
         )
 
-        distinct_names = {
-            (s.speaker or "").strip().lower() for s in segments if (s.speaker or "").strip()
-        }
+        distinct_names = {(s.speaker or "").strip().lower() for s in segments if (s.speaker or "").strip()}
         with self.db.begin() as conn:
-            linked = conn.execute(
-                text(
-                    """
+            linked = (
+                conn.execute(
+                    text(
+                        """
                     SELECT speakers.id, speakers.name
                     FROM meeting_speakers
                     INNER JOIN speakers ON speakers.id = meeting_speakers.speaker_id
                     WHERE meeting_speakers.meeting_id = :mid
                     """
-                ),
-                {"mid": meeting_id},
-            ).mappings().all()
+                    ),
+                    {"mid": meeting_id},
+                )
+                .mappings()
+                .all()
+            )
             for spk in linked:
                 if spk["name"].strip().lower() not in distinct_names:
                     conn.execute(
-                        text(
-                            "DELETE FROM meeting_speakers WHERE meeting_id = :mid AND speaker_id = :sid"
-                        ),
+                        text("DELETE FROM meeting_speakers WHERE meeting_id = :mid AND speaker_id = :sid"),
                         {"mid": meeting_id, "sid": spk["id"]},
                     )
 
@@ -1303,8 +1380,8 @@ class SpeakerService:
         segment_index = int(options["segmentIndex"])
         current_time = self.now()
 
-        _meeting, transcript_art, folder, json_path, parsed_data = (
-            self._load_meeting_transcript_artifact(meeting_id, "split meeting segment")
+        _meeting, transcript_art, folder, json_path, parsed_data = self._load_meeting_transcript_artifact(
+            meeting_id, "split meeting segment"
         )
         extracted = _extract_transcript_segments(parsed_data)
         segments: list[TranscriptSegment] = extracted["segments"]
@@ -1346,9 +1423,7 @@ class SpeakerService:
             words1 = [w.model_copy() for w in target_seg.words[:split_word_idx]]
             words2 = [w.model_copy() for w in target_seg.words[split_word_idx:]]
             end_ms1 = (
-                words1[-1].endMs
-                if words1
-                else int(round((target_seg.startMs + target_seg.endMs) / 2.0))
+                words1[-1].endMs if words1 else int(round((target_seg.startMs + target_seg.endMs) / 2.0))
             )
             start_ms2 = words2[0].startMs if words2 else end_ms1
 
@@ -1453,8 +1528,8 @@ class SpeakerService:
         meeting_id = str(options.get("meetingId") or options.get("meeting_id") or "")
         segment_index = int(options["segmentIndex"])
 
-        _meeting, transcript_art, folder, json_path, parsed_data = (
-            self._load_meeting_transcript_artifact(meeting_id, "merge meeting segments")
+        _meeting, transcript_art, folder, json_path, parsed_data = self._load_meeting_transcript_artifact(
+            meeting_id, "merge meeting segments"
         )
         extracted = _extract_transcript_segments(parsed_data)
         segments: list[TranscriptSegment] = extracted["segments"]
@@ -1467,11 +1542,7 @@ class SpeakerService:
 
         seg_a = segments[segment_index]
         seg_b = segments[segment_index + 1]
-        merged_words = (
-            [*(seg_a.words or []), *(seg_b.words or [])]
-            if (seg_a.words or seg_b.words)
-            else None
-        )
+        merged_words = [*(seg_a.words or []), *(seg_b.words or [])] if (seg_a.words or seg_b.words) else None
         merged_seg = TranscriptSegment(
             startMs=seg_a.startMs,
             endMs=max(seg_a.endMs, seg_b.endMs),
@@ -1496,27 +1567,27 @@ class SpeakerService:
             folder, json_path, transcript_art["path"], updated_transcript, is_array_format
         )
 
-        distinct_names = {
-            (s.speaker or "").strip().lower() for s in segments if (s.speaker or "").strip()
-        }
+        distinct_names = {(s.speaker or "").strip().lower() for s in segments if (s.speaker or "").strip()}
         with self.db.begin() as conn:
-            linked = conn.execute(
-                text(
-                    """
+            linked = (
+                conn.execute(
+                    text(
+                        """
                     SELECT speakers.id, speakers.name
                     FROM meeting_speakers
                     INNER JOIN speakers ON speakers.id = meeting_speakers.speaker_id
                     WHERE meeting_speakers.meeting_id = :mid
                     """
-                ),
-                {"mid": meeting_id},
-            ).mappings().all()
+                    ),
+                    {"mid": meeting_id},
+                )
+                .mappings()
+                .all()
+            )
             for spk in linked:
                 if spk["name"].strip().lower() not in distinct_names:
                     conn.execute(
-                        text(
-                            "DELETE FROM meeting_speakers WHERE meeting_id = :mid AND speaker_id = :sid"
-                        ),
+                        text("DELETE FROM meeting_speakers WHERE meeting_id = :mid AND speaker_id = :sid"),
                         {"mid": meeting_id, "sid": spk["id"]},
                     )
 
@@ -1532,14 +1603,22 @@ class SpeakerService:
             raise ValueError("Cannot merge speaker with themselves")
 
         with self.db.connect() as conn:
-            source = conn.execute(
-                text("SELECT * FROM speakers WHERE id = :id"),
-                {"id": source_speaker_id},
-            ).mappings().first()
-            target = conn.execute(
-                text("SELECT * FROM speakers WHERE id = :id"),
-                {"id": target_speaker_id},
-            ).mappings().first()
+            source = (
+                conn.execute(
+                    text("SELECT * FROM speakers WHERE id = :id"),
+                    {"id": source_speaker_id},
+                )
+                .mappings()
+                .first()
+            )
+            target = (
+                conn.execute(
+                    text("SELECT * FROM speakers WHERE id = :id"),
+                    {"id": target_speaker_id},
+                )
+                .mappings()
+                .first()
+            )
 
         if not source:
             raise ValueError(f"Source speaker not found: {source_speaker_id}")
@@ -1552,7 +1631,9 @@ class SpeakerService:
         target_clips: list[str] = list(_parse_json_field(target.get("enrollment_clip_paths"), []))
 
         combined_sm = list(
-            dict.fromkeys([*(target_pids.get("speechmatics") or []), *(source_pids.get("speechmatics") or [])])
+            dict.fromkeys(
+                [*(target_pids.get("speechmatics") or []), *(source_pids.get("speechmatics") or [])]
+            )
         )
         if combined_sm:
             target_pids["speechmatics"] = combined_sm
@@ -1595,10 +1676,14 @@ class SpeakerService:
                     "id": target_speaker_id,
                 },
             )
-            source_links = conn.execute(
-                text("SELECT * FROM meeting_speakers WHERE speaker_id = :sid"),
-                {"sid": source_speaker_id},
-            ).mappings().all()
+            source_links = (
+                conn.execute(
+                    text("SELECT * FROM meeting_speakers WHERE speaker_id = :sid"),
+                    {"sid": source_speaker_id},
+                )
+                .mappings()
+                .all()
+            )
             for link in source_links:
                 conn.execute(
                     text(
@@ -1622,10 +1707,14 @@ class SpeakerService:
                 text("DELETE FROM speakers WHERE id = :sid"),
                 {"sid": source_speaker_id},
             )
-            updated_target = conn.execute(
-                text("SELECT * FROM speakers WHERE id = :id"),
-                {"id": target_speaker_id},
-            ).mappings().one()
+            updated_target = (
+                conn.execute(
+                    text("SELECT * FROM speakers WHERE id = :id"),
+                    {"id": target_speaker_id},
+                )
+                .mappings()
+                .one()
+            )
 
         return _to_speaker_dict(updated_target)
 
@@ -1643,10 +1732,14 @@ class SpeakerService:
         with self.db.connect() as conn:
             speaker_row: Mapping[Any, Any] | None = None
             if speaker_id_opt:
-                speaker_row = conn.execute(
-                    text("SELECT * FROM speakers WHERE id = :id"),
-                    {"id": speaker_id_opt},
-                ).mappings().first()
+                speaker_row = (
+                    conn.execute(
+                        text("SELECT * FROM speakers WHERE id = :id"),
+                        {"id": speaker_id_opt},
+                    )
+                    .mappings()
+                    .first()
+                )
             else:
                 all_rows = conn.execute(text("SELECT * FROM speakers")).mappings().all()
                 speaker_row = next(
@@ -1654,11 +1747,7 @@ class SpeakerService:
                     None,
                 )
 
-        speaker_id = (
-            speaker_row["id"]
-            if speaker_row
-            else str(speaker_id_opt or uuid.uuid4())
-        )
+        speaker_id = speaker_row["id"] if speaker_row else str(speaker_id_opt or uuid.uuid4())
 
         # 1. Validate audio duration & deduplicate by content hash
         decoded = await load_audio_samples({"audioBytes": audio_bytes, "enhance": False}, 16000)
@@ -1704,9 +1793,7 @@ class SpeakerService:
             _parse_json_field(speaker_row.get("provider_ids"), {}) if speaker_row else {}
         )
         existing_clips: list[str] = (
-            list(_parse_json_field(speaker_row.get("enrollment_clip_paths"), []))
-            if speaker_row
-            else []
+            list(_parse_json_field(speaker_row.get("enrollment_clip_paths"), [])) if speaker_row else []
         )
         existing_local: list[str] = list(existing_pids.get("local") or [])
 
@@ -1830,10 +1917,14 @@ class SpeakerService:
                         "now": current_time,
                     },
                 )
-            updated = conn.execute(
-                text("SELECT * FROM speakers WHERE id = :id"),
-                {"id": speaker_id},
-            ).mappings().one()
+            updated = (
+                conn.execute(
+                    text("SELECT * FROM speakers WHERE id = :id"),
+                    {"id": speaker_id},
+                )
+                .mappings()
+                .one()
+            )
 
         return _to_speaker_dict(updated)
 
@@ -1845,17 +1936,25 @@ class SpeakerService:
         speechmatics_label = options.get("speechmaticsLabel") or options.get("speechmatics_label")
 
         with self.db.begin() as conn:
-            speaker_row = conn.execute(
-                text("SELECT * FROM speakers WHERE id = :id"),
-                {"id": speaker_id},
-            ).mappings().first()
+            speaker_row = (
+                conn.execute(
+                    text("SELECT * FROM speakers WHERE id = :id"),
+                    {"id": speaker_id},
+                )
+                .mappings()
+                .first()
+            )
             if not speaker_row:
                 raise ValueError(f"Speaker not found: {speaker_id}")
 
-            meeting_row = conn.execute(
-                text("SELECT * FROM meetings WHERE id = :id"),
-                {"id": meeting_id},
-            ).mappings().first()
+            meeting_row = (
+                conn.execute(
+                    text("SELECT * FROM meetings WHERE id = :id"),
+                    {"id": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
             if not meeting_row:
                 raise ValueError(f"Meeting not found: {meeting_id}")
 
@@ -1883,17 +1982,21 @@ class SpeakerService:
                         meeting_row["id"],
                     ).folder
                 )
-                t_art = conn.execute(
-                    text(
-                        """
+                t_art = (
+                    conn.execute(
+                        text(
+                            """
                         SELECT * FROM artifacts
                         WHERE meeting_id = :mid AND provider = 'speechmatics'
                           AND kind = 'transcript' AND format = 'json'
                         LIMIT 1
                         """
-                    ),
-                    {"mid": meeting_id},
-                ).mappings().first()
+                        ),
+                        {"mid": meeting_id},
+                    )
+                    .mappings()
+                    .first()
+                )
                 if t_art:
                     try:
                         parsed = json.loads((folder / t_art["path"]).read_text(encoding="utf-8"))
@@ -1927,10 +2030,14 @@ class SpeakerService:
                     except Exception:
                         pass
 
-            updated = conn.execute(
-                text("SELECT * FROM speakers WHERE id = :id"),
-                {"id": speaker_id},
-            ).mappings().one()
+            updated = (
+                conn.execute(
+                    text("SELECT * FROM speakers WHERE id = :id"),
+                    {"id": speaker_id},
+                )
+                .mappings()
+                .one()
+            )
 
         return {"speaker": _to_speaker_dict(updated)}
 
@@ -1952,10 +2059,14 @@ class SpeakerService:
                     text(f"UPDATE speakers SET {', '.join(sets)} WHERE id = :id"),
                     params,
                 )
-            updated = conn.execute(
-                text("SELECT * FROM speakers WHERE id = :id"),
-                {"id": speaker_id},
-            ).mappings().one()
+            updated = (
+                conn.execute(
+                    text("SELECT * FROM speakers WHERE id = :id"),
+                    {"id": speaker_id},
+                )
+                .mappings()
+                .one()
+            )
         return _to_speaker_dict(updated)
 
     updateSpeaker = update_speaker
@@ -1982,9 +2093,9 @@ class SpeakerService:
 
         with self.db.begin() as conn:
             meetings = conn.execute(text("SELECT * FROM meetings")).mappings().all()
-            all_artifacts = conn.execute(
-                text("SELECT * FROM artifacts WHERE kind = 'transcript'")
-            ).mappings().all()
+            all_artifacts = (
+                conn.execute(text("SELECT * FROM artifacts WHERE kind = 'transcript'")).mappings().all()
+            )
 
             for meeting in meetings:
                 primary_id = meeting.get("primary_transcript_artifact_id")

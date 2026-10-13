@@ -791,22 +791,40 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
 
             return EventSourceResponse(sse_gen(), sep="\n")
 
+        transcribe_opts = {
+            "provider": body.get("provider"),
+            "language": body.get("language"),
+            "poll": body.get("poll"),
+            "force": body.get("force"),
+            "pollIntervalMs": body.get("pollIntervalMs"),
+            "maxPollWaitMs": body.get("maxPollWaitMs"),
+            "similarityThreshold": similarity_threshold,
+            "clusteringThreshold": clustering_threshold,
+            "modelId": model_id,
+        }
+        wants_background = (
+            body.get("background") is True
+            or body.get("async") is True
+            or request.query_params.get("background") == "true"
+        )
         try:
+            svc = get_transcription_service()
+            if wants_background and (
+                hasattr(svc, "start_transcription") or hasattr(svc, "startTranscription")
+            ):
+                started = await _call_maybe_async(
+                    svc,
+                    ("start_transcription", "startTranscription"),
+                    meeting_id,
+                    transcribe_opts,
+                )
+                return JSONResponse(started, status_code=202)
+
             result = await _call_maybe_async(
-                get_transcription_service(),
+                svc,
                 ("transcribe_meeting", "transcribeMeeting"),
                 meeting_id,
-                {
-                    "provider": body.get("provider"),
-                    "language": body.get("language"),
-                    "poll": body.get("poll"),
-                    "force": body.get("force"),
-                    "pollIntervalMs": body.get("pollIntervalMs"),
-                    "maxPollWaitMs": body.get("maxPollWaitMs"),
-                    "similarityThreshold": similarity_threshold,
-                    "clusteringThreshold": clustering_threshold,
-                    "modelId": model_id,
-                },
+                transcribe_opts,
             )
             status = result.get("status") if isinstance(result, dict) else getattr(result, "status", None)
             return JSONResponse(result, status_code=502 if status == "error" else 200)

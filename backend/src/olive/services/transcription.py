@@ -33,6 +33,7 @@ from ..providers.speechmatics import (
     transcript_to_text,
 )
 from ..schemas import EnrolledSpeaker, Transcript, TranscriptionProgressUpdate
+from ..workflows import QUEUE_SUMMARIZE, enqueue_stage_job, ensure_dbos_launched_async
 
 STAGE_SPEECHMATICS_TRANSCRIBE = "speechmatics_transcribe"
 STAGE_LOCAL_TRANSCRIBE = "local_transcribe"
@@ -90,9 +91,7 @@ class TranscriptionService:
         else:
             self.db = get_db()
 
-        self.meetings_dir = str(
-            meetings_dir or opts.get("meetingsDir") or opts.get("meetings_dir") or ""
-        )
+        self.meetings_dir = str(meetings_dir or opts.get("meetingsDir") or opts.get("meetings_dir") or "")
         self.config_dir = config_dir or opts.get("configDir") or opts.get("config_dir")
         passed_sm = speechmatics_client or opts.get("speechmaticsClient") or opts.get("speechmatics_client")
         self.client: SpeechmaticsClient = passed_sm or SpeechmaticsClient()
@@ -113,12 +112,8 @@ class TranscriptionService:
         self.webhook_secret: str | None = (
             webhook_secret or opts.get("webhookSecret") or opts.get("webhook_secret")
         )
-        self.now: Callable[[], int] = (
-            now or opts.get("now") or (lambda: int(time.time() * 1000))
-        )
-        self.summary_service = (
-            summary_service or opts.get("summaryService") or opts.get("summary_service")
-        )
+        self.now: Callable[[], int] = now or opts.get("now") or (lambda: int(time.time() * 1000))
+        self.summary_service = summary_service or opts.get("summaryService") or opts.get("summary_service")
         self._active_jobs: dict[str, _ActiveTranscriptionJob] = {}
         self._active_progress: dict[str, TranscriptionProgressUpdate] = {}
         self._progress_listeners: dict[str, set[Callable[[TranscriptionProgressUpdate], Any]]] = {}
@@ -131,9 +126,7 @@ class TranscriptionService:
     def local(self) -> Any:
         return self.local_pipeline
 
-    def emit_progress(
-        self, meeting_id: str, update: TranscriptionProgressUpdate | dict[str, Any]
-    ) -> None:
+    def emit_progress(self, meeting_id: str, update: TranscriptionProgressUpdate | dict[str, Any]) -> None:
         upd = (
             update
             if isinstance(update, TranscriptionProgressUpdate)
@@ -170,10 +163,7 @@ class TranscriptionService:
     getTranscriptionProgress = get_transcription_progress
 
     def get_all_active_transcription_progress(self) -> dict[str, dict[str, Any]]:
-        return {
-            mid: prog.model_dump(exclude_none=True)
-            for mid, prog in self._active_progress.items()
-        }
+        return {mid: prog.model_dump(exclude_none=True) for mid, prog in self._active_progress.items()}
 
     getAllActiveTranscriptionProgress = get_all_active_transcription_progress
 
@@ -209,10 +199,14 @@ class TranscriptionService:
             return
         try:
             with self.db.connect() as conn:
-                meeting = conn.execute(
-                    text("SELECT id, primary_summary_artifact_id FROM meetings WHERE id = :id"),
-                    {"id": meeting_id},
-                ).mappings().first()
+                meeting = (
+                    conn.execute(
+                        text("SELECT id, primary_summary_artifact_id FROM meetings WHERE id = :id"),
+                        {"id": meeting_id},
+                    )
+                    .mappings()
+                    .first()
+                )
             if meeting and not meeting.get("primary_summary_artifact_id"):
                 self.logger.debug(
                     "Triggering auto-summarization on transcript completion",
@@ -234,6 +228,22 @@ class TranscriptionService:
                 "Auto-summarization skipped or failed on transcript completion",
                 {"category": "summary", "meetingId": meeting_id, "error": str(exc)},
             )
+
+    async def _enqueue_auto_summarize(self, meeting_id: str) -> None:
+        if not self.summary_service:
+            return
+        try:
+            await ensure_dbos_launched_async(
+                config_dir=self.config_dir,
+                meetings_dir=self.meetings_dir,
+            )
+            await enqueue_stage_job(
+                QUEUE_SUMMARIZE,
+                lambda: self._auto_summarize(meeting_id),
+                deduplication_id=f"auto-summarize:{meeting_id}",
+            )
+        except Exception:
+            await self._auto_summarize(meeting_id)
 
     async def cancel_transcription(self, meeting_id: str) -> dict[str, Any]:
         self.logger.info(
@@ -274,10 +284,14 @@ class TranscriptionService:
                 ),
                 {"t": cancel_time, "mid": meeting_id},
             )
-            meeting = conn.execute(
-                text("SELECT primary_transcript_artifact_id, status FROM meetings WHERE id = :id"),
-                {"id": meeting_id},
-            ).mappings().first()
+            meeting = (
+                conn.execute(
+                    text("SELECT primary_transcript_artifact_id, status FROM meetings WHERE id = :id"),
+                    {"id": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
             if meeting:
                 next_status = "ready" if meeting.get("primary_transcript_artifact_id") else "pending"
                 conn.execute(
@@ -290,6 +304,72 @@ class TranscriptionService:
         return {"success": True, "message": "Transcription cancelled successfully"}
 
     cancelTranscription = cancel_transcription
+
+    async def start_transcription(
+        self,
+        meeting_id: str,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        opts = dict(options or {})
+        with self.db.connect() as conn:
+            meeting = (
+                conn.execute(
+                    text("SELECT id FROM meetings WHERE id = :id"),
+                    {"id": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
+            if not meeting:
+                raise ValueError(f"Meeting not found: {meeting_id}")
+            recording = (
+                conn.execute(
+                    text("SELECT id FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"),
+                    {"mid": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
+            if not recording:
+                raise ValueError(f"No recording found for meeting {meeting_id}")
+
+        existing = self._active_jobs.get(meeting_id)
+        if existing is not None and not existing.abort_controller.signal.aborted:
+            return {
+                "status": "running",
+                "jobId": existing.job_id or f"active-{meeting_id[:8]}",
+                "meetingId": meeting_id,
+                "alreadyRunning": True,
+            }
+
+        job_id = f"transcribe-{uuid.uuid4().hex[:8]}"
+        self.emit_progress(
+            meeting_id,
+            {
+                "stage": "queued",
+                "percent": 2,
+                "message": "Queued transcription...",
+            },
+        )
+
+        async def _run_bg() -> None:
+            try:
+                await self.transcribe_meeting(meeting_id, opts)
+            except Exception as exc:
+                self.logger.error(
+                    "Background transcription failed",
+                    {"category": "transcription", "meetingId": meeting_id, "error": str(exc)},
+                )
+
+        asyncio.create_task(_run_bg())
+        return {
+            "status": "running",
+            "jobId": job_id,
+            "meetingId": meeting_id,
+            "alreadyRunning": False,
+        }
+
+    startTranscription = start_transcription
 
     async def transcribe_meeting(
         self,
@@ -361,26 +441,36 @@ class TranscriptionService:
     ) -> dict[str, Any]:
         opts = options or {}
         with self.db.connect() as conn:
-            meeting = conn.execute(
-                text("SELECT * FROM meetings WHERE id = :id"),
-                {"id": meeting_id},
-            ).mappings().first()
+            meeting = (
+                conn.execute(
+                    text("SELECT * FROM meetings WHERE id = :id"),
+                    {"id": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
             if not meeting:
                 raise ValueError(f"Meeting not found: {meeting_id}")
 
-            recording = conn.execute(
-                text("SELECT * FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"),
-                {"mid": meeting_id},
-            ).mappings().first()
+            recording = (
+                conn.execute(
+                    text("SELECT * FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"),
+                    {"mid": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
             if not recording:
                 raise ValueError(f"No recording found for meeting {meeting_id}")
 
-            stage_run = conn.execute(
-                text(
-                    "SELECT * FROM stage_runs WHERE meeting_id = :mid AND stage = :stage LIMIT 1"
-                ),
-                {"mid": meeting_id, "stage": STAGE_LOCAL_TRANSCRIBE},
-            ).mappings().first()
+            stage_run = (
+                conn.execute(
+                    text("SELECT * FROM stage_runs WHERE meeting_id = :mid AND stage = :stage LIMIT 1"),
+                    {"mid": meeting_id, "stage": STAGE_LOCAL_TRANSCRIBE},
+                )
+                .mappings()
+                .first()
+            )
 
         folder = meeting_paths(
             self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]
@@ -391,16 +481,20 @@ class TranscriptionService:
 
         if stage_run and stage_run["status"] == "done" and not opts.get("force"):
             with self.db.connect() as conn:
-                existing_art = conn.execute(
-                    text(
-                        """
+                existing_art = (
+                    conn.execute(
+                        text(
+                            """
                         SELECT id FROM artifacts
                         WHERE meeting_id = :mid AND provider = :prov AND kind = 'transcript' AND format = 'json'
                         LIMIT 1
                         """
-                    ),
-                    {"mid": meeting_id, "prov": PROVIDER_LOCAL},
-                ).mappings().first()
+                        ),
+                        {"mid": meeting_id, "prov": PROVIDER_LOCAL},
+                    )
+                    .mappings()
+                    .first()
+                )
             return {
                 "stageRunId": stage_run["id"],
                 "jobId": stage_run.get("provider_job_id") or "",
@@ -481,6 +575,11 @@ class TranscriptionService:
                     "modelId": opts.get("modelId"),
                     "signal": opts.get("signal"),
                     "onProgress": opts.get("onProgress"),
+                    "db": self.db,
+                    "now_fn": self.now,
+                    "configDir": self.config_dir,
+                    "meetingsDir": self.meetings_dir,
+                    "workflow_id": f"local-{stage_run_id[:8]}",
                 }
             )
             transcript: Transcript = (
@@ -524,9 +623,7 @@ class TranscriptionService:
                 PROVIDER_LOCAL,
             )
 
-            await self._persist_local_discovered_speakers(
-                meeting["id"], json_art_id, discovered_speakers
-            )
+            await self._persist_local_discovered_speakers(meeting["id"], json_art_id, discovered_speakers)
 
             completed_at = self.now()
             with self.db.begin() as conn:
@@ -553,7 +650,7 @@ class TranscriptionService:
                     {"now": completed_at, "id": stage_run_id},
                 )
 
-            asyncio.create_task(self._auto_summarize(meeting["id"]))
+            asyncio.create_task(self._enqueue_auto_summarize(meeting["id"]))
 
             self.emit_progress(
                 meeting["id"],
@@ -606,10 +703,14 @@ class TranscriptionService:
                         ),
                         {"t": err_time, "id": stage_run_id},
                     )
-                    existing_m = conn.execute(
-                        text("SELECT primary_transcript_artifact_id FROM meetings WHERE id = :id"),
-                        {"id": meeting_id},
-                    ).mappings().first()
+                    existing_m = (
+                        conn.execute(
+                            text("SELECT primary_transcript_artifact_id FROM meetings WHERE id = :id"),
+                            {"id": meeting_id},
+                        )
+                        .mappings()
+                        .first()
+                    )
                     next_st = (
                         "ready"
                         if (existing_m and existing_m.get("primary_transcript_artifact_id"))
@@ -665,24 +766,36 @@ class TranscriptionService:
         on_progress = opts.get("onProgress")
 
         with self.db.connect() as conn:
-            meeting = conn.execute(
-                text("SELECT * FROM meetings WHERE id = :id"),
-                {"id": meeting_id},
-            ).mappings().first()
+            meeting = (
+                conn.execute(
+                    text("SELECT * FROM meetings WHERE id = :id"),
+                    {"id": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
             if not meeting:
                 raise ValueError(f"Meeting not found: {meeting_id}")
 
-            recording = conn.execute(
-                text("SELECT * FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"),
-                {"mid": meeting_id},
-            ).mappings().first()
+            recording = (
+                conn.execute(
+                    text("SELECT * FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"),
+                    {"mid": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
             if not recording:
                 raise ValueError(f"No recording found for meeting {meeting_id}")
 
-            stage_run = conn.execute(
-                text("SELECT * FROM stage_runs WHERE meeting_id = :mid AND stage = :stage LIMIT 1"),
-                {"mid": meeting_id, "stage": STAGE_SPEECHMATICS_TRANSCRIBE},
-            ).mappings().first()
+            stage_run = (
+                conn.execute(
+                    text("SELECT * FROM stage_runs WHERE meeting_id = :mid AND stage = :stage LIMIT 1"),
+                    {"mid": meeting_id, "stage": STAGE_SPEECHMATICS_TRANSCRIBE},
+                )
+                .mappings()
+                .first()
+            )
 
         folder = meeting_paths(
             self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]
@@ -693,16 +806,20 @@ class TranscriptionService:
 
         if stage_run and stage_run["status"] == "done" and not opts.get("force"):
             with self.db.connect() as conn:
-                existing_art = conn.execute(
-                    text(
-                        """
+                existing_art = (
+                    conn.execute(
+                        text(
+                            """
                         SELECT id FROM artifacts
                         WHERE meeting_id = :mid AND provider = :prov AND kind = 'transcript' AND format = 'json'
                         LIMIT 1
                         """
-                    ),
-                    {"mid": meeting_id, "prov": PROVIDER_SPEECHMATICS},
-                ).mappings().first()
+                        ),
+                        {"mid": meeting_id, "prov": PROVIDER_SPEECHMATICS},
+                    )
+                    .mappings()
+                    .first()
+                )
             return {
                 "stageRunId": stage_run["id"],
                 "jobId": stage_run.get("provider_job_id") or "",
@@ -767,7 +884,9 @@ class TranscriptionService:
             )
         except Exception as exc:
             err_msg = str(exc)
-            self.logger.error("Failed to submit Speechmatics job", {"meetingId": meeting_id, "error": err_msg})
+            self.logger.error(
+                "Failed to submit Speechmatics job", {"meetingId": meeting_id, "error": err_msg}
+            )
             with self.db.begin() as conn:
                 if stage_run:
                     conn.execute(
@@ -1056,17 +1175,25 @@ class TranscriptionService:
         json_v2: dict[str, Any],
     ) -> dict[str, Any]:
         with self.db.connect() as conn:
-            meeting = conn.execute(
-                text("SELECT * FROM meetings WHERE id = :id"),
-                {"id": meeting_id},
-            ).mappings().first()
+            meeting = (
+                conn.execute(
+                    text("SELECT * FROM meetings WHERE id = :id"),
+                    {"id": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
             if not meeting:
                 raise ValueError(f"Meeting {meeting_id} not found")
 
-            recording = conn.execute(
-                text("SELECT id FROM recordings WHERE meeting_id = :mid LIMIT 1"),
-                {"mid": meeting_id},
-            ).mappings().first()
+            recording = (
+                conn.execute(
+                    text("SELECT id FROM recordings WHERE meeting_id = :mid LIMIT 1"),
+                    {"mid": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
 
         canonical = parse_speechmatics_json_v2(json_v2)
         t_text = transcript_to_text(canonical)
@@ -1125,7 +1252,7 @@ class TranscriptionService:
                 {"now": completed_at, "id": stage_run_id},
             )
 
-        asyncio.create_task(self._auto_summarize(meeting["id"]))
+        asyncio.create_task(self._enqueue_auto_summarize(meeting["id"]))
 
         try:
             if job_id:
@@ -1163,23 +1290,27 @@ class TranscriptionService:
         (dir_path / filename).write_text(content, encoding="utf-8")
 
         with self.db.begin() as conn:
-            existing = conn.execute(
-                text(
-                    """
+            existing = (
+                conn.execute(
+                    text(
+                        """
                     SELECT id FROM artifacts
                     WHERE meeting_id = :mid AND provider = :prov AND kind = :kind
                       AND format = :fmt AND path = :path
                     LIMIT 1
                     """
-                ),
-                {
-                    "mid": meeting_id,
-                    "prov": provider,
-                    "kind": kind,
-                    "fmt": fmt,
-                    "path": relative_path,
-                },
-            ).mappings().first()
+                    ),
+                    {
+                        "mid": meeting_id,
+                        "prov": provider,
+                        "kind": kind,
+                        "fmt": fmt,
+                        "path": relative_path,
+                    },
+                )
+                .mappings()
+                .first()
+            )
 
             if existing:
                 return existing["id"]
@@ -1224,9 +1355,7 @@ class TranscriptionService:
                     None,
                 )
                 speaker_id = (
-                    existing["id"]
-                    if existing
-                    else (disc.speakerId if disc.isEnrolled else str(uuid.uuid4()))
+                    existing["id"] if existing else (disc.speakerId if disc.isEnrolled else str(uuid.uuid4()))
                 )
                 if not existing:
                     conn.execute(

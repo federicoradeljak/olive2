@@ -20,6 +20,7 @@ from ..layout import meeting_paths
 from ..logging_db import logger
 from ..schemas import LlmGenerateResult, SummaryGenerationStatus, Template
 from ..settings import resolve_paths
+from ..workflows import QUEUE_SUMMARIZE, enqueue_stage_job, ensure_dbos_launched_async
 from .llm import LlmService
 from .templates import TemplateService
 
@@ -69,10 +70,7 @@ class SummaryService:
             or resolve_paths().meetings_dir
         )
         self.llm_service = (
-            llm_service
-            or opts.get("llmService")
-            or opts.get("llm_service")
-            or LlmService(db=self.db)
+            llm_service or opts.get("llmService") or opts.get("llm_service") or LlmService(db=self.db)
         )
         self.template_service = (
             template_service
@@ -88,9 +86,7 @@ class SummaryService:
 
     getSummaryGenerationStatus = get_summary_generation_status
 
-    async def start_summary_generation(
-        self, options: dict[str, Any]
-    ) -> SummaryGenerationStatus:
+    async def start_summary_generation(self, options: dict[str, Any]) -> SummaryGenerationStatus:
         meeting_id = str(options.get("meetingId") or options.get("meeting_id") or "")
         existing = self._generation_statuses.get(meeting_id)
         if existing and existing.stage == "running":
@@ -137,7 +133,18 @@ class SummaryService:
             finally:
                 self._prune_status_later(meeting_id)
 
-        asyncio.create_task(_run_bg())
+        async def _enqueue_summary() -> None:
+            try:
+                await ensure_dbos_launched_async(meetings_dir=self.meetings_dir)
+                await enqueue_stage_job(
+                    QUEUE_SUMMARIZE,
+                    _run_bg,
+                    deduplication_id=f"summary:{meeting_id}:{status.startedAt}",
+                )
+            except Exception:
+                await _run_bg()
+
+        asyncio.create_task(_enqueue_summary())
         return status.model_copy()
 
     startSummaryGeneration = start_summary_generation
@@ -159,17 +166,25 @@ class SummaryService:
         self, meeting_id: str
     ) -> tuple[Mapping[Any, Any], str, Mapping[Any, Any]]:
         with self.db.connect() as conn:
-            meeting = conn.execute(
-                text("SELECT * FROM meetings WHERE id = :id"),
-                {"id": meeting_id},
-            ).mappings().first()
+            meeting = (
+                conn.execute(
+                    text("SELECT * FROM meetings WHERE id = :id"),
+                    {"id": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
             if not meeting:
                 raise ValueError(f"Meeting not found: {meeting_id}")
 
-            artifacts = conn.execute(
-                text("SELECT * FROM artifacts WHERE meeting_id = :id"),
-                {"id": meeting_id},
-            ).mappings().all()
+            artifacts = (
+                conn.execute(
+                    text("SELECT * FROM artifacts WHERE meeting_id = :id"),
+                    {"id": meeting_id},
+                )
+                .mappings()
+                .all()
+            )
 
         folder = meeting_paths(
             self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]
@@ -181,9 +196,7 @@ class SummaryService:
             transcript_artifact = next((a for a in artifacts if a["kind"] == "transcript"), None)
 
         if not transcript_artifact:
-            raise ValueError(
-                "No transcript found for meeting. Please transcribe the recording first."
-            )
+            raise ValueError("No transcript found for meeting. Please transcribe the recording first.")
 
         full_path = Path(folder) / transcript_artifact["path"]
         if not full_path.exists():
@@ -230,17 +243,21 @@ class SummaryService:
 
         # 3. Fetch meeting speakers
         with self.db.connect() as conn:
-            speaker_rows = conn.execute(
-                text(
-                    """
+            speaker_rows = (
+                conn.execute(
+                    text(
+                        """
                     SELECT speakers.name
                     FROM meeting_speakers
                     INNER JOIN speakers ON speakers.id = meeting_speakers.speaker_id
                     WHERE meeting_speakers.meeting_id = :mid
                     """
-                ),
-                {"mid": meeting_id},
-            ).mappings().all()
+                    ),
+                    {"mid": meeting_id},
+                )
+                .mappings()
+                .all()
+            )
 
         speaker_names = ", ".join(r["name"] for r in speaker_rows) or "Participants"
         date_formatted = datetime.fromtimestamp(int(meeting["start_time"]) / 1000.0).strftime(
@@ -397,19 +414,27 @@ class SummaryService:
 
     async def delete_summary(self, meeting_id: str, artifact_id: str) -> None:
         with self.db.connect() as conn:
-            meeting = conn.execute(
-                text("SELECT * FROM meetings WHERE id = :id"),
-                {"id": meeting_id},
-            ).mappings().first()
+            meeting = (
+                conn.execute(
+                    text("SELECT * FROM meetings WHERE id = :id"),
+                    {"id": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
             if not meeting:
                 raise ValueError(f"Meeting not found: {meeting_id}")
 
-            artifact = conn.execute(
-                text(
-                    "SELECT * FROM artifacts WHERE id = :aid AND meeting_id = :mid AND kind = 'summary'"
-                ),
-                {"aid": artifact_id, "mid": meeting_id},
-            ).mappings().first()
+            artifact = (
+                conn.execute(
+                    text(
+                        "SELECT * FROM artifacts WHERE id = :aid AND meeting_id = :mid AND kind = 'summary'"
+                    ),
+                    {"aid": artifact_id, "mid": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
             if not artifact:
                 raise ValueError(f"Summary artifact not found: {artifact_id}")
 
@@ -427,16 +452,20 @@ class SummaryService:
         now = int(time.time() * 1000)
         with self.db.begin() as conn:
             if meeting.get("primary_summary_artifact_id") == artifact_id:
-                rem = conn.execute(
-                    text(
-                        """
+                rem = (
+                    conn.execute(
+                        text(
+                            """
                         SELECT id FROM artifacts
                         WHERE meeting_id = :mid AND kind = 'summary' AND id != :aid
                         ORDER BY created_at DESC LIMIT 1
                         """
-                    ),
-                    {"mid": meeting_id, "aid": artifact_id},
-                ).mappings().first()
+                        ),
+                        {"mid": meeting_id, "aid": artifact_id},
+                    )
+                    .mappings()
+                    .first()
+                )
                 conn.execute(
                     text(
                         "UPDATE meetings SET primary_summary_artifact_id = :next_id, updated_at = :now "
@@ -452,19 +481,27 @@ class SummaryService:
 
     async def set_primary_summary(self, meeting_id: str, artifact_id: str) -> None:
         with self.db.connect() as conn:
-            meeting = conn.execute(
-                text("SELECT * FROM meetings WHERE id = :id"),
-                {"id": meeting_id},
-            ).mappings().first()
+            meeting = (
+                conn.execute(
+                    text("SELECT * FROM meetings WHERE id = :id"),
+                    {"id": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
             if not meeting:
                 raise ValueError(f"Meeting not found: {meeting_id}")
 
-            artifact = conn.execute(
-                text(
-                    "SELECT * FROM artifacts WHERE id = :aid AND meeting_id = :mid AND kind = 'summary'"
-                ),
-                {"aid": artifact_id, "mid": meeting_id},
-            ).mappings().first()
+            artifact = (
+                conn.execute(
+                    text(
+                        "SELECT * FROM artifacts WHERE id = :aid AND meeting_id = :mid AND kind = 'summary'"
+                    ),
+                    {"aid": artifact_id, "mid": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
             if not artifact:
                 raise ValueError(f"Summary artifact not found: {artifact_id}")
 
