@@ -1,0 +1,573 @@
+"""Plaud poller, OAuth PKCE, token persistence, and rate-limit retry tests (port of plaud.test.ts)."""
+
+from __future__ import annotations
+
+import json
+import time
+from collections.abc import AsyncIterator, Callable
+from pathlib import Path
+from typing import Any
+
+from fastapi.testclient import TestClient
+from sqlalchemy import text
+
+from olive.app import create_app
+from olive.db import create_db, run_migrations
+from olive.layout import meeting_folder_name
+from olive.plaud import (
+    FileTokenStore,
+    PlaudPoller,
+    RateLimitError,
+    clean_plaud_summary_markdown,
+    compute_retry_delay_ms,
+    create_plaud_client,
+    duration_to_ms,
+    is_rate_limit_error,
+    parse_retry_after_ms,
+    resolve_retry_policy,
+    summary_to_markdown,
+)
+
+AUDIO_BYTES = b"fake plaud audio"
+FIXTURE_FILE: dict[str, Any] = {
+    "id": "plaud-file-1",
+    "name": "Fixture planning",
+    "created_at": "2026-08-11T10:00:00.000Z",
+    "start_at": "2026-08-11T10:00:00.000Z",
+    "duration": 12,
+    "serial_number": "fixture-device",
+}
+
+
+def _ready_detail() -> dict[str, Any]:
+    return {
+        **FIXTURE_FILE,
+        "presigned_url": "https://audio.test/fixture.m4a",
+        "source_list": [
+            {
+                "data_type": "transcript",
+                "data_content": json.dumps(
+                    [
+                        {
+                            "start_time": 0,
+                            "end_time": 5000,
+                            "speaker": "Alice",
+                            "content": "Let's ship it.",
+                        },
+                        {
+                            "start_time": 5000,
+                            "end_time": 12000,
+                            "speaker": "Speaker 1",
+                            "content": "Generic label.",
+                        },
+                    ]
+                ),
+            }
+        ],
+        "note_list": [
+            {
+                "data_type": "summary",
+                "data_content": json.dumps({"summary": "A fixture summary."}),
+            }
+        ],
+    }
+
+
+def _pending_detail() -> dict[str, Any]:
+    return {
+        **FIXTURE_FILE,
+        "presigned_url": "https://audio.test/fixture.m4a",
+        "source_list": [],
+        "note_list": [],
+    }
+
+
+class _FakeOAuth:
+    async def startManualLogin(self) -> dict[str, str]:
+        return {
+            "authUrl": "https://auth.test/authorize",
+            "verifier": "server-held-verifier",
+            "state": "server-held-state",
+        }
+
+    async def completeManualLogin(self, *_args: Any) -> dict[str, str]:
+        return {"access_token": "fake-token"}
+
+    async def getAccessToken(self) -> str:
+        return "fake-token"
+
+
+class _FakePlaudClient:
+    def __init__(self, detail: dict[str, Any] | Callable[[], dict[str, Any]]) -> None:
+        self._detail = detail
+        self.get_file_calls = 0
+        self.oauth = _FakeOAuth()
+
+    async def getCurrentUser(self) -> dict[str, str]:
+        return {"id": "fake-user"}
+
+    async def listFilesIterator(self, _opts: Any = None) -> AsyncIterator[dict[str, Any]]:
+        yield FIXTURE_FILE
+
+    async def getFile(self, _fid: str) -> dict[str, Any]:
+        self.get_file_calls += 1
+        return self._detail() if callable(self._detail) else self._detail
+
+
+class _FakeResponse:
+    def __init__(self, content: bytes = AUDIO_BYTES, status: int = 200, headers: dict[str, str] | None = None) -> None:
+        self.content = content
+        self.status = status
+        self.headers = headers or {"content-type": "audio/mp4"}
+
+    @property
+    def ok(self) -> bool:
+        return 200 <= self.status < 300
+
+    async def arrayBuffer(self) -> bytes:
+        return self.content
+
+
+def _fake_fetch():
+    async def _fetch(_url: str) -> _FakeResponse:
+        return _FakeResponse()
+
+    return _fetch
+
+
+async def test_ingests_ready_recording_and_is_idempotent_on_repoll(tmp_path: Path) -> None:
+    handle = create_db(":memory:")
+    meetings_dir = str(tmp_path / "meetings")
+    client = _FakePlaudClient(_ready_detail())
+    poller = PlaudPoller(
+        {
+            "db": handle.engine,
+            "meetingsDir": meetings_dir,
+            "client": client,
+            "fetchImpl": _fake_fetch(),
+            "now": lambda: 1_000_000,
+        }
+    )
+
+    first = await poller.trigger()
+    second = await poller.trigger()
+
+    assert first["discoveryCompleted"] is True
+    assert first["discoveryError"] is None
+    assert first["discovered"] == 1
+    assert first["error"] is None
+    assert second["discoveryCompleted"] is True
+    assert second["discovered"] == 0
+
+    with handle.engine.connect() as conn:
+        meetings = conn.execute(text("SELECT * FROM meetings")).mappings().all()
+        recordings = conn.execute(text("SELECT * FROM recordings")).mappings().all()
+        artifacts = conn.execute(text("SELECT * FROM artifacts")).mappings().all()
+        speakers = conn.execute(text("SELECT * FROM speakers")).mappings().all()
+        ms = conn.execute(text("SELECT * FROM meeting_speakers")).mappings().all()
+
+    assert len(meetings) == 1
+    assert len(recordings) == 1
+    assert len(artifacts) == 3
+    assert len(speakers) == 1
+    assert len(ms) == 1
+
+    meeting = meetings[0]
+    recording = recordings[0]
+    assert meeting["source"] == "plaud"
+    assert meeting["status"] == "ready"
+    assert meeting["primary_transcript_artifact_id"]
+    assert meeting["primary_summary_artifact_id"]
+    assert recording["provider"] == "plaud"
+    assert recording["provider_recording_id"] == FIXTURE_FILE["id"]
+    assert [(a["provider"], a["kind"], a["format"]) for a in artifacts] == [
+        ("plaud", "transcript", "json"),
+        ("plaud", "transcript", "txt"),
+        ("plaud", "summary", "md"),
+    ]
+    assert speakers[0]["name"] == "Alice"
+
+    folder = Path(meetings_dir) / meeting_folder_name(
+        int(meeting["start_time"]), meeting["title"], meeting["id"]
+    )
+    assert (folder / recording["path"]).read_bytes() == AUDIO_BYTES
+    txt_art = next(a for a in artifacts if a["format"] == "txt")
+    assert "Alice: Let's ship it." in (folder / txt_art["path"]).read_text(encoding="utf-8")
+    handle.engine.dispose()
+
+
+async def test_renaming_meeting_preserves_files_and_plaud_import_identity(tmp_path: Path) -> None:
+    handle = create_db(":memory:")
+    meetings_dir = str(tmp_path / "meetings")
+    client = _FakePlaudClient(_ready_detail())
+    poller = PlaudPoller(
+        {
+            "db": handle.engine,
+            "meetingsDir": meetings_dir,
+            "client": client,
+            "fetchImpl": _fake_fetch(),
+            "now": lambda: 1_000_000,
+        }
+    )
+    app = create_app({"db": handle.engine, "meetingsDir": meetings_dir, "plaudPoller": poller})
+    http_client = TestClient(app)
+
+    await poller.trigger()
+    with handle.engine.connect() as conn:
+        before = conn.execute(text("SELECT * FROM meetings")).mappings().one()
+        rec_before = conn.execute(text("SELECT * FROM recordings")).mappings().one()
+
+    old_folder = Path(meetings_dir) / meeting_folder_name(
+        int(before["start_time"]), before["title"], before["id"]
+    )
+    rename_res = http_client.put(
+        f"/api/meetings/{before['id']}/title",
+        json={"title": "Renamed planning"},
+    )
+    assert rename_res.status_code == 200
+    assert rename_res.json()["meeting"]["title"] == "Renamed planning"
+
+    with handle.engine.connect() as conn:
+        after = conn.execute(text("SELECT * FROM meetings")).mappings().one()
+
+    new_folder = Path(meetings_dir) / meeting_folder_name(
+        int(after["start_time"]), after["title"], after["id"]
+    )
+    assert not old_folder.exists()
+    assert new_folder.exists()
+    assert (new_folder / rec_before["path"]).read_bytes() == AUDIO_BYTES
+
+    second = await poller.trigger()
+    assert second["discovered"] == 0
+    assert second["resolved"] == 0
+    handle.engine.dispose()
+
+
+async def test_falls_back_to_audio_only_once_pcs_deadline_passes(tmp_path: Path) -> None:
+    handle = create_db(":memory:")
+    meetings_dir = str(tmp_path / "meetings")
+    client = _FakePlaudClient(_pending_detail())
+    now = 10_000
+    poller = PlaudPoller(
+        {
+            "db": handle.engine,
+            "meetingsDir": meetings_dir,
+            "client": client,
+            "fetchImpl": _fake_fetch(),
+            "now": lambda: now,
+            "pcsWaitMs": 1_000,
+        }
+    )
+
+    pending = await poller.trigger()
+    assert pending["discoveryCompleted"] is True
+    assert pending["resolved"] == 0
+    assert pending["pcsPending"] == 1
+
+    now = 11_000
+    fallback = await poller.trigger()
+    repeat = await poller.trigger()
+
+    assert fallback["resolved"] == 1
+    assert fallback["pcsPending"] == 0
+    assert repeat["resolved"] == 0
+    assert client.get_file_calls == 2
+
+    with handle.engine.connect() as conn:
+        meeting = conn.execute(text("SELECT * FROM meetings")).mappings().one()
+        state = conn.execute(text("SELECT * FROM plaud_ingest_state")).mappings().one()
+    assert meeting["status"] == "ready"
+    assert state["pcs_resolved"] == 1
+    handle.engine.dispose()
+
+
+async def test_permanently_skips_duplicate_audio_meeting_instead_of_redownloading(
+    tmp_path: Path,
+) -> None:
+    handle = create_db(":memory:")
+    meetings_dir = str(tmp_path / "meetings")
+
+    dup_file = {
+        "id": "plaud-file-duplicate",
+        "name": "Re-ID'd duplicate",
+        "created_at": "2026-08-11T11:00:00.000Z",
+        "start_at": "2026-08-11T11:00:00.000Z",
+        "duration": 12,
+        "serial_number": "fixture-device",
+    }
+    details = {
+        FIXTURE_FILE["id"]: _ready_detail(),
+        dup_file["id"]: {
+            **_ready_detail(),
+            **dup_file,
+            "presigned_url": "https://audio.test/duplicate.m4a",
+        },
+    }
+
+    download_calls = 0
+
+    class _DupClient:
+        oauth = _FakeOAuth()
+
+        async def getCurrentUser(self) -> dict[str, str]:
+            return {"id": "fake-user"}
+
+        async def listFilesIterator(self, _opts: Any = None) -> AsyncIterator[dict[str, Any]]:
+            yield FIXTURE_FILE
+            yield dup_file
+
+        async def getFile(self, fid: str) -> dict[str, Any]:
+            return details[fid]
+
+    async def _counting_fetch(_url: str) -> _FakeResponse:
+        nonlocal download_calls
+        download_calls += 1
+        return _FakeResponse()
+
+    poller = PlaudPoller(
+        {
+            "db": handle.engine,
+            "meetingsDir": meetings_dir,
+            "client": _DupClient(),
+            "fetchImpl": _counting_fetch,
+            "now": lambda: 1_000_000,
+        }
+    )
+
+    first = await poller.trigger()
+    assert first["discovered"] == 2
+    assert download_calls == 2
+
+    with handle.engine.connect() as conn:
+        meetings = conn.execute(
+            text("SELECT * FROM meetings ORDER BY created_at ASC")
+        ).mappings().all()
+        original = next(m for m in meetings if m["title"] == FIXTURE_FILE["name"])
+        duplicate = next(m for m in meetings if m["title"] == dup_file["name"])
+        dup_state = conn.execute(
+            text("SELECT * FROM plaud_ingest_state WHERE meeting_id = :mid"),
+            {"mid": duplicate["id"]},
+        ).mappings().one()
+        recs = conn.execute(text("SELECT * FROM recordings")).fetchall()
+
+    assert original["status"] == "ready"
+    assert duplicate["status"] == "duplicate"
+    assert dup_state["pcs_resolved"] == 1
+    assert dup_state["duplicate_of_meeting_id"] == original["id"]
+    assert len(recs) == 1
+
+    second = await poller.trigger()
+    third = await poller.trigger()
+    assert second["discovered"] == 0
+    assert second["resolved"] == 0
+    assert third["resolved"] == 0
+    assert download_calls == 2
+    handle.engine.dispose()
+
+
+def test_plaud_api_status_sync_trigger_and_pkce_auth_routes(tmp_path: Path) -> None:
+    handle = create_db(":memory:")
+    meetings_dir = str(tmp_path / "meetings")
+    client = _FakePlaudClient(_pending_detail())
+    poller = PlaudPoller(
+        {
+            "db": handle.engine,
+            "meetingsDir": meetings_dir,
+            "client": client,
+            "fetchImpl": _fake_fetch(),
+            "now": lambda: 1_000,
+        }
+    )
+    completed: list[str] = []
+
+    class _CustomOAuth:
+        async def startManualLogin(self) -> dict[str, str]:
+            return {
+                "authUrl": "https://auth.test/authorize?code_challenge=abc",
+                "verifier": "verifier-not-returned",
+                "state": "state-not-returned",
+            }
+
+        async def completeManualLogin(
+            self, inp: str, verifier: str, state: str | None = None
+        ) -> dict[str, Any]:
+            completed.append(f"{inp}|{verifier}|{state}")
+            return {}
+
+    app = create_app(
+        {
+            "db": handle.engine,
+            "meetingsDir": meetings_dir,
+            "plaudPoller": poller,
+            "plaudClient": client,
+            "oauthManager": _CustomOAuth(),
+        }
+    )
+    http_client = TestClient(app)
+
+    initial_status = http_client.get("/api/plaud/status")
+    assert initial_status.status_code == 200
+    assert initial_status.json() == {"connected": True, "lastPollAt": None, "pcsPending": 0}
+
+    trigger_res = http_client.post("/api/plaud/sync/trigger")
+    assert trigger_res.status_code == 200
+    assert trigger_res.json() == {
+        "status": "completed",
+        "discoveryCompleted": True,
+        "discoveryError": None,
+        "discovered": 1,
+        "resolved": 0,
+        "pcsPending": 1,
+        "startedAt": 1_000,
+        "completedAt": 1_000,
+        "error": None,
+    }
+
+    start_res = http_client.post("/api/plaud/auth/start")
+    assert start_res.status_code == 200
+    start_body = start_res.json()
+    assert start_body["authUrl"] == "https://auth.test/authorize?code_challenge=abc"
+    assert start_body["sessionId"]
+    assert "verifier" not in start_body
+    assert "state" not in start_body
+
+    complete_res = http_client.post(
+        "/api/plaud/auth/complete",
+        json={
+            "sessionId": start_body["sessionId"],
+            "pastedUrlOrCode": "https://localhost/callback?code=fake",
+        },
+    )
+    assert complete_res.status_code == 200
+    assert complete_res.json() == {"status": "completed"}
+    assert completed == [
+        "https://localhost/callback?code=fake|verifier-not-returned|state-not-returned"
+    ]
+
+    reused_res = http_client.post(
+        "/api/plaud/auth/complete",
+        json={"sessionId": start_body["sessionId"], "pastedUrlOrCode": "fake"},
+    )
+    assert reused_res.status_code == 400
+    handle.engine.dispose()
+
+
+async def test_token_store_duration_conversion_and_migration_repair(tmp_path: Path) -> None:
+    tokens_path = str(tmp_path / "plaud-tokens.json")
+    paths = {
+        "configDir": str(tmp_path),
+        "meetingsDir": str(tmp_path / "meetings"),
+        "backupsDir": str(tmp_path / "backups"),
+        "modelsDir": str(tmp_path / "models"),
+        "databasePath": str(tmp_path / "olive.sqlite"),
+        "settingsPath": str(tmp_path / "settings.json"),
+        "plaudTokensPath": tokens_path,
+    }
+    client = create_plaud_client(paths)
+    assert client.tokenStore.filePath == tokens_path
+
+    store = FileTokenStore(tokens_path)
+    await store.save(
+        {
+            "access_token": "persisted-access-token",
+            "token_type": "Bearer",
+            "refresh_token": "persisted-refresh-token",
+            "expires_at": int(time.time() * 1000) + 3_600_000,
+        }
+    )
+    assert Path(tokens_path).exists()
+    reloaded = await FileTokenStore(tokens_path).load()
+    assert reloaded is not None
+    assert reloaded["access_token"] == "persisted-access-token"
+    assert reloaded["refresh_token"] == "persisted-refresh-token"
+
+    assert duration_to_ms(252_960) == 252_960
+    assert duration_to_ms(462_960) == 462_960
+    assert duration_to_ms(3_600_000) == 3_600_000
+    assert duration_to_ms(12) == 12_000
+    assert duration_to_ms(0.5) == 500
+    assert duration_to_ms(None) == 0
+
+    handle = create_db(":memory:")
+    now = 1_700_000_000_000
+    with handle.engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO meetings (
+                  id, title, start_time, end_time, source, status, tags,
+                  primary_transcript_artifact_id, primary_summary_artifact_id,
+                  last_error, created_at, updated_at
+                ) VALUES (
+                  'corrupted-plaud-meeting', '2026-08-14 16:26:26', :now, :end,
+                  'plaud', 'processing', '[]', NULL, NULL, NULL, :now, :now
+                )
+                """
+            ),
+            {"now": now, "end": now + 252_960_000},
+        )
+    run_migrations(handle.engine)
+    with handle.engine.connect() as conn:
+        repaired = conn.execute(
+            text("SELECT start_time, end_time FROM meetings WHERE id = 'corrupted-plaud-meeting'")
+        ).mappings().one()
+    assert int(repaired["end_time"]) - int(repaired["start_time"]) == 252_960
+    handle.engine.dispose()
+
+
+async def test_plaud_rate_limit_backoff_and_retry_helpers(tmp_path: Path) -> None:
+    handle = create_db(":memory:")
+    meetings_dir = str(tmp_path / "meetings")
+    get_file_calls = 0
+
+    class _ThrottledClient(_FakePlaudClient):
+        async def getFile(self, _fid: str) -> dict[str, Any]:
+            nonlocal get_file_calls
+            get_file_calls += 1
+            if get_file_calls <= 2:
+                raise RateLimitError("Rate limit exceeded.")
+            return _ready_detail()
+
+    delays: list[int] = []
+
+    async def _rec_sleep(ms: int) -> None:
+        delays.append(ms)
+
+    poller = PlaudPoller(
+        {
+            "db": handle.engine,
+            "meetingsDir": meetings_dir,
+            "client": _ThrottledClient(_ready_detail()),
+            "fetchImpl": _fake_fetch(),
+            "now": lambda: 1_000_000,
+            "retryOptions": {"baseDelayMs": 1_000, "random": lambda: 1.0, "sleep": _rec_sleep},
+        }
+    )
+    res = await poller.trigger()
+    assert res["discoveryCompleted"] is True
+    assert res["error"] is None
+    assert res["resolved"] == 1
+    assert get_file_calls == 3
+    assert delays == [750, 1500]
+
+    assert is_rate_limit_error(RateLimitError("Rate limit exceeded.")) is True
+    assert is_rate_limit_error(RuntimeError("Too Many Requests")) is True
+    assert is_rate_limit_error(RuntimeError("connection reset")) is False
+
+    policy = resolve_retry_policy({"baseDelayMs": 1_000, "maxDelayMs": 5_000, "random": lambda: 0.0})
+    assert compute_retry_delay_ms(RateLimitError("429", 4_000), 0, policy) == 4_000
+    assert compute_retry_delay_ms(RateLimitError("429", 9_999), 0, policy) == 5_000
+    assert compute_retry_delay_ms(RateLimitError("429"), 2, policy) == 4_000
+    assert parse_retry_after_ms("2") == 2_000
+    assert parse_retry_after_ms(None) is None
+    assert parse_retry_after_ms("not-a-date") is None
+
+    raw_note = "## Auto_sum_note\n\n---\n**Project Requirements**\n- Item 1\n- Item 2"
+    cleaned = clean_plaud_summary_markdown(raw_note)
+    assert "Auto_sum_note" not in cleaned
+    assert not cleaned.startswith("---")
+    assert cleaned.startswith("**Project Requirements**")
+    converted = summary_to_markdown([{"type": "auto_sum_note", "content": raw_note}])
+    assert "Auto_sum_note" not in converted
+    assert converted.startswith("**Project Requirements**")
+    handle.engine.dispose()

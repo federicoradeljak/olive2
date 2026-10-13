@@ -1,0 +1,30 @@
+import type { components } from "./schema.d.ts";
+
+export type MeetingSource = "plaud" | "upload" | "ios-shortcut";
+export type MeetingStatus = "pending" | "processing" | "ready" | "error" | "duplicate";
+export type ArtifactKind = "transcript" | "summary";
+export type ArtifactFormat = "md" | "txt" | "json" | "srt";
+export type LogLevel = "debug" | "info" | "warn" | "error";
+export type ChatMessageRole = "user" | "assistant";
+export type LlmThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
+export type OpenApiSchemas = components["schemas"];
+
+export type Meeting = OpenApiSchemas["Meeting"];
+export type MeetingListItem = Meeting;
+export type Recording = OpenApiSchemas["Recording"];
+export type Artifact = OpenApiSchemas["Artifact"];
+export type Speaker = OpenApiSchemas["Speaker"];
+export type StageRunRow = OpenApiSchemas["StageRunRow"];
+export type Template = OpenApiSchemas["Template"];
+export type ChatMessage = OpenApiSchemas["ChatMessage"];
+export type LlmModelCatalogItem = OpenApiSchemas["LlmModelCatalogItem"];
+export type LlmProviderSummary = OpenApiSchemas["LlmProviderSummary"];
+export type MeetingSummaryItem = OpenApiSchemas["MeetingSummaryItem"];
+export type SummaryGenerationStatus = OpenApiSchemas["SummaryGenerationStatus"];
+export type TranscriptionProgressUpdate = OpenApiSchemas["TranscriptionProgressUpdate"];
+export type MeetingDetailAggregate = OpenApiSchemas["MeetingDetailAggregate"];
+export type BackupInfo = OpenApiSchemas["BackupInfo"];
+export type RestoreResult = OpenApiSchemas["RestoreResult"];
+export type LogItem = OpenApiSchemas["LogItem"];
+export type LogListResponse = OpenApiSchemas["LogListResponse"];

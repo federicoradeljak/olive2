@@ -438,10 +438,10 @@ Clears stored logs from SQLite database, with optional `olderThanMs` timestamp c
 
 ### Create Backup
 ```bash
-bun run scripts/backup.ts [optional-output-path.tar.gz]
+cd backend && uv run olive backup [optional-output-path.tar.gz]
 ```
 
 ### Restore Backup
 ```bash
-bun run scripts/restore.ts <path-to-backup.tar.gz>
+cd backend && uv run olive restore <path-to-backup.tar.gz>
 ```

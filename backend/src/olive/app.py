@@ -1,0 +1,1977 @@
+"""FastAPI application factory and HTTP routes (port of packages/server/src/app.ts)."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import FileResponse, JSONResponse
+from sqlalchemy import text
+from sqlalchemy.engine import Engine
+from sse_starlette.sse import EventSourceResponse
+
+from .db import DbHandle, get_db
+from .layout import meeting_paths
+from .ml.audio import enhance_audio_file_async
+from .schemas import LogItem
+from .services.ingest import IngestService
+from .services.meetings import (
+    delete_meeting,
+    get_meeting,
+    list_meetings,
+    parse_json_field,
+    update_meeting_tags,
+    update_meeting_title,
+)
+from .services.templates import TemplateService
+from .settings import (
+    OlivePaths,
+    is_masked_secret,
+    load_app_config,
+    mask_app_config,
+    resolve_paths,
+    save_app_config,
+)
+
+
+def _numeric_query_param(value: str | None) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(float(value))
+    except ValueError:
+        return None
+
+
+def _is_loopback_host(hostname: str) -> bool:
+    return hostname in ("127.0.0.1", "localhost", "::1")
+
+
+def _safe_web_path(web_root: str, request_path: str) -> Path | None:
+    root = Path(web_root).resolve()
+    rel = request_path.lstrip("/\\") or "index.html"
+    candidate = (root / rel).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    return candidate
+
+
+def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
+    opts = {**(options or {}), **kwargs}
+    raw_db = opts.get("db")
+    if isinstance(raw_db, DbHandle):
+        db: Engine = raw_db.engine
+    elif isinstance(raw_db, Engine):
+        db = raw_db
+    else:
+        db = get_db()
+
+    base_paths = resolve_paths()
+    config_dir = str(opts.get("configDir") or opts.get("config_dir") or base_paths.config_dir)
+    meetings_dir = str(opts.get("meetingsDir") or opts.get("meetings_dir") or base_paths.meetings_dir)
+    backups_dir = str(opts.get("backupsDir") or opts.get("backups_dir") or base_paths.backups_dir)
+    models_dir = str(opts.get("modelsDir") or opts.get("models_dir") or base_paths.models_dir)
+    plaud_tokens_path = str(
+        opts.get("plaudTokensPath") or opts.get("plaud_tokens_path") or base_paths.plaud_tokens_path
+    )
+
+    app_config_paths = OlivePaths(
+        config_dir=config_dir,
+        meetings_dir=meetings_dir,
+        backups_dir=backups_dir,
+        models_dir=models_dir,
+        database_path=str(opts.get("databasePath") or Path(config_dir) / "olive.sqlite"),
+        settings_path=str(Path(config_dir) / "settings.json"),
+        plaud_tokens_path=plaud_tokens_path,
+    )
+    configured_provider = load_app_config(app_config_paths).transcriptionProvider
+    default_provider = (
+        opts.get("defaultTranscriptionProvider")
+        or opts.get("default_transcription_provider")
+        or configured_provider
+    )
+
+    speechmatics_webhook_secret = (
+        opts.get("speechmaticsWebhookSecret")
+        or opts.get("speechmatics_webhook_secret")
+        or os.environ.get("SPEECHMATICS_WEBHOOK_SECRET")
+    )
+    ingest_token = (
+        opts.get("ingestToken")
+        or opts.get("ingest_token")
+        or os.environ.get("OLIVE_INGEST_TOKEN")
+    )
+    mcp_token = (
+        opts.get("mcpToken")
+        or opts.get("mcp_token")
+        or os.environ.get("OLIVE_MCP_TOKEN")
+        or ingest_token
+    )
+    bind_host = str(
+        opts.get("bindHost")
+        or opts.get("bind_host")
+        or os.environ.get("OLIVE_BIND_HOST")
+        or "127.0.0.1"
+    )
+    if not mcp_token and not _is_loopback_host(bind_host):
+        raise ValueError(
+            "OLIVE_MCP_TOKEN or OLIVE_INGEST_TOKEN is required when OLIVE_BIND_HOST is not loopback"
+        )
+
+    speechmatics_client = opts.get("speechmaticsClient") or opts.get("speechmatics_client")
+    transcription_service = opts.get("transcriptionService") or opts.get("transcription_service")
+    speaker_service = opts.get("speakerService") or opts.get("speaker_service")
+    llm_service = opts.get("llmService") or opts.get("llm_service")
+    summary_service = opts.get("summaryService") or opts.get("summary_service")
+    chat_service = opts.get("chatService") or opts.get("chat_service")
+    backup_service = opts.get("backupService") or opts.get("backup_service")
+    plaud_poller = opts.get("plaudPoller") or opts.get("plaud_poller")
+    plaud_client = opts.get("plaudClient") or opts.get("plaud_client")
+    oauth_manager = opts.get("oauthManager") or opts.get("oauth_manager")
+    auth_sessions = opts.get("authSessions") or opts.get("auth_sessions")
+
+    def get_speechmatics_client() -> Any:
+        nonlocal speechmatics_client
+        if speechmatics_client is None:
+            from .providers.speechmatics import SpeechmaticsClient
+
+            speechmatics_client = SpeechmaticsClient()
+        return speechmatics_client
+
+    def get_llm_service() -> Any:
+        nonlocal llm_service
+        if llm_service is None:
+            from .services.llm import LlmService
+
+            llm_service = LlmService(db=db, config_dir=config_dir)
+        return llm_service
+
+    def get_summary_service() -> Any:
+        nonlocal summary_service
+        if summary_service is None:
+            from .services.summaries import SummaryService
+
+            summary_service = SummaryService(
+                db=db,
+                meetings_dir=meetings_dir,
+                llm_service=get_llm_service(),
+                template_service=template_service,
+            )
+        return summary_service
+
+    def get_chat_service() -> Any:
+        nonlocal chat_service
+        if chat_service is None:
+            from .services.chat import ChatService
+
+            chat_service = ChatService(
+                db=db,
+                meetings_dir=meetings_dir,
+                llm_service=get_llm_service(),
+            )
+        return chat_service
+
+    def get_transcription_service() -> Any:
+        nonlocal transcription_service
+        if transcription_service is None:
+            from .services.transcription import TranscriptionService
+
+            transcription_service = TranscriptionService(
+                db=db,
+                meetings_dir=meetings_dir,
+                speechmatics_client=get_speechmatics_client(),
+                default_provider=default_provider,
+                webhook_secret=speechmatics_webhook_secret,
+                config_dir=config_dir,
+            )
+            transcription_service.set_summary_service(get_summary_service())
+        return transcription_service
+
+    def get_speaker_service() -> Any:
+        nonlocal speaker_service
+        if speaker_service is None:
+            from .services.speakers import SpeakerService
+
+            speaker_service = SpeakerService(
+                db=db,
+                config_dir=config_dir,
+                meetings_dir=meetings_dir,
+                speechmatics_client=get_speechmatics_client(),
+            )
+        return speaker_service
+
+    def get_backup_service() -> Any:
+        nonlocal backup_service
+        if backup_service is None:
+            from .services.backup import BackupService
+
+            backup_service = BackupService(
+                db=db,
+                paths=app_config_paths,
+                config_dir=config_dir,
+                meetings_dir=meetings_dir,
+                backups_dir=backups_dir,
+            )
+        return backup_service
+
+    def get_plaud_poller() -> Any:
+        nonlocal plaud_poller, plaud_client
+        if plaud_poller is None:
+            from .plaud.client import create_plaud_client
+            from .plaud.poller import PlaudPoller
+
+            if plaud_client is None:
+                plaud_client = create_plaud_client(app_config_paths)
+            plaud_poller = PlaudPoller(
+                db=db,
+                meetings_dir=meetings_dir,
+                client=plaud_client,
+                transcription_service=get_transcription_service(),
+            )
+        return plaud_poller
+
+    def get_oauth_manager() -> Any:
+        nonlocal oauth_manager
+        if oauth_manager is None:
+            oauth_manager = getattr(get_plaud_poller(), "oauth", None)
+        return oauth_manager
+
+    def get_auth_sessions() -> Any:
+        nonlocal auth_sessions
+        if auth_sessions is None:
+            from .plaud.auth import PlaudAuthSessionStore
+
+            auth_sessions = PlaudAuthSessionStore()
+        return auth_sessions
+
+    if transcription_service is not None and summary_service is not None:
+        if hasattr(transcription_service, "set_summary_service"):
+            transcription_service.set_summary_service(summary_service)
+        elif hasattr(transcription_service, "setSummaryService"):
+            transcription_service.setSummaryService(summary_service)
+
+    ingest_service: IngestService = (
+        opts.get("ingestService")
+        or opts.get("ingest_service")
+        or IngestService(
+            db=db,
+            meetings_dir=meetings_dir,
+            transcription_service=transcription_service,
+            default_transcription_provider=default_provider,
+        )
+    )
+
+    template_service: TemplateService = (
+        opts.get("templateService")
+        or opts.get("template_service")
+        or TemplateService(db)
+    )
+
+    app = FastAPI(title="Olive API", version="0.2.0")
+
+    @app.api_route("/mcp", methods=["GET", "POST", "DELETE", "OPTIONS"], include_in_schema=False)
+    async def mcp_endpoint(request: Request) -> Response:
+        from .mcp_server import handle_mcp_request
+
+        return await handle_mcp_request(
+            request=request,
+            db=db,
+            meetings_dir=meetings_dir,
+            speaker_service=get_speaker_service(),
+            mcp_token=mcp_token,
+            bind_host=bind_host,
+        )
+
+    if opts.get("startPlaudPoller") or opts.get("start_plaud_poller") or opts.get("syncOnStartup") or opts.get("sync_on_startup"):
+        try:
+            get_speaker_service().sync_meeting_speakers_and_transcripts_sync()
+        except Exception:
+            pass
+
+    if opts.get("startPlaudPoller") or opts.get("start_plaud_poller"):
+        poll_interval = int(opts.get("pollIntervalMinutes") or opts.get("poll_interval_minutes") or 15)
+        get_plaud_poller().start(poll_interval)
+
+    @app.get("/api/health")
+    async def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.get("/api/meetings")
+    async def get_meetings_route(request: Request) -> JSONResponse:
+        q = request.query_params
+        resp = list_meetings(
+            db,
+            {
+                "limit": _numeric_query_param(q.get("limit")),
+                "offset": _numeric_query_param(q.get("offset")),
+                "search": q.get("search"),
+                "source": q.get("source"),
+                "startTime": _numeric_query_param(q.get("startTime")),
+                "endTime": _numeric_query_param(q.get("endTime")),
+            },
+            meetings_dir,
+        )
+        return JSONResponse(resp)
+
+    @app.post("/api/ingest")
+    async def post_ingest_route(request: Request) -> JSONResponse:
+        if ingest_token:
+            auth_header = request.headers.get("authorization") or ""
+            if auth_header != f"Bearer {ingest_token}":
+                return JSONResponse(
+                    {"error": "Unauthorized: invalid or missing ingest token"},
+                    status_code=401,
+                )
+
+        content_type = request.headers.get("content-type") or ""
+        if "multipart/form-data" not in content_type.lower():
+            return JSONResponse({"error": "Multipart form data required"}, status_code=400)
+
+        try:
+            form = await request.form()
+        except Exception:
+            return JSONResponse({"error": "Multipart form data required"}, status_code=400)
+
+        file_field = form.get("file")
+        if file_field is None or not hasattr(file_field, "read"):
+            return JSONResponse({"error": "file field (audio blob) is required"}, status_code=400)
+
+        audio_bytes = await file_field.read()  # type: ignore[union-attr]
+        filename = getattr(file_field, "filename", None) or "audio.m4a"
+        mime = getattr(file_field, "content_type", None) or "audio/mp4"
+
+        title = form.get("title")
+        source_param = form.get("source")
+        auto_transcribe_param = form.get("autoTranscribe")
+        provider_param = form.get("provider")
+        model_id_param = form.get("modelId")
+
+        user_agent = request.headers.get("user-agent") or ""
+        is_shortcut = ("Shortcuts" in user_agent) or (source_param == "ios-shortcut")
+        source = (
+            "ios-shortcut"
+            if is_shortcut
+            else "plaud"
+            if source_param == "plaud"
+            else "upload"
+        )
+
+        auto_transcribe = str(auto_transcribe_param) in ("true", "1")
+        transcription_provider = load_app_config(app_config_paths).transcriptionProvider
+        if provider_param in ("local", "speechmatics"):
+            transcription_provider = provider_param  # type: ignore[assignment]
+        model_id = (
+            str(model_id_param).strip()
+            if isinstance(model_id_param, str) and model_id_param.strip()
+            else None
+        )
+
+        if auto_transcribe and ingest_service.transcription_service is None:
+            ingest_service.transcription_service = get_transcription_service()
+        try:
+            result = await _call_maybe_async(
+                ingest_service,
+                ("ingest_audio", "ingestAudio"),
+                {
+                    "audioBytes": audio_bytes,
+                    "filename": filename,
+                    "mime": mime,
+                    "title": str(title) if isinstance(title, str) else None,
+                    "source": source,
+                    "autoTranscribe": auto_transcribe,
+                    "transcriptionProvider": transcription_provider,
+                    "modelId": model_id,
+                },
+            )
+            return JSONResponse(result, status_code=200 if result.get("deduped") else 201)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+    @app.get("/api/meetings/{meeting_id}")
+    async def get_meeting_detail_route(meeting_id: str) -> JSONResponse:
+        detail = get_meeting(db, meeting_id, meetings_dir)
+        if not detail:
+            return JSONResponse({"error": "Meeting not found"}, status_code=404)
+
+        active_progress = (
+            _call_sync(
+                transcription_service,
+                ("get_transcription_progress", "getTranscriptionProgress"),
+                meeting_id,
+            )
+            if transcription_service is not None
+            else None
+        )
+        summary_gen = (
+            _call_sync(
+                summary_service,
+                ("get_summary_generation_status", "getSummaryGenerationStatus"),
+                meeting_id,
+            )
+            if summary_service is not None
+            else None
+        )
+        payload = detail.model_dump()
+        payload["transcriptionProgress"] = (
+            active_progress.model_dump(exclude_none=True)
+            if active_progress is not None and hasattr(active_progress, "model_dump")
+            else active_progress
+        )
+        payload["summaryGeneration"] = (
+            summary_gen.model_dump(exclude_none=True)
+            if summary_gen is not None and hasattr(summary_gen, "model_dump")
+            else summary_gen
+        )
+        return JSONResponse(payload)
+
+    @app.put("/api/meetings/{meeting_id}/title")
+    async def put_meeting_title_route(meeting_id: str, request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "JSON body required"}, status_code=400)
+
+        if not isinstance(body, dict) or not isinstance(body.get("title"), str) or not body["title"].strip():
+            return JSONResponse({"error": "title must be a non-empty string"}, status_code=400)
+
+        try:
+            updated = update_meeting_title(db, meeting_id, body["title"], meetings_dir)
+            if not updated:
+                return JSONResponse({"error": "Meeting not found"}, status_code=404)
+            return JSONResponse({"meeting": updated.model_dump()})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+    @app.delete("/api/meetings/{meeting_id}")
+    async def delete_meeting_route(meeting_id: str) -> JSONResponse:
+        try:
+            await _call_maybe_async(
+                transcription_service,
+                ("cancel_transcription", "cancelTranscription"),
+                meeting_id,
+            )
+        except Exception:
+            pass
+        try:
+            deleted = delete_meeting(db, meeting_id, meetings_dir)
+            if not deleted:
+                return JSONResponse({"error": "Meeting not found"}, status_code=404)
+            return JSONResponse({"status": "deleted"})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+    @app.put("/api/meetings/{meeting_id}/tags")
+    async def put_meeting_tags_route(meeting_id: str, request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "JSON body required"}, status_code=400)
+
+        tags = body.get("tags") if isinstance(body, dict) else None
+        if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
+            return JSONResponse({"error": "tags must be an array of strings"}, status_code=400)
+
+        updated = update_meeting_tags(db, meeting_id, tags)
+        if not updated:
+            return JSONResponse({"error": "Meeting not found"}, status_code=404)
+        return JSONResponse({"meeting": updated.model_dump()})
+
+    @app.get("/api/meetings/{meeting_id}/audio")
+    async def get_meeting_audio_route(meeting_id: str, request: Request) -> Response:
+        with db.connect() as conn:
+            meeting = conn.execute(
+                text("SELECT * FROM meetings WHERE id = :id"),
+                {"id": meeting_id},
+            ).mappings().first()
+            if not meeting:
+                return JSONResponse({"error": "Meeting not found"}, status_code=404)
+            recording = conn.execute(
+                text("SELECT * FROM recordings WHERE meeting_id = :id ORDER BY created_at ASC LIMIT 1"),
+                {"id": meeting_id},
+            ).mappings().first()
+            if not recording:
+                return JSONResponse({"error": "Recording not found"}, status_code=404)
+
+        folder = Path(
+            meeting_paths(meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]).folder
+        )
+        full_path = folder / recording["path"]
+        if not full_path.exists():
+            return JSONResponse({"error": "Audio file not found on disk"}, status_code=404)
+
+        target_path = full_path
+        target_mime = recording["mime"] or "audio/mp4"
+
+        if request.query_params.get("enhanced") == "true":
+            enhanced_full = folder / "audio" / f"{recording['id']}.enhanced.mp3"
+            if not enhanced_full.exists():
+                await enhance_audio_file_async(full_path, enhanced_full)
+            if enhanced_full.exists():
+                target_path = enhanced_full
+                target_mime = "audio/mpeg"
+
+        size = target_path.stat().st_size
+        range_header = request.headers.get("range")
+        if range_header and range_header.startswith("bytes="):
+            parts = range_header.replace("bytes=", "", 1).split("-")
+            try:
+                start = int(parts[0])
+                end = int(parts[1]) if (len(parts) > 1 and parts[1]) else size - 1
+            except ValueError:
+                start = -1
+                end = -1
+            if 0 <= start <= end < size:
+                chunk_size = end - start + 1
+                with target_path.open("rb") as f:
+                    f.seek(start)
+                    data = f.read(chunk_size)
+                return Response(
+                    content=data,
+                    status_code=206,
+                    headers={
+                        "Content-Range": f"bytes {start}-{end}/{size}",
+                        "Accept-Ranges": "bytes",
+                        "Content-Length": str(chunk_size),
+                        "Content-Type": target_mime,
+                    },
+                )
+
+        return Response(
+            content=target_path.read_bytes(),
+            status_code=200,
+            headers={
+                "Content-Length": str(size),
+                "Content-Type": target_mime,
+                "Accept-Ranges": "bytes",
+            },
+        )
+
+    # Chat API
+    @app.get("/api/meetings/{meeting_id}/chat/messages")
+    async def get_chat_messages_route(meeting_id: str) -> JSONResponse:
+        try:
+            msgs = await _call_maybe_async(get_chat_service(), ("get_messages", "getMessages"), meeting_id)
+            return JSONResponse(
+                {
+                    "messages": [
+                        m.model_dump() if hasattr(m, "model_dump") else m for m in msgs
+                    ]
+                }
+            )
+        except Exception as exc:
+            msg = str(exc)
+            return JSONResponse(
+                {"error": msg},
+                status_code=404 if msg.startswith("Meeting not found") else 400,
+            )
+
+    @app.delete("/api/meetings/{meeting_id}/chat/messages")
+    async def delete_chat_messages_route(meeting_id: str) -> JSONResponse:
+        try:
+            await _call_maybe_async(get_chat_service(), ("clear_messages", "clearMessages"), meeting_id)
+            return JSONResponse({"status": "cleared"})
+        except Exception as exc:
+            msg = str(exc)
+            return JSONResponse(
+                {"error": msg},
+                status_code=404 if msg.startswith("Meeting not found") else 400,
+            )
+
+    @app.post("/api/meetings/{meeting_id}/chat/messages")
+    async def post_chat_messages_route(meeting_id: str, request: Request) -> Response:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "JSON body required"}, status_code=400)
+
+        content = body.get("content") if isinstance(body, dict) else None
+        if not isinstance(content, str) or not content.strip():
+            return JSONResponse({"error": "Message content is required"}, status_code=400)
+
+        async def event_generator():
+            queue: asyncio.Queue[dict[str, str] | None] = asyncio.Queue()
+
+            async def on_delta(delta: str) -> None:
+                await queue.put({"event": "delta", "data": json.dumps({"delta": delta})})
+
+            async def runner() -> None:
+                try:
+                    assistant_msg = await _call_maybe_async(
+                        get_chat_service(),
+                        ("stream_message", "streamMessage"),
+                        {
+                            "meetingId": meeting_id,
+                            "content": content,
+                            "onDelta": on_delta,
+                        },
+                    )
+                    msg_dict = (
+                        assistant_msg.model_dump()
+                        if hasattr(assistant_msg, "model_dump")
+                        else assistant_msg
+                    )
+                    await queue.put({"event": "done", "data": json.dumps({"message": msg_dict})})
+                except Exception as exc:
+                    await queue.put({"event": "error", "data": json.dumps({"error": str(exc)})})
+                finally:
+                    await queue.put(None)
+
+            task = asyncio.create_task(runner())
+            try:
+                while True:
+                    item = await queue.get()
+                    if item is None:
+                        break
+                    yield item
+            finally:
+                if not task.done():
+                    task.cancel()
+
+        return EventSourceResponse(event_generator(), sep="\n")
+
+    # Transcription API
+    @app.post("/api/meetings/{meeting_id}/transcribe")
+    async def post_transcribe_route(meeting_id: str, request: Request) -> Response:
+        body: dict[str, Any] = {}
+        try:
+            parsed = await request.json()
+            if isinstance(parsed, dict):
+                body = parsed
+        except Exception:
+            pass
+
+        similarity_threshold = body.get("similarityThreshold")
+        clustering_threshold = body.get("clusteringThreshold")
+        model_id = body.get("modelId")
+
+        try:
+            cfg = load_app_config(app_config_paths)
+            if similarity_threshold is None:
+                similarity_threshold = cfg.localSimilarityThreshold
+            if clustering_threshold is None:
+                clustering_threshold = cfg.localClusteringThreshold
+            if model_id is None:
+                model_id = cfg.localAsrModel
+        except Exception:
+            pass
+
+        wants_stream = (
+            body.get("stream") is True
+            or request.query_params.get("stream") == "true"
+            or "text/event-stream" in (request.headers.get("accept") or "")
+        )
+
+        if wants_stream:
+            async def sse_gen():
+                queue: asyncio.Queue[dict[str, str] | None] = asyncio.Queue()
+                stream_closed = False
+
+                async def on_progress(update: Any) -> None:
+                    if stream_closed:
+                        return
+                    upd_dict = (
+                        update.model_dump(exclude_none=True)
+                        if hasattr(update, "model_dump")
+                        else update
+                    )
+                    await queue.put({"event": "progress", "data": json.dumps(upd_dict)})
+
+                async def run_job() -> None:
+                    await queue.put(
+                        {
+                            "event": "progress",
+                            "data": json.dumps(
+                                {
+                                    "stage": "decoding",
+                                    "percent": 2,
+                                    "message": "Initializing transcription...",
+                                }
+                            ),
+                        }
+                    )
+                    try:
+                        res = await _call_maybe_async(
+                            get_transcription_service(),
+                            ("transcribe_meeting", "transcribeMeeting"),
+                            meeting_id,
+                            {
+                                "provider": body.get("provider"),
+                                "language": body.get("language"),
+                                "poll": body.get("poll"),
+                                "force": body.get("force"),
+                                "pollIntervalMs": body.get("pollIntervalMs"),
+                                "maxPollWaitMs": body.get("maxPollWaitMs"),
+                                "similarityThreshold": similarity_threshold,
+                                "clusteringThreshold": clustering_threshold,
+                                "modelId": model_id,
+                                "onProgress": on_progress,
+                            },
+                        )
+                        status = res.get("status") if isinstance(res, dict) else getattr(res, "status", None)
+                        err_str = res.get("error") if isinstance(res, dict) else getattr(res, "error", None)
+                        if status == "cancelled":
+                            await queue.put(
+                                {
+                                    "event": "cancelled",
+                                    "data": json.dumps(
+                                        {
+                                            "stage": "cancelled",
+                                            "percent": 0,
+                                            "message": "Transcription was cancelled.",
+                                            "result": res,
+                                        }
+                                    ),
+                                }
+                            )
+                        elif status == "error":
+                            await queue.put(
+                                {
+                                    "event": "error",
+                                    "data": json.dumps(
+                                        {
+                                            "stage": "error",
+                                            "percent": 0,
+                                            "message": err_str or "Transcription failed",
+                                            "error": err_str or "Transcription failed",
+                                            "result": res,
+                                        }
+                                    ),
+                                }
+                            )
+                        else:
+                            await queue.put(
+                                {
+                                    "event": "result",
+                                    "data": json.dumps(
+                                        {
+                                            "stage": "done",
+                                            "percent": 100,
+                                            "message": "Transcription complete!",
+                                            "result": res,
+                                        }
+                                    ),
+                                }
+                            )
+                    except Exception as exc:
+                        is_cancelled = "cancel" in str(exc).lower()
+                        if is_cancelled:
+                            await queue.put(
+                                {
+                                    "event": "cancelled",
+                                    "data": json.dumps(
+                                        {
+                                            "stage": "cancelled",
+                                            "percent": 0,
+                                            "message": "Transcription was cancelled.",
+                                        }
+                                    ),
+                                }
+                            )
+                        else:
+                            await queue.put(
+                                {
+                                    "event": "error",
+                                    "data": json.dumps(
+                                        {
+                                            "stage": "error",
+                                            "percent": 0,
+                                            "message": str(exc),
+                                            "error": str(exc),
+                                        }
+                                    ),
+                                }
+                            )
+                    finally:
+                        if not stream_closed:
+                            await queue.put(None)
+
+                asyncio.create_task(run_job())
+                try:
+                    while True:
+                        item = await queue.get()
+                        if item is None:
+                            break
+                        yield item
+                finally:
+                    stream_closed = True
+
+            return EventSourceResponse(sse_gen(), sep="\n")
+
+        try:
+            result = await _call_maybe_async(
+                get_transcription_service(),
+                ("transcribe_meeting", "transcribeMeeting"),
+                meeting_id,
+                {
+                    "provider": body.get("provider"),
+                    "language": body.get("language"),
+                    "poll": body.get("poll"),
+                    "force": body.get("force"),
+                    "pollIntervalMs": body.get("pollIntervalMs"),
+                    "maxPollWaitMs": body.get("maxPollWaitMs"),
+                    "similarityThreshold": similarity_threshold,
+                    "clusteringThreshold": clustering_threshold,
+                    "modelId": model_id,
+                },
+            )
+            status = result.get("status") if isinstance(result, dict) else getattr(result, "status", None)
+            return JSONResponse(result, status_code=502 if status == "error" else 200)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @app.get("/api/meetings/{meeting_id}/transcribe/progress")
+    async def get_transcribe_progress_route(meeting_id: str, request: Request) -> Response:
+        wants_stream = (
+            request.query_params.get("stream") == "true"
+            or "text/event-stream" in (request.headers.get("accept") or "")
+        )
+        if wants_stream:
+            async def progress_sse():
+                queue: asyncio.Queue[dict[str, str] | None] = asyncio.Queue()
+                current = _call_sync(
+                    get_transcription_service(),
+                    ("get_transcription_progress", "getTranscriptionProgress"),
+                    meeting_id,
+                )
+                if current:
+                    c_dict = (
+                        current.model_dump(exclude_none=True)
+                        if hasattr(current, "model_dump")
+                        else current
+                    )
+                    yield {"event": "progress", "data": json.dumps(c_dict)}
+
+                async def listener(update: Any) -> None:
+                    upd_dict = (
+                        update.model_dump(exclude_none=True)
+                        if hasattr(update, "model_dump")
+                        else update
+                    )
+                    stage = upd_dict.get("stage")
+                    evt = (
+                        "result"
+                        if stage == "done"
+                        else "cancelled"
+                        if stage == "cancelled"
+                        else "error"
+                        if stage == "error"
+                        else "progress"
+                    )
+                    await queue.put({"event": evt, "data": json.dumps(upd_dict)})
+                    if stage in ("done", "cancelled", "error"):
+                        await queue.put(None)
+
+                unsub = _call_sync(
+                    get_transcription_service(),
+                    ("subscribe_transcription_progress", "subscribeTranscriptionProgress"),
+                    meeting_id,
+                    listener,
+                )
+                try:
+                    while True:
+                        try:
+                            item = await asyncio.wait_for(queue.get(), timeout=3.0)
+                            if item is None:
+                                break
+                            yield item
+                        except TimeoutError:
+                            yield {"event": "ping", "data": "{}"}
+                finally:
+                    if callable(unsub):
+                        unsub()
+
+            return EventSourceResponse(progress_sse(), sep="\n")
+
+        progress = _call_sync(
+            get_transcription_service(),
+            ("get_transcription_progress", "getTranscriptionProgress"),
+            meeting_id,
+        )
+        p_dict = (
+            progress.model_dump(exclude_none=True)
+            if hasattr(progress, "model_dump")
+            else progress
+        )
+        return JSONResponse({"progress": p_dict})
+
+    @app.get("/api/transcriptions/active")
+    async def get_active_transcriptions_route() -> JSONResponse:
+        active = _call_sync(
+            get_transcription_service(),
+            ("get_all_active_transcription_progress", "getAllActiveTranscriptionProgress"),
+        )
+        return JSONResponse({"active": active})
+
+    @app.post("/api/meetings/{meeting_id}/transcribe/cancel")
+    async def post_cancel_transcribe_route(meeting_id: str) -> JSONResponse:
+        try:
+            res = await _call_maybe_async(
+                get_transcription_service(),
+                ("cancel_transcription", "cancelTranscription"),
+                meeting_id,
+            )
+            return JSONResponse(res, status_code=200)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+    # Summaries API
+    @app.post("/api/meetings/{meeting_id}/summarize")
+    async def post_summarize_route(meeting_id: str, request: Request) -> JSONResponse:
+        body: dict[str, Any] = {}
+        try:
+            parsed = await request.json()
+            if isinstance(parsed, dict):
+                body = parsed
+        except Exception:
+            pass
+
+        try:
+            status = await _call_maybe_async(
+                get_summary_service(),
+                ("start_summary_generation", "startSummaryGeneration"),
+                {
+                    "meetingId": meeting_id,
+                    "templateId": body.get("templateId"),
+                    "provider": body.get("provider"),
+                    "model": body.get("model"),
+                    "thinkingLevel": body.get("thinkingLevel"),
+                    "setPrimary": body.get("setPrimary"),
+                },
+            )
+            st_dict = status.model_dump(exclude_none=True) if hasattr(status, "model_dump") else status
+            return JSONResponse({"started": True, "status": st_dict}, status_code=202)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @app.get("/api/meetings/{meeting_id}/summarize/status")
+    async def get_summarize_status_route(meeting_id: str) -> JSONResponse:
+        status = _call_sync(
+            get_summary_service(),
+            ("get_summary_generation_status", "getSummaryGenerationStatus"),
+            meeting_id,
+        )
+        st_dict = status.model_dump(exclude_none=True) if hasattr(status, "model_dump") else status
+        stage = st_dict.get("stage") if isinstance(st_dict, dict) else None
+        return JSONResponse({"generating": stage == "running", "status": st_dict})
+
+    @app.delete("/api/meetings/{meeting_id}/summaries/{artifact_id}")
+    async def delete_summary_route(meeting_id: str, artifact_id: str) -> JSONResponse:
+        try:
+            await _call_maybe_async(
+                get_summary_service(),
+                ("delete_summary", "deleteSummary"),
+                meeting_id,
+                artifact_id,
+            )
+            return JSONResponse({"status": "deleted"})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @app.post("/api/meetings/{meeting_id}/summaries/{artifact_id}/primary")
+    async def post_primary_summary_route(meeting_id: str, artifact_id: str) -> JSONResponse:
+        try:
+            await _call_maybe_async(
+                get_summary_service(),
+                ("set_primary_summary", "setPrimarySummary"),
+                meeting_id,
+                artifact_id,
+            )
+            return JSONResponse({"status": "updated", "primarySummaryArtifactId": artifact_id})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    # Speechmatics webhook
+    @app.post("/api/webhooks/speechmatics")
+    async def post_speechmatics_webhook_route(request: Request) -> JSONResponse:
+        if speechmatics_webhook_secret:
+            auth_header = request.headers.get("authorization") or ""
+            if auth_header != f"Bearer {speechmatics_webhook_secret}":
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+        meeting_id = request.query_params.get("meetingId")
+        stage_run_id = request.query_params.get("stageRunId")
+        if not meeting_id or not stage_run_id:
+            return JSONResponse(
+                {"error": "meetingId and stageRunId query params are required"},
+                status_code=400,
+            )
+
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON payload"}, status_code=400)
+
+        try:
+            job_id = (payload.get("job") or {}).get("id", "") if isinstance(payload, dict) else ""
+            res = await _call_maybe_async(
+                get_transcription_service(),
+                ("complete_transcription", "completeTranscription"),
+                meeting_id,
+                stage_run_id,
+                job_id,
+                payload,
+            )
+            return JSONResponse(res)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+    # Speakers API
+    @app.get("/api/speakers")
+    async def get_speakers_route() -> JSONResponse:
+        speakers = await _call_maybe_async(get_speaker_service(), ("list_speakers", "listSpeakers"))
+        return JSONResponse({"speakers": speakers})
+
+    @app.get("/api/speakers/{speaker_id}")
+    async def get_speaker_route(speaker_id: str) -> JSONResponse:
+        res = await _call_maybe_async(get_speaker_service(), ("get_speaker", "getSpeaker"), speaker_id)
+        if not res:
+            return JSONResponse({"error": "Speaker not found"}, status_code=404)
+        return JSONResponse(res)
+
+    @app.post("/api/speakers/enroll")
+    async def post_speaker_enroll_route(request: Request) -> JSONResponse:
+        content_type = request.headers.get("content-type") or ""
+        if "multipart/form-data" not in content_type.lower():
+            return JSONResponse({"error": "Multipart form data required"}, status_code=400)
+
+        try:
+            form = await request.form()
+        except Exception:
+            return JSONResponse({"error": "Multipart form data required"}, status_code=400)
+
+        name = form.get("name")
+        file_field = form.get("file")
+        speaker_id = form.get("speakerId")
+        provider = form.get("provider")
+        language = form.get("language")
+
+        if not isinstance(name, str) or not name.strip():
+            return JSONResponse({"error": "name field is required"}, status_code=400)
+        if file_field is None or not hasattr(file_field, "read"):
+            return JSONResponse({"error": "file field (audio blob) is required"}, status_code=400)
+
+        try:
+            audio_bytes = await file_field.read()  # type: ignore[union-attr]
+            filename = getattr(file_field, "filename", None) or "audio.wav"
+            mime = getattr(file_field, "content_type", None) or "audio/wav"
+            speaker = await _call_maybe_async(
+                get_speaker_service(),
+                ("enroll_speaker", "enrollSpeaker"),
+                {
+                    "name": name.strip(),
+                    "audioBytes": audio_bytes,
+                    "mime": mime,
+                    "filename": filename,
+                    "speakerId": str(speaker_id) if isinstance(speaker_id, str) else None,
+                    "provider": str(provider) if isinstance(provider, str) else None,
+                    "language": str(language) if isinstance(language, str) else None,
+                },
+            )
+            return JSONResponse({"status": "enrolled", "speaker": speaker})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+    @app.post("/api/speakers/backfill")
+    async def post_speakers_backfill_route(request: Request) -> JSONResponse:
+        body: dict[str, Any] = {}
+        try:
+            parsed = await request.json()
+            if isinstance(parsed, dict):
+                body = parsed
+        except Exception:
+            pass
+        try:
+            res = await _call_maybe_async(
+                get_speaker_service(),
+                ("backfill_voiceprints", "backfillVoiceprints"),
+                {"speakerId": body.get("speakerId"), "force": body.get("force")},
+            )
+            return JSONResponse({"status": "completed", **res})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+    @app.post("/api/speakers/rebuild")
+    async def post_speakers_rebuild_route(request: Request) -> JSONResponse:
+        body: dict[str, Any] = {}
+        try:
+            parsed = await request.json()
+            if isinstance(parsed, dict):
+                body = parsed
+        except Exception:
+            pass
+        try:
+            res = await _call_maybe_async(
+                get_speaker_service(),
+                ("rebuild_speaker_profiles", "rebuildSpeakerProfiles"),
+                {"speakerId": body.get("speakerId"), "force": body.get("force")},
+            )
+            return JSONResponse({"status": "completed", **res})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+    @app.post("/api/speakers/{speaker_id}/rebuild")
+    async def post_speaker_id_rebuild_route(speaker_id: str, request: Request) -> JSONResponse:
+        body: dict[str, Any] = {}
+        try:
+            parsed = await request.json()
+            if isinstance(parsed, dict):
+                body = parsed
+        except Exception:
+            pass
+        try:
+            res = await _call_maybe_async(
+                get_speaker_service(),
+                ("rebuild_speaker_profiles", "rebuildSpeakerProfiles"),
+                {"speakerId": speaker_id, "force": body.get("force")},
+            )
+            return JSONResponse({"status": "completed", **res})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+    @app.post("/api/speakers/{speaker_id}/backfill")
+    async def post_speaker_id_backfill_route(speaker_id: str, request: Request) -> JSONResponse:
+        body: dict[str, Any] = {}
+        try:
+            parsed = await request.json()
+            if isinstance(parsed, dict):
+                body = parsed
+        except Exception:
+            pass
+        try:
+            res = await _call_maybe_async(
+                get_speaker_service(),
+                ("backfill_voiceprints", "backfillVoiceprints"),
+                {"speakerId": speaker_id, "force": body.get("force")},
+            )
+            return JSONResponse({"status": "completed", **res})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+    @app.post("/api/speakers/merge")
+    async def post_speakers_merge_route(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Valid JSON body required"}, status_code=400)
+
+        src_id = body.get("sourceSpeakerId") if isinstance(body, dict) else None
+        tgt_id = body.get("targetSpeakerId") if isinstance(body, dict) else None
+        if not src_id or not tgt_id:
+            return JSONResponse(
+                {"error": "sourceSpeakerId and targetSpeakerId are required"},
+                status_code=400,
+            )
+
+        try:
+            merged = await _call_maybe_async(
+                get_speaker_service(),
+                ("merge_speakers", "mergeSpeakers"),
+                src_id,
+                tgt_id,
+            )
+            return JSONResponse({"speaker": merged})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @app.post("/api/meetings/{meeting_id}/speakers/reassign")
+    async def post_meeting_speaker_reassign_route(meeting_id: str, request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Valid JSON body required"}, status_code=400)
+
+        if not isinstance(body, dict) or not body.get("fromLabel") or (
+            not body.get("toSpeakerName") and not body.get("toSpeakerId")
+        ):
+            return JSONResponse(
+                {"error": "fromLabel and either toSpeakerName or toSpeakerId are required"},
+                status_code=400,
+            )
+
+        try:
+            res = await _call_maybe_async(
+                get_speaker_service(),
+                ("reassign_meeting_speaker", "reassignMeetingSpeaker"),
+                {
+                    "meetingId": meeting_id,
+                    "fromLabel": body.get("fromLabel"),
+                    "toSpeakerName": body.get("toSpeakerName"),
+                    "toSpeakerId": body.get("toSpeakerId"),
+                    "adoptVoiceprint": body.get("adoptVoiceprint"),
+                    "segmentIndex": body.get("segmentIndex"),
+                    "scope": body.get("scope"),
+                },
+            )
+            return JSONResponse(res)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @app.post("/api/meetings/{meeting_id}/speakers/confirm-segment")
+    async def post_confirm_segment_route(meeting_id: str, request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Valid JSON body required"}, status_code=400)
+
+        seg_idx = body.get("segmentIndex") if isinstance(body, dict) else None
+        if not isinstance(seg_idx, int) or isinstance(seg_idx, bool):
+            return JSONResponse(
+                {"error": "segmentIndex is required and must be a number"},
+                status_code=400,
+            )
+
+        try:
+            res = await _call_maybe_async(
+                get_speaker_service(),
+                ("confirm_meeting_segment_speaker", "confirmMeetingSegmentSpeaker"),
+                {
+                    "meetingId": meeting_id,
+                    "segmentIndex": seg_idx,
+                    "speakerName": body.get("speakerName"),
+                    "speakerId": body.get("speakerId"),
+                },
+            )
+            return JSONResponse(res)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @app.post("/api/meetings/{meeting_id}/speakers/unassign-segment")
+    async def post_unassign_segment_route(meeting_id: str, request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Valid JSON body required"}, status_code=400)
+
+        seg_idx = body.get("segmentIndex") if isinstance(body, dict) else None
+        if not isinstance(seg_idx, int) or isinstance(seg_idx, bool):
+            return JSONResponse(
+                {"error": "segmentIndex is required and must be a number"},
+                status_code=400,
+            )
+
+        try:
+            res = await _call_maybe_async(
+                get_speaker_service(),
+                ("unassign_meeting_segment_speaker", "unassignMeetingSegmentSpeaker"),
+                {"meetingId": meeting_id, "segmentIndex": seg_idx},
+            )
+            return JSONResponse(res)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @app.post("/api/meetings/{meeting_id}/speakers/split-segment")
+    async def post_split_segment_route(meeting_id: str, request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Valid JSON body required"}, status_code=400)
+
+        seg_idx = body.get("segmentIndex") if isinstance(body, dict) else None
+        if not isinstance(seg_idx, int) or isinstance(seg_idx, bool):
+            return JSONResponse(
+                {"error": "segmentIndex is required and must be a number"},
+                status_code=400,
+            )
+
+        try:
+            res = await _call_maybe_async(
+                get_speaker_service(),
+                ("split_meeting_segment", "splitMeetingSegment"),
+                {
+                    "meetingId": meeting_id,
+                    "segmentIndex": seg_idx,
+                    "wordIndex": body.get("wordIndex"),
+                    "splitMs": body.get("splitMs"),
+                    "newSpeakerName": body.get("newSpeakerName"),
+                    "newSpeakerId": body.get("newSpeakerId"),
+                },
+            )
+            return JSONResponse(res)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @app.post("/api/meetings/{meeting_id}/speakers/merge-segments")
+    async def post_merge_segments_route(meeting_id: str, request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Valid JSON body required"}, status_code=400)
+
+        seg_idx = body.get("segmentIndex") if isinstance(body, dict) else None
+        if not isinstance(seg_idx, int) or isinstance(seg_idx, bool):
+            return JSONResponse(
+                {"error": "segmentIndex is required and must be a number"},
+                status_code=400,
+            )
+
+        try:
+            res = await _call_maybe_async(
+                get_speaker_service(),
+                ("merge_meeting_segments", "mergeMeetingSegments"),
+                {"meetingId": meeting_id, "segmentIndex": seg_idx},
+            )
+            return JSONResponse(res)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @app.post("/api/meetings/{meeting_id}/speakers/link")
+    async def post_link_speaker_route(meeting_id: str, request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Valid JSON body required"}, status_code=400)
+
+        if not isinstance(body, dict) or not body.get("speakerId"):
+            return JSONResponse({"error": "speakerId is required"}, status_code=400)
+
+        try:
+            res = await _call_maybe_async(
+                get_speaker_service(),
+                ("link_meeting_speaker", "linkMeetingSpeaker"),
+                {
+                    "meetingId": meeting_id,
+                    "speakerId": body["speakerId"],
+                    "speechmaticsLabel": body.get("speechmaticsLabel"),
+                },
+            )
+            return JSONResponse(res)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @app.patch("/api/speakers/{speaker_id}")
+    async def patch_speaker_route(speaker_id: str, request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Valid JSON body required"}, status_code=400)
+
+        try:
+            updated = await _call_maybe_async(
+                get_speaker_service(),
+                ("update_speaker", "updateSpeaker"),
+                speaker_id,
+                body,
+            )
+            return JSONResponse({"speaker": updated})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @app.delete("/api/speakers/{speaker_id}")
+    async def delete_speaker_route(speaker_id: str) -> JSONResponse:
+        await _call_maybe_async(get_speaker_service(), ("delete_speaker", "deleteSpeaker"), speaker_id)
+        return JSONResponse({"status": "deleted"})
+
+    # Templates API
+    @app.get("/api/templates")
+    async def get_templates_route() -> JSONResponse:
+        templates = await template_service.list_templates()
+        return JSONResponse({"templates": [t.model_dump() for t in templates]})
+
+    @app.get("/api/templates/{template_id}")
+    async def get_template_route(template_id: str) -> JSONResponse:
+        template = await template_service.get_template(template_id)
+        if not template:
+            return JSONResponse({"error": "Template not found"}, status_code=404)
+        return JSONResponse({"template": template.model_dump()})
+
+    @app.post("/api/templates")
+    async def post_template_route(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Valid JSON body required"}, status_code=400)
+
+        try:
+            template = await template_service.create_template(body)
+            return JSONResponse({"template": template.model_dump()}, status_code=201)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @app.patch("/api/templates/{template_id}")
+    @app.put("/api/templates/{template_id}")
+    async def update_template_route(template_id: str, request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Valid JSON body required"}, status_code=400)
+
+        try:
+            template = await template_service.update_template(template_id, body)
+            return JSONResponse({"template": template.model_dump()})
+        except Exception as exc:
+            msg = str(exc)
+            return JSONResponse(
+                {"error": msg},
+                status_code=404 if "not found" in msg.lower() else 400,
+            )
+
+    @app.delete("/api/templates/{template_id}")
+    async def delete_template_route(template_id: str) -> JSONResponse:
+        try:
+            await template_service.delete_template(template_id)
+            return JSONResponse({"status": "deleted"})
+        except Exception as exc:
+            msg = str(exc)
+            return JSONResponse(
+                {"error": msg},
+                status_code=404 if "not found" in msg.lower() else 400,
+            )
+
+    @app.post("/api/templates/{template_id}/default")
+    async def post_default_template_route(template_id: str) -> JSONResponse:
+        try:
+            template = await template_service.set_default_template(template_id)
+            return JSONResponse({"template": template.model_dump()})
+        except Exception as exc:
+            msg = str(exc)
+            return JSONResponse(
+                {"error": msg},
+                status_code=404 if "not found" in msg.lower() else 400,
+            )
+
+    # LLM API
+    @app.get("/api/llm/providers")
+    async def get_llm_providers_route() -> JSONResponse:
+        providers = await _call_maybe_async(get_llm_service(), ("list_providers", "listProviders"))
+        return JSONResponse(
+            {
+                "providers": [
+                    p.model_dump() if hasattr(p, "model_dump") else p for p in providers
+                ]
+            }
+        )
+
+    @app.get("/api/llm/models")
+    async def get_llm_models_route(request: Request) -> JSONResponse:
+        q = request.query_params
+        models = await _call_maybe_async(
+            get_llm_service(),
+            ("list_models", "listModels"),
+            {
+                "provider": q.get("provider"),
+                "search": q.get("search"),
+                "limit": _numeric_query_param(q.get("limit")),
+            },
+        )
+        return JSONResponse(
+            {
+                "models": [
+                    m.model_dump(exclude_none=True) if hasattr(m, "model_dump") else m
+                    for m in models
+                ]
+            }
+        )
+
+    @app.post("/api/llm/refresh-catalog")
+    async def post_llm_refresh_catalog_route() -> JSONResponse:
+        result = await _call_maybe_async(get_llm_service(), ("refresh_catalog", "refreshCatalog"))
+        return JSONResponse({"status": "refreshed", **(result or {})})
+
+    @app.get("/api/llm/config")
+    async def get_llm_config_route() -> JSONResponse:
+        settings = await _call_maybe_async(get_llm_service(), ("get_settings", "getSettings"))
+        settings_dict = settings.model_dump() if hasattr(settings, "model_dump") else dict(settings)
+        sanitized_providers: dict[str, Any] = {}
+        for p_id, p_cfg in (settings_dict.get("providers") or {}).items():
+            entry: dict[str, Any] = {"hasApiKey": bool(p_cfg.get("apiKey"))}
+            if p_cfg.get("baseUrl") is not None:
+                entry["baseUrl"] = p_cfg["baseUrl"]
+            if p_cfg.get("headers") is not None:
+                entry["headers"] = p_cfg["headers"]
+            sanitized_providers[p_id] = entry
+        return JSONResponse(
+            {
+                "defaultProvider": settings_dict.get("defaultProvider", "google"),
+                "defaultModel": settings_dict.get("defaultModel", "gemini-2.5-flash"),
+                "defaultThinkingLevel": settings_dict.get("defaultThinkingLevel") or "off",
+                "providers": sanitized_providers,
+                "customModels": settings_dict.get("customModels") or [],
+            }
+        )
+
+    @app.post("/api/llm/config")
+    async def post_llm_config_route(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Valid JSON body required"}, status_code=400)
+
+        try:
+            updated = await _call_maybe_async(get_llm_service(), ("update_settings", "updateSettings"), body)
+            upd_dict = updated.model_dump() if hasattr(updated, "model_dump") else updated
+            return JSONResponse({"status": "updated", "settings": upd_dict})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @app.get("/api/config")
+    async def get_config_route() -> JSONResponse:
+        try:
+            config = load_app_config(app_config_paths)
+            return JSONResponse(mask_app_config(config))
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+    @app.post("/api/config")
+    async def post_config_route(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise ValueError("JSON object required")
+            current = load_app_config(app_config_paths)
+            merged = {**current.model_dump(), **body}
+            if "hfToken" in body and is_masked_secret(body.get("hfToken")):
+                merged["hfToken"] = current.hfToken
+            updated = save_app_config(merged, app_config_paths)
+            if transcription_service is not None:
+                _call_sync(
+                    transcription_service,
+                    ("set_default_provider", "setDefaultProvider"),
+                    updated.transcriptionProvider,
+                )
+            ingest_service.set_default_transcription_provider(updated.transcriptionProvider)
+            return JSONResponse({"status": "updated", "config": mask_app_config(updated)})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @app.post("/api/llm/generate")
+    async def post_llm_generate_route(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Valid JSON body required"}, status_code=400)
+
+        try:
+            res = await _call_maybe_async(get_llm_service(), ("generate_text", "generateText"), body)
+            r_dict = res.model_dump() if hasattr(res, "model_dump") else res
+            return JSONResponse(r_dict)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+    @app.post("/api/llm/test")
+    async def post_llm_test_route(request: Request) -> JSONResponse:
+        body: dict[str, Any] = {}
+        try:
+            parsed = await request.json()
+            if isinstance(parsed, dict):
+                body = parsed
+        except Exception:
+            pass
+
+        try:
+            res = await _call_maybe_async(
+                get_llm_service(),
+                ("generate_text", "generateText"),
+                {
+                    "provider": body.get("provider"),
+                    "model": body.get("model"),
+                    "prompt": "Reply with strictly the word: PONG",
+                    "apiKeyOverride": body.get("apiKey"),
+                    "baseUrlOverride": body.get("baseUrl"),
+                    "thinkingLevel": body.get("thinkingLevel"),
+                    "maxTokens": 50,
+                },
+            )
+            r_dict = res.model_dump() if hasattr(res, "model_dump") else res
+            text_out = str(r_dict.get("text") or "").strip()
+            return JSONResponse(
+                {
+                    "ok": ("pong" in text_out.lower()) or len(text_out) > 0,
+                    "response": text_out,
+                    "provider": r_dict.get("provider"),
+                    "model": r_dict.get("model"),
+                    "durationMs": r_dict.get("durationMs"),
+                    "usage": r_dict.get("usage"),
+                }
+            )
+        except Exception as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    # Plaud API
+    @app.get("/api/plaud/status")
+    async def get_plaud_status_route() -> JSONResponse:
+        status = await _call_maybe_async(get_plaud_poller(), ("get_status", "getStatus"))
+        return JSONResponse(status)
+
+    @app.post("/api/plaud/sync/trigger")
+    async def post_plaud_trigger_route() -> JSONResponse:
+        res = await _call_maybe_async(get_plaud_poller(), ("trigger",))
+        has_err = bool(res.get("error")) if isinstance(res, dict) else False
+        return JSONResponse(
+            {"status": "error" if has_err else "completed", **(res if isinstance(res, dict) else {})},
+            status_code=502 if has_err else 200,
+        )
+
+    @app.post("/api/plaud/auth/start")
+    async def post_plaud_auth_start_route() -> JSONResponse:
+        try:
+            login = await _call_maybe_async(get_oauth_manager(), ("start_manual_login", "startManualLogin"))
+            verifier = login["verifier"] if isinstance(login, dict) else login.verifier
+            state = login["state"] if isinstance(login, dict) else login.state
+            auth_url = login["authUrl"] if isinstance(login, dict) else login.auth_url
+            session_id = get_auth_sessions().create({"verifier": verifier, "state": state})
+            return JSONResponse({"authUrl": auth_url, "sessionId": session_id})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=502)
+
+    @app.post("/api/plaud/auth/complete")
+    async def post_plaud_auth_complete_route(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Request body must be valid JSON"}, status_code=400)
+
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
+
+        pasted = body.get("pastedUrlOrCode")
+        session_id = body.get("sessionId")
+        if not isinstance(pasted, str) or not pasted.strip():
+            return JSONResponse({"error": "pastedUrlOrCode is required"}, status_code=400)
+        if not isinstance(session_id, str) or not session_id:
+            return JSONResponse({"error": "sessionId is required"}, status_code=400)
+
+        sessions = get_auth_sessions()
+        session = sessions.get(session_id)
+        if not session:
+            return JSONResponse({"error": "Unknown or expired Plaud auth session"}, status_code=400)
+
+        try:
+            await _call_maybe_async(
+                get_oauth_manager(),
+                ("complete_manual_login", "completeManualLogin"),
+                pasted,
+                session["verifier"],
+                session["state"],
+            )
+            sessions.delete(session_id)
+            return JSONResponse({"status": "completed"})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=502)
+
+    # Backup & Restore API
+    @app.post("/api/backup")
+    async def post_backup_route(request: Request) -> JSONResponse:
+        try:
+            filename: str | None = None
+            content_type = request.headers.get("content-type") or ""
+            if "application/json" in content_type.lower():
+                try:
+                    body = await request.json()
+                    if isinstance(body, dict) and isinstance(body.get("filename"), str) and body["filename"].strip():
+                        filename = body["filename"].strip()
+                except Exception:
+                    pass
+            res = await _call_maybe_async(
+                get_backup_service(),
+                ("create_backup", "createBackup"),
+                {"filename": filename},
+            )
+            return JSONResponse({"ok": True, "backup": res}, status_code=201)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+    @app.get("/api/backup/list")
+    async def get_backup_list_route() -> JSONResponse:
+        try:
+            backups = await _call_maybe_async(get_backup_service(), ("list_backups", "listBackups"))
+            return JSONResponse({"ok": True, "backups": backups})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+    @app.get("/api/backup/download/{filename}")
+    async def get_backup_download_route(filename: str) -> Response:
+        try:
+            full_path = _call_sync(get_backup_service(), ("get_backup_path", "getBackupPath"), filename)
+            return FileResponse(
+                path=full_path,
+                media_type="application/gzip",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    @app.get("/api/backup/export")
+    async def get_backup_export_route() -> Response:
+        try:
+            res = await _call_maybe_async(get_backup_service(), ("create_backup", "createBackup"))
+            return FileResponse(
+                path=res["path"],
+                media_type="application/gzip",
+                headers={"Content-Disposition": f'attachment; filename="{res["filename"]}"'},
+            )
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+    @app.delete("/api/backup/{filename}")
+    async def delete_backup_route(filename: str) -> JSONResponse:
+        try:
+            await _call_maybe_async(get_backup_service(), ("delete_backup", "deleteBackup"), filename)
+            return JSONResponse({"ok": True, "message": f"Backup {filename} deleted"})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    @app.post("/api/backup/restore")
+    async def post_backup_restore_route(request: Request) -> JSONResponse:
+        try:
+            content_type = (request.headers.get("content-type") or "").lower()
+            if "multipart/form-data" in content_type:
+                form = await request.form()
+                file_field = form.get("file")
+                if file_field is None or not hasattr(file_field, "read"):
+                    return JSONResponse(
+                        {"error": "file field (backup .tar.gz archive) is required"},
+                        status_code=400,
+                    )
+                buf = await file_field.read()  # type: ignore[union-attr]
+                res = await _call_maybe_async(get_backup_service(), ("restore_backup", "restoreBackup"), buf)
+                return JSONResponse({"ok": True, "result": res})
+            if "application/json" in content_type:
+                try:
+                    body = await request.json()
+                except Exception:
+                    body = {}
+                filename = body.get("filename") if isinstance(body, dict) else None
+                if not isinstance(filename, str) or not filename:
+                    return JSONResponse(
+                        {"error": "filename is required when restoring from stored backups"},
+                        status_code=400,
+                    )
+                res = await _call_maybe_async(get_backup_service(), ("restore_backup", "restoreBackup"), filename)
+                return JSONResponse({"ok": True, "result": res})
+            return JSONResponse(
+                {"error": "Content-Type must be multipart/form-data or application/json"},
+                status_code=400,
+            )
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+    # Logs API
+    @app.get("/api/logs")
+    async def get_logs_route(request: Request) -> JSONResponse:
+        try:
+            q = request.query_params
+            min_level = (q.get("level") or "debug").lower()
+            category = (q.get("category") or "").strip()
+            meeting_id = (q.get("meetingId") or "").strip()
+            search = (q.get("search") or "").strip()
+            limit = min(max(_numeric_query_param(q.get("limit")) or 100, 1), 500)
+            offset = max(_numeric_query_param(q.get("offset")) or 0, 0)
+
+            level_hierarchy: dict[str, list[str]] = {
+                "debug": ["debug", "info", "warn", "error"],
+                "info": ["info", "warn", "error"],
+                "warn": ["warn", "error"],
+                "error": ["error"],
+            }
+            allowed_levels = level_hierarchy.get(min_level, level_hierarchy["debug"])
+            lvl_placeholders = ", ".join(f":lvl_{i}" for i in range(len(allowed_levels)))
+            params: dict[str, Any] = {
+                f"lvl_{i}": lvl for i, lvl in enumerate(allowed_levels)
+            }
+            params["limit"] = limit
+            params["offset"] = offset
+
+            where_clauses = [f"logs.level IN ({lvl_placeholders})"]
+            count_where_clauses = [f"logs.level IN ({lvl_placeholders})"]
+
+            if category:
+                where_clauses.append("logs.category = :category")
+                count_where_clauses.append("logs.category = :category")
+                params["category"] = category
+
+            if meeting_id:
+                where_clauses.append("logs.meeting_id = :meeting_id")
+                count_where_clauses.append("logs.meeting_id = :meeting_id")
+                params["meeting_id"] = meeting_id
+
+            if search:
+                params["search_pat"] = f"%{search}%"
+                where_clauses.append(
+                    "(logs.message LIKE :search_pat OR logs.details LIKE :search_pat "
+                    "OR meetings.title LIKE :search_pat OR logs.category LIKE :search_pat)"
+                )
+                count_where_clauses.append(
+                    "(logs.message LIKE :search_pat OR logs.details LIKE :search_pat "
+                    "OR logs.category LIKE :search_pat)"
+                )
+
+            where_sql = " AND ".join(where_clauses)
+            count_where_sql = " AND ".join(count_where_clauses)
+
+            with db.connect() as conn:
+                rows = conn.execute(
+                    text(
+                        f"""
+                        SELECT logs.id, logs.level, logs.category, logs.message,
+                               logs.meeting_id AS meetingId, meetings.title AS meetingTitle,
+                               logs.details, logs.created_at AS createdAt
+                        FROM logs
+                        LEFT JOIN meetings ON meetings.id = logs.meeting_id
+                        WHERE {where_sql}
+                        ORDER BY logs.created_at DESC
+                        LIMIT :limit OFFSET :offset
+                        """
+                    ),
+                    params,
+                ).mappings().all()
+
+                total = conn.execute(
+                    text(f"SELECT COUNT(id) FROM logs WHERE {count_where_sql}"),
+                    params,
+                ).scalar()
+
+                cat_rows = conn.execute(
+                    text("SELECT DISTINCT category FROM logs ORDER BY category ASC")
+                ).mappings().all()
+
+            logs = [
+                LogItem(
+                    id=r["id"],
+                    level=r["level"],  # type: ignore[arg-type]
+                    category=r["category"],
+                    message=r["message"],
+                    meetingId=r["meetingId"],
+                    meetingTitle=r["meetingTitle"],
+                    details=parse_json_field(r["details"], None),
+                    createdAt=int(r["createdAt"]),
+                ).model_dump()
+                for r in rows
+            ]
+            categories = [c["category"] for c in cat_rows if c["category"]]
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "logs": logs,
+                    "pagination": {"total": int(total or 0), "limit": limit, "offset": offset},
+                    "categories": categories,
+                }
+            )
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+    @app.delete("/api/logs")
+    async def delete_logs_route(request: Request) -> JSONResponse:
+        try:
+            older_than = _numeric_query_param(request.query_params.get("olderThanMs"))
+            with db.begin() as conn:
+                if older_than is not None:
+                    conn.execute(
+                        text("DELETE FROM logs WHERE created_at < :older_than"),
+                        {"older_than": older_than},
+                    )
+                else:
+                    conn.execute(text("DELETE FROM logs"))
+            return JSONResponse({"ok": True})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+    web_root = opts.get("webRoot") or opts.get("web_root")
+    if web_root:
+        @app.get("/{full_path:path}")
+        async def spa_fallback(full_path: str) -> Response:
+            if full_path.startswith("api/"):
+                return JSONResponse({"error": "Not found"}, status_code=404)
+            candidate = _safe_web_path(str(web_root), full_path)
+            if candidate and candidate.is_file():
+                return FileResponse(candidate)
+            index_path = Path(str(web_root)) / "index.html"
+            if index_path.is_file():
+                return FileResponse(index_path, media_type="text/html; charset=utf-8")
+            return JSONResponse({"error": "Not found"}, status_code=404)
+
+    return app
+
+
+def export_openapi_schema() -> dict[str, Any]:
+    """Exports the complete OpenAPI 3.1 schema including all Olive domain models."""
+    from . import schemas as s
+
+    db_handle = get_db()
+    app = create_app({"db": db_handle})
+    spec = app.openapi()
+    components = spec.setdefault("components", {})
+    schemas_dict = components.setdefault("schemas", {})
+
+    domain_models = [
+        s.Meeting,
+        s.Recording,
+        s.Artifact,
+        s.Speaker,
+        s.StageRunRow,
+        s.Template,
+        s.ChatUsage,
+        s.ChatMessage,
+        s.LlmModelCost,
+        s.LlmModelCatalogItem,
+        s.LlmProviderSummary,
+        s.MeetingSummaryItem,
+        s.SummaryGenerationStatus,
+        s.TranscriptionProgressUpdate,
+        s.MeetingDetailAggregate,
+        s.BackupManifestStats,
+        s.BackupManifest,
+        s.BackupInfo,
+        s.RestoreStats,
+        s.RestoreResult,
+        s.LogItem,
+        s.LogPagination,
+        s.LogListResponse,
+    ]
+    for model_cls in domain_models:
+        json_schema = model_cls.model_json_schema(
+            ref_template="#/components/schemas/{model}",
+            mode="serialization",
+        )
+        defs = json_schema.pop("$defs", {})
+        for def_name, def_schema in defs.items():
+            schemas_dict.setdefault(def_name, def_schema)
+
+        props = json_schema.get("properties", {})
+        req_set = set(json_schema.get("required", []))
+        if model_cls.__name__ == "Meeting":
+            req_set.update(props.keys())
+        elif model_cls.__name__ == "Speaker":
+            req_set.update(props.keys())
+        elif model_cls.__name__ == "MeetingDetailAggregate":
+            req_set.update(
+                ["meeting", "recordings", "artifacts", "speakers", "stageRuns", "summaries"]
+            )
+        elif model_cls.__name__ in ("TranscriptionProgressUpdate", "SummaryGenerationStatus"):
+            for k, prop_schema in list(props.items()):
+                if k not in req_set and "anyOf" in prop_schema:
+                    non_null = [t for t in prop_schema["anyOf"] if t.get("type") != "null"]
+                    if len(non_null) == 1:
+                        props[k] = {**non_null[0], "title": prop_schema.get("title", k)}
+
+        if req_set:
+            json_schema["required"] = sorted(req_set)
+        schemas_dict[model_cls.__name__] = json_schema
+
+    return spec
+
+
+def _call_sync(target: Any, method_names: tuple[str, ...], *args: Any) -> Any:
+    if target is None:
+        return None
+    for name in method_names:
+        fn = getattr(target, name, None)
+        if callable(fn):
+            return fn(*args)
+    return None
+
+
+async def _call_maybe_async(target: Any, method_names: tuple[str, ...], *args: Any) -> Any:
+    for name in method_names:
+        fn = getattr(target, name, None)
+        if callable(fn):
+            res = fn(*args)
+            if asyncio.iscoroutine(res) or isinstance(res, asyncio.Future):
+                return await res
+            return res
+    raise AttributeError(f"Object {type(target).__name__} has none of methods {method_names}")

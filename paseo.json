@@ -1,38 +1,50 @@
 {
   "worktree": {
     "setup": [
-      "bun install",
-      "bun run build"
+      "cd backend && uv sync",
+      "cd frontend && pnpm install --frozen-lockfile && pnpm run build"
     ],
     "servicePorts": {
-      "portScript": "./scripts/paseo-port.ts",
+      "portScript": "./scripts/paseo_port.py",
       "range": "4470-4499"
     }
   },
   "scripts": {
     "web": {
       "type": "service",
-      "command": "PORT=$PASEO_PORT bun run dev"
+      "command": "PORT=$PASEO_PORT python3 scripts/dev.py"
+    },
+    "dev:get:frp-url": {
+      "type": "command",
+      "command": "python3 scripts/dev_config.py frp_url --json"
     },
     "test": {
       "type": "command",
-      "command": "bun test"
+      "command": "cd backend && uv run pytest"
     },
     "typecheck": {
       "type": "command",
-      "command": "bun run typecheck"
+      "command": "cd backend && uv run ruff check src tests eval && uv run basedpyright && cd ../frontend && pnpm run typecheck"
     },
     "build": {
       "type": "command",
-      "command": "bun run build"
+      "command": "cd frontend && pnpm run build"
+    },
+    "generate:api": {
+      "type": "command",
+      "command": "cd backend && uv run python -c \"import json; from olive.app import export_openapi_schema; open('openapi.json', 'w').write(json.dumps(export_openapi_schema(), indent=2) + '\\n')\" && cd ../frontend && pnpm run generate:api"
     },
     "deploy:staging": {
       "type": "command",
-      "command": "bun run deploy:staging"
+      "command": "python3 scripts/deploy_staging.py"
     },
     "backup": {
       "type": "command",
-      "command": "bun run scripts/backup.ts"
+      "command": "cd backend && uv run olive backup"
+    },
+    "models:download": {
+      "type": "command",
+      "command": "cd backend && uv run olive models download"
     }
   },
   "metadataGeneration": {

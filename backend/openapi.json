@@ -1,0 +1,3124 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Olive API",
+    "version": "0.2.0"
+  },
+  "paths": {
+    "/api/health": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health_api_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Health Api Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/meetings": {
+      "get": {
+        "summary": "Get Meetings Route",
+        "operationId": "get_meetings_route_api_meetings_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ingest": {
+      "post": {
+        "summary": "Post Ingest Route",
+        "operationId": "post_ingest_route_api_ingest_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/meetings/{meeting_id}": {
+      "get": {
+        "summary": "Get Meeting Detail Route",
+        "operationId": "get_meeting_detail_route_api_meetings__meeting_id__get",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Meeting Route",
+        "operationId": "delete_meeting_route_api_meetings__meeting_id__delete",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/meetings/{meeting_id}/title": {
+      "put": {
+        "summary": "Put Meeting Title Route",
+        "operationId": "put_meeting_title_route_api_meetings__meeting_id__title_put",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/meetings/{meeting_id}/tags": {
+      "put": {
+        "summary": "Put Meeting Tags Route",
+        "operationId": "put_meeting_tags_route_api_meetings__meeting_id__tags_put",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/meetings/{meeting_id}/audio": {
+      "get": {
+        "summary": "Get Meeting Audio Route",
+        "operationId": "get_meeting_audio_route_api_meetings__meeting_id__audio_get",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/meetings/{meeting_id}/chat/messages": {
+      "get": {
+        "summary": "Get Chat Messages Route",
+        "operationId": "get_chat_messages_route_api_meetings__meeting_id__chat_messages_get",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Chat Messages Route",
+        "operationId": "delete_chat_messages_route_api_meetings__meeting_id__chat_messages_delete",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Post Chat Messages Route",
+        "operationId": "post_chat_messages_route_api_meetings__meeting_id__chat_messages_post",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/meetings/{meeting_id}/transcribe": {
+      "post": {
+        "summary": "Post Transcribe Route",
+        "operationId": "post_transcribe_route_api_meetings__meeting_id__transcribe_post",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/meetings/{meeting_id}/transcribe/progress": {
+      "get": {
+        "summary": "Get Transcribe Progress Route",
+        "operationId": "get_transcribe_progress_route_api_meetings__meeting_id__transcribe_progress_get",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/transcriptions/active": {
+      "get": {
+        "summary": "Get Active Transcriptions Route",
+        "operationId": "get_active_transcriptions_route_api_transcriptions_active_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/meetings/{meeting_id}/transcribe/cancel": {
+      "post": {
+        "summary": "Post Cancel Transcribe Route",
+        "operationId": "post_cancel_transcribe_route_api_meetings__meeting_id__transcribe_cancel_post",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/meetings/{meeting_id}/summarize": {
+      "post": {
+        "summary": "Post Summarize Route",
+        "operationId": "post_summarize_route_api_meetings__meeting_id__summarize_post",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/meetings/{meeting_id}/summarize/status": {
+      "get": {
+        "summary": "Get Summarize Status Route",
+        "operationId": "get_summarize_status_route_api_meetings__meeting_id__summarize_status_get",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/meetings/{meeting_id}/summaries/{artifact_id}": {
+      "delete": {
+        "summary": "Delete Summary Route",
+        "operationId": "delete_summary_route_api_meetings__meeting_id__summaries__artifact_id__delete",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          },
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Artifact Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/meetings/{meeting_id}/summaries/{artifact_id}/primary": {
+      "post": {
+        "summary": "Post Primary Summary Route",
+        "operationId": "post_primary_summary_route_api_meetings__meeting_id__summaries__artifact_id__primary_post",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          },
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Artifact Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/webhooks/speechmatics": {
+      "post": {
+        "summary": "Post Speechmatics Webhook Route",
+        "operationId": "post_speechmatics_webhook_route_api_webhooks_speechmatics_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/speakers": {
+      "get": {
+        "summary": "Get Speakers Route",
+        "operationId": "get_speakers_route_api_speakers_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/speakers/{speaker_id}": {
+      "get": {
+        "summary": "Get Speaker Route",
+        "operationId": "get_speaker_route_api_speakers__speaker_id__get",
+        "parameters": [
+          {
+            "name": "speaker_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Speaker Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Patch Speaker Route",
+        "operationId": "patch_speaker_route_api_speakers__speaker_id__patch",
+        "parameters": [
+          {
+            "name": "speaker_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Speaker Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Speaker Route",
+        "operationId": "delete_speaker_route_api_speakers__speaker_id__delete",
+        "parameters": [
+          {
+            "name": "speaker_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Speaker Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/speakers/enroll": {
+      "post": {
+        "summary": "Post Speaker Enroll Route",
+        "operationId": "post_speaker_enroll_route_api_speakers_enroll_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/speakers/backfill": {
+      "post": {
+        "summary": "Post Speakers Backfill Route",
+        "operationId": "post_speakers_backfill_route_api_speakers_backfill_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/speakers/rebuild": {
+      "post": {
+        "summary": "Post Speakers Rebuild Route",
+        "operationId": "post_speakers_rebuild_route_api_speakers_rebuild_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/speakers/{speaker_id}/rebuild": {
+      "post": {
+        "summary": "Post Speaker Id Rebuild Route",
+        "operationId": "post_speaker_id_rebuild_route_api_speakers__speaker_id__rebuild_post",
+        "parameters": [
+          {
+            "name": "speaker_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Speaker Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/speakers/{speaker_id}/backfill": {
+      "post": {
+        "summary": "Post Speaker Id Backfill Route",
+        "operationId": "post_speaker_id_backfill_route_api_speakers__speaker_id__backfill_post",
+        "parameters": [
+          {
+            "name": "speaker_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Speaker Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/speakers/merge": {
+      "post": {
+        "summary": "Post Speakers Merge Route",
+        "operationId": "post_speakers_merge_route_api_speakers_merge_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/meetings/{meeting_id}/speakers/reassign": {
+      "post": {
+        "summary": "Post Meeting Speaker Reassign Route",
+        "operationId": "post_meeting_speaker_reassign_route_api_meetings__meeting_id__speakers_reassign_post",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/meetings/{meeting_id}/speakers/confirm-segment": {
+      "post": {
+        "summary": "Post Confirm Segment Route",
+        "operationId": "post_confirm_segment_route_api_meetings__meeting_id__speakers_confirm_segment_post",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/meetings/{meeting_id}/speakers/unassign-segment": {
+      "post": {
+        "summary": "Post Unassign Segment Route",
+        "operationId": "post_unassign_segment_route_api_meetings__meeting_id__speakers_unassign_segment_post",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/meetings/{meeting_id}/speakers/split-segment": {
+      "post": {
+        "summary": "Post Split Segment Route",
+        "operationId": "post_split_segment_route_api_meetings__meeting_id__speakers_split_segment_post",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/meetings/{meeting_id}/speakers/merge-segments": {
+      "post": {
+        "summary": "Post Merge Segments Route",
+        "operationId": "post_merge_segments_route_api_meetings__meeting_id__speakers_merge_segments_post",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/meetings/{meeting_id}/speakers/link": {
+      "post": {
+        "summary": "Post Link Speaker Route",
+        "operationId": "post_link_speaker_route_api_meetings__meeting_id__speakers_link_post",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/templates": {
+      "get": {
+        "summary": "Get Templates Route",
+        "operationId": "get_templates_route_api_templates_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Post Template Route",
+        "operationId": "post_template_route_api_templates_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/templates/{template_id}": {
+      "get": {
+        "summary": "Get Template Route",
+        "operationId": "get_template_route_api_templates__template_id__get",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Update Template Route",
+        "operationId": "update_template_route_api_templates__template_id__put",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Update Template Route",
+        "operationId": "update_template_route_api_templates__template_id__patch",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Template Route",
+        "operationId": "delete_template_route_api_templates__template_id__delete",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/templates/{template_id}/default": {
+      "post": {
+        "summary": "Post Default Template Route",
+        "operationId": "post_default_template_route_api_templates__template_id__default_post",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/llm/providers": {
+      "get": {
+        "summary": "Get Llm Providers Route",
+        "operationId": "get_llm_providers_route_api_llm_providers_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/llm/models": {
+      "get": {
+        "summary": "Get Llm Models Route",
+        "operationId": "get_llm_models_route_api_llm_models_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/llm/refresh-catalog": {
+      "post": {
+        "summary": "Post Llm Refresh Catalog Route",
+        "operationId": "post_llm_refresh_catalog_route_api_llm_refresh_catalog_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/llm/config": {
+      "get": {
+        "summary": "Get Llm Config Route",
+        "operationId": "get_llm_config_route_api_llm_config_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Post Llm Config Route",
+        "operationId": "post_llm_config_route_api_llm_config_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/config": {
+      "get": {
+        "summary": "Get Config Route",
+        "operationId": "get_config_route_api_config_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Post Config Route",
+        "operationId": "post_config_route_api_config_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/llm/generate": {
+      "post": {
+        "summary": "Post Llm Generate Route",
+        "operationId": "post_llm_generate_route_api_llm_generate_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/llm/test": {
+      "post": {
+        "summary": "Post Llm Test Route",
+        "operationId": "post_llm_test_route_api_llm_test_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/plaud/status": {
+      "get": {
+        "summary": "Get Plaud Status Route",
+        "operationId": "get_plaud_status_route_api_plaud_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/plaud/sync/trigger": {
+      "post": {
+        "summary": "Post Plaud Trigger Route",
+        "operationId": "post_plaud_trigger_route_api_plaud_sync_trigger_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/plaud/auth/start": {
+      "post": {
+        "summary": "Post Plaud Auth Start Route",
+        "operationId": "post_plaud_auth_start_route_api_plaud_auth_start_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/plaud/auth/complete": {
+      "post": {
+        "summary": "Post Plaud Auth Complete Route",
+        "operationId": "post_plaud_auth_complete_route_api_plaud_auth_complete_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/backup": {
+      "post": {
+        "summary": "Post Backup Route",
+        "operationId": "post_backup_route_api_backup_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/backup/list": {
+      "get": {
+        "summary": "Get Backup List Route",
+        "operationId": "get_backup_list_route_api_backup_list_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/backup/download/{filename}": {
+      "get": {
+        "summary": "Get Backup Download Route",
+        "operationId": "get_backup_download_route_api_backup_download__filename__get",
+        "parameters": [
+          {
+            "name": "filename",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Filename"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/backup/export": {
+      "get": {
+        "summary": "Get Backup Export Route",
+        "operationId": "get_backup_export_route_api_backup_export_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/backup/{filename}": {
+      "delete": {
+        "summary": "Delete Backup Route",
+        "operationId": "delete_backup_route_api_backup__filename__delete",
+        "parameters": [
+          {
+            "name": "filename",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Filename"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/backup/restore": {
+      "post": {
+        "summary": "Post Backup Restore Route",
+        "operationId": "post_backup_restore_route_api_backup_restore_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/logs": {
+      "get": {
+        "summary": "Get Logs Route",
+        "operationId": "get_logs_route_api_logs_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Logs Route",
+        "operationId": "delete_logs_route_api_logs_delete",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "Meeting": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "startTime": {
+            "title": "Starttime",
+            "type": "integer"
+          },
+          "endTime": {
+            "title": "Endtime",
+            "type": "integer"
+          },
+          "source": {
+            "enum": [
+              "plaud",
+              "upload",
+              "ios-shortcut"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "processing",
+              "ready",
+              "error",
+              "duplicate"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          },
+          "primaryTranscriptArtifactId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Primarytranscriptartifactid"
+          },
+          "primarySummaryArtifactId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Primarysummaryartifactid"
+          },
+          "lastError": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Lasterror"
+          },
+          "createdAt": {
+            "title": "Createdat",
+            "type": "integer"
+          },
+          "updatedAt": {
+            "title": "Updatedat",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "createdAt",
+          "endTime",
+          "id",
+          "lastError",
+          "primarySummaryArtifactId",
+          "primaryTranscriptArtifactId",
+          "source",
+          "startTime",
+          "status",
+          "tags",
+          "title",
+          "updatedAt"
+        ],
+        "title": "Meeting",
+        "type": "object"
+      },
+      "Recording": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "meetingId": {
+            "title": "Meetingid",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "mime": {
+            "title": "Mime",
+            "type": "string"
+          },
+          "durationMs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Durationms"
+          },
+          "sizeBytes": {
+            "title": "Sizebytes",
+            "type": "integer"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "provider": {
+            "enum": [
+              "plaud",
+              "upload",
+              "ios-shortcut"
+            ],
+            "title": "Provider",
+            "type": "string"
+          },
+          "providerRecordingId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Providerrecordingid"
+          },
+          "createdAt": {
+            "title": "Createdat",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "createdAt",
+          "id",
+          "meetingId",
+          "mime",
+          "path",
+          "provider",
+          "sha256",
+          "sizeBytes"
+        ],
+        "title": "Recording",
+        "type": "object"
+      },
+      "Artifact": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "meetingId": {
+            "title": "Meetingid",
+            "type": "string"
+          },
+          "recordingId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Recordingid"
+          },
+          "kind": {
+            "enum": [
+              "transcript",
+              "summary"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "format": {
+            "enum": [
+              "md",
+              "txt",
+              "json",
+              "srt"
+            ],
+            "title": "Format",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "createdAt": {
+            "title": "Createdat",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "createdAt",
+          "format",
+          "id",
+          "kind",
+          "meetingId",
+          "path",
+          "provider"
+        ],
+        "title": "Artifact",
+        "type": "object"
+      },
+      "Speaker": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "providerIds": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Providerids",
+            "type": "object"
+          },
+          "enrolledAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Enrolledat"
+          },
+          "enrollmentClipPaths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Enrollmentclippaths",
+            "type": "array"
+          },
+          "createdAt": {
+            "title": "Createdat",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "createdAt",
+          "enrolledAt",
+          "enrollmentClipPaths",
+          "id",
+          "name",
+          "providerIds"
+        ],
+        "title": "Speaker",
+        "type": "object"
+      },
+      "StageRunRow": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "meeting_id": {
+            "title": "Meeting Id",
+            "type": "string"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "running",
+              "done",
+              "error",
+              "cancelled"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "provider_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Provider Job Id"
+          },
+          "attempts": {
+            "default": 0,
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Error"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Finished At"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "integer"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "created_at",
+          "id",
+          "meeting_id",
+          "stage",
+          "status",
+          "updated_at"
+        ],
+        "title": "StageRunRow",
+        "type": "object"
+      },
+      "Template": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Description"
+          },
+          "systemPrompt": {
+            "title": "Systemprompt",
+            "type": "string"
+          },
+          "userPrompt": {
+            "title": "Userprompt",
+            "type": "string"
+          },
+          "isDefault": {
+            "title": "Isdefault",
+            "type": "boolean"
+          },
+          "isBuiltin": {
+            "title": "Isbuiltin",
+            "type": "boolean"
+          },
+          "createdAt": {
+            "title": "Createdat",
+            "type": "integer"
+          },
+          "updatedAt": {
+            "title": "Updatedat",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "createdAt",
+          "id",
+          "isBuiltin",
+          "isDefault",
+          "name",
+          "systemPrompt",
+          "updatedAt",
+          "userPrompt"
+        ],
+        "title": "Template",
+        "type": "object"
+      },
+      "ChatUsage": {
+        "properties": {
+          "inputTokens": {
+            "default": 0,
+            "title": "Inputtokens",
+            "type": "integer"
+          },
+          "outputTokens": {
+            "default": 0,
+            "title": "Outputtokens",
+            "type": "integer"
+          },
+          "totalTokens": {
+            "default": 0,
+            "title": "Totaltokens",
+            "type": "integer"
+          },
+          "cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cost"
+          }
+        },
+        "title": "ChatUsage",
+        "type": "object"
+      },
+      "ChatMessage": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "meetingId": {
+            "title": "Meetingid",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "assistant"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Provider"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChatUsage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "createdAt": {
+            "title": "Createdat",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "content",
+          "createdAt",
+          "id",
+          "meetingId",
+          "role"
+        ],
+        "title": "ChatMessage",
+        "type": "object"
+      },
+      "LlmModelCost": {
+        "properties": {
+          "input": {
+            "title": "Input",
+            "type": "number"
+          },
+          "output": {
+            "title": "Output",
+            "type": "number"
+          },
+          "cacheRead": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cacheread"
+          },
+          "cacheWrite": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cachewrite"
+          }
+        },
+        "required": [
+          "input",
+          "output"
+        ],
+        "title": "LlmModelCost",
+        "type": "object"
+      },
+      "LlmModelCatalogItem": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "api": {
+            "title": "Api",
+            "type": "string"
+          },
+          "baseUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Baseurl"
+          },
+          "contextWindow": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Contextwindow"
+          },
+          "maxTokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Maxtokens"
+          },
+          "reasoning": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reasoning"
+          },
+          "supportedThinkingLevels": {
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "off",
+                    "minimal",
+                    "low",
+                    "medium",
+                    "high",
+                    "xhigh",
+                    "max"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Supportedthinkinglevels"
+          },
+          "cost": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LlmModelCost"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "source": {
+            "enum": [
+              "builtin",
+              "web",
+              "custom"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "api",
+          "id",
+          "name",
+          "provider",
+          "source"
+        ],
+        "title": "LlmModelCatalogItem",
+        "type": "object"
+      },
+      "LlmProviderSummary": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "isConfigured": {
+            "title": "Isconfigured",
+            "type": "boolean"
+          },
+          "hasCustomBaseUrl": {
+            "title": "Hascustombaseurl",
+            "type": "boolean"
+          },
+          "modelCount": {
+            "title": "Modelcount",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "hasCustomBaseUrl",
+          "id",
+          "isConfigured",
+          "modelCount",
+          "name"
+        ],
+        "title": "LlmProviderSummary",
+        "type": "object"
+      },
+      "MeetingSummaryItem": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "format": {
+            "enum": [
+              "md",
+              "txt",
+              "json",
+              "srt"
+            ],
+            "title": "Format",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "createdAt": {
+            "title": "Createdat",
+            "type": "integer"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "isPrimary": {
+            "title": "Isprimary",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "content",
+          "createdAt",
+          "format",
+          "id",
+          "isPrimary",
+          "path",
+          "provider"
+        ],
+        "title": "MeetingSummaryItem",
+        "type": "object"
+      },
+      "SummaryGenerationStatus": {
+        "properties": {
+          "meetingId": {
+            "title": "Meetingid",
+            "type": "string"
+          },
+          "stage": {
+            "enum": [
+              "running",
+              "done",
+              "error"
+            ],
+            "title": "Stage",
+            "type": "string"
+          },
+          "startedAt": {
+            "title": "Startedat",
+            "type": "integer"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "templateName": {
+            "type": "string",
+            "title": "Templatename"
+          },
+          "artifactId": {
+            "type": "string",
+            "title": "Artifactid"
+          },
+          "error": {
+            "type": "string",
+            "title": "Error"
+          }
+        },
+        "required": [
+          "meetingId",
+          "stage",
+          "startedAt"
+        ],
+        "title": "SummaryGenerationStatus",
+        "type": "object"
+      },
+      "TranscriptionProgressUpdate": {
+        "properties": {
+          "stage": {
+            "enum": [
+              "queued",
+              "decoding",
+              "uploading",
+              "diarizing",
+              "transcribing",
+              "finalizing",
+              "done",
+              "error",
+              "cancelled"
+            ],
+            "title": "Stage",
+            "type": "string"
+          },
+          "percent": {
+            "title": "Percent",
+            "type": "number"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "current": {
+            "type": "integer",
+            "title": "Current"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "currentMs": {
+            "type": "integer",
+            "title": "Currentms"
+          },
+          "totalMs": {
+            "type": "integer",
+            "title": "Totalms"
+          },
+          "speaker": {
+            "type": "string",
+            "title": "Speaker"
+          },
+          "stageRunId": {
+            "type": "string",
+            "title": "Stagerunid"
+          },
+          "error": {
+            "type": "string",
+            "title": "Error"
+          }
+        },
+        "required": [
+          "message",
+          "percent",
+          "stage"
+        ],
+        "title": "TranscriptionProgressUpdate",
+        "type": "object"
+      },
+      "MeetingDetailAggregate": {
+        "properties": {
+          "meeting": {
+            "$ref": "#/components/schemas/Meeting"
+          },
+          "recordings": {
+            "items": {
+              "$ref": "#/components/schemas/Recording"
+            },
+            "title": "Recordings",
+            "type": "array"
+          },
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/Artifact"
+            },
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "speakers": {
+            "items": {
+              "$ref": "#/components/schemas/Speaker"
+            },
+            "title": "Speakers",
+            "type": "array"
+          },
+          "stageRuns": {
+            "items": {
+              "$ref": "#/components/schemas/StageRunRow"
+            },
+            "title": "Stageruns",
+            "type": "array"
+          },
+          "transcriptContent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Transcriptcontent"
+          },
+          "summaryContent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Summarycontent"
+          },
+          "summaries": {
+            "items": {
+              "$ref": "#/components/schemas/MeetingSummaryItem"
+            },
+            "title": "Summaries",
+            "type": "array"
+          },
+          "transcriptionProgress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TranscriptionProgressUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "summaryGeneration": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SummaryGenerationStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "artifacts",
+          "meeting",
+          "recordings",
+          "speakers",
+          "stageRuns",
+          "summaries"
+        ],
+        "title": "MeetingDetailAggregate",
+        "type": "object"
+      },
+      "BackupManifestStats": {
+        "properties": {
+          "meetingCount": {
+            "minimum": 0,
+            "title": "Meetingcount",
+            "type": "integer"
+          },
+          "recordingCount": {
+            "minimum": 0,
+            "title": "Recordingcount",
+            "type": "integer"
+          },
+          "audioFilesCount": {
+            "minimum": 0,
+            "title": "Audiofilescount",
+            "type": "integer"
+          },
+          "totalAudioSizeBytes": {
+            "minimum": 0,
+            "title": "Totalaudiosizebytes",
+            "type": "integer"
+          },
+          "summaryCount": {
+            "minimum": 0,
+            "title": "Summarycount",
+            "type": "integer"
+          },
+          "speakerCount": {
+            "minimum": 0,
+            "title": "Speakercount",
+            "type": "integer"
+          },
+          "templateCount": {
+            "minimum": 0,
+            "title": "Templatecount",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "audioFilesCount",
+          "meetingCount",
+          "recordingCount",
+          "speakerCount",
+          "summaryCount",
+          "templateCount",
+          "totalAudioSizeBytes"
+        ],
+        "title": "BackupManifestStats",
+        "type": "object"
+      },
+      "BackupManifest": {
+        "properties": {
+          "version": {
+            "title": "Version",
+            "type": "string"
+          },
+          "createdAt": {
+            "title": "Createdat",
+            "type": "string"
+          },
+          "oliveVersion": {
+            "title": "Oliveversion",
+            "type": "string"
+          },
+          "app": {
+            "title": "App",
+            "type": "string"
+          },
+          "stats": {
+            "$ref": "#/components/schemas/BackupManifestStats"
+          }
+        },
+        "required": [
+          "app",
+          "createdAt",
+          "oliveVersion",
+          "stats",
+          "version"
+        ],
+        "title": "BackupManifest",
+        "type": "object"
+      },
+      "BackupInfo": {
+        "properties": {
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "sizeBytes": {
+            "minimum": 0,
+            "title": "Sizebytes",
+            "type": "integer"
+          },
+          "createdAt": {
+            "title": "Createdat",
+            "type": "string"
+          },
+          "manifest": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BackupManifest"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "createdAt",
+          "filename",
+          "sizeBytes"
+        ],
+        "title": "BackupInfo",
+        "type": "object"
+      },
+      "RestoreStats": {
+        "properties": {
+          "meetings": {
+            "minimum": 0,
+            "title": "Meetings",
+            "type": "integer"
+          },
+          "recordings": {
+            "minimum": 0,
+            "title": "Recordings",
+            "type": "integer"
+          },
+          "audioFiles": {
+            "minimum": 0,
+            "title": "Audiofiles",
+            "type": "integer"
+          },
+          "summaries": {
+            "minimum": 0,
+            "title": "Summaries",
+            "type": "integer"
+          },
+          "speakers": {
+            "minimum": 0,
+            "title": "Speakers",
+            "type": "integer"
+          },
+          "templates": {
+            "minimum": 0,
+            "title": "Templates",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "audioFiles",
+          "meetings",
+          "recordings",
+          "speakers",
+          "summaries",
+          "templates"
+        ],
+        "title": "RestoreStats",
+        "type": "object"
+      },
+      "RestoreResult": {
+        "properties": {
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          },
+          "restoredAt": {
+            "title": "Restoredat",
+            "type": "string"
+          },
+          "manifest": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BackupManifest"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "stats": {
+            "$ref": "#/components/schemas/RestoreStats"
+          }
+        },
+        "required": [
+          "restoredAt",
+          "stats",
+          "success"
+        ],
+        "title": "RestoreResult",
+        "type": "object"
+      },
+      "LogItem": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "level": {
+            "enum": [
+              "debug",
+              "info",
+              "warn",
+              "error"
+            ],
+            "title": "Level",
+            "type": "string"
+          },
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "meetingId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Meetingid"
+          },
+          "meetingTitle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Meetingtitle"
+          },
+          "details": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Details"
+          },
+          "createdAt": {
+            "title": "Createdat",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "category",
+          "createdAt",
+          "id",
+          "level",
+          "message"
+        ],
+        "title": "LogItem",
+        "type": "object"
+      },
+      "LogPagination": {
+        "properties": {
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "limit",
+          "offset",
+          "total"
+        ],
+        "title": "LogPagination",
+        "type": "object"
+      },
+      "LogListResponse": {
+        "properties": {
+          "logs": {
+            "items": {
+              "$ref": "#/components/schemas/LogItem"
+            },
+            "title": "Logs",
+            "type": "array"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/LogPagination"
+          },
+          "categories": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Categories",
+            "type": "array"
+          }
+        },
+        "required": [
+          "categories",
+          "logs",
+          "pagination"
+        ],
+        "title": "LogListResponse",
+        "type": "object"
+      }
+    }
+  }
+}

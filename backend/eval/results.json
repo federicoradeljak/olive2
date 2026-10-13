@@ -1,0 +1,76 @@
+{
+  "ami_utterances": 36,
+  "ami_speakers": [
+    "FEO070",
+    "FEO072",
+    "MEE071",
+    "MEE073"
+  ],
+  "embeddings": [
+    {
+      "model": "Wespeaker/wespeaker-voxceleb-resnet293-LM/voxceleb_resnet293_LM.onnx",
+      "utterance_count": 36,
+      "positive_pairs": 146,
+      "negative_pairs": 484,
+      "eer_pct": 3.91,
+      "eer_threshold": 0.27,
+      "far_1pct_threshold": 0.35,
+      "tar_at_far_1pct": 87.67,
+      "pos_mean": 0.584,
+      "pos_std": 0.164,
+      "neg_mean": 0.052,
+      "neg_std": 0.108,
+      "avg_extract_ms": 334.3
+    },
+    {
+      "model": "Wespeaker/wespeaker-voxceleb-resnet221-LM/voxceleb_resnet221_LM.onnx",
+      "utterance_count": 36,
+      "positive_pairs": 146,
+      "negative_pairs": 484,
+      "eer_pct": 5.97,
+      "eer_threshold": 0.275,
+      "far_1pct_threshold": 0.343,
+      "tar_at_far_1pct": 86.99,
+      "pos_mean": 0.572,
+      "pos_std": 0.178,
+      "neg_mean": 0.068,
+      "neg_std": 0.105,
+      "avg_extract_ms": 256.3
+    }
+  ],
+  "alignment": [
+    {
+      "aligner": "ctc-forced-aligner (MMS-300m ONNX)",
+      "audio_duration_s": 41.36,
+      "load_time_s": 1.01,
+      "align_time_s": 9.39,
+      "rtf": 0.2269,
+      "total_words": 115,
+      "turn_start_mae_ms": 195.0,
+      "turn_end_mae_ms": 526.7,
+      "speaker_word_attribution_acc_pct": 100.0
+    },
+    {
+      "aligner": "torchaudio WAV2VEC2_ASR_BASE_960H",
+      "audio_duration_s": 41.36,
+      "load_time_s": 6.31,
+      "align_time_s": 1.45,
+      "rtf": 0.0351,
+      "total_words": 115,
+      "turn_start_mae_ms": 215.4,
+      "turn_end_mae_ms": 465.5,
+      "speaker_word_attribution_acc_pct": 99.13
+    },
+    {
+      "aligner": "torchaudio WAV2VEC2_ASR_LARGE_LV60K_960H",
+      "audio_duration_s": 41.36,
+      "load_time_s": 21.48,
+      "align_time_s": 4.03,
+      "rtf": 0.0974,
+      "total_words": 115,
+      "turn_start_mae_ms": 139.3,
+      "turn_end_mae_ms": 451.2,
+      "speaker_word_attribution_acc_pct": 100.0
+    }
+  ]
+}

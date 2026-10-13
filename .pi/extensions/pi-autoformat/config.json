@@ -1,15 +1,11 @@
 {
   "$schema": "https://raw.githubusercontent.com/gotgenes/pi-autoformat/main/schemas/pi-autoformat.schema.json",
   "formatters": {
-    "biome": {
-      "command": ["bunx", "biome", "format", "--write"]
+    "ruff": {
+      "command": ["uv", "run", "--project", "backend", "ruff", "format"]
     }
   },
   "chains": {
-    ".ts": ["biome"],
-    ".tsx": ["biome"],
-    ".js": ["biome"],
-    ".jsx": ["biome"],
-    ".json": ["biome"]
+    ".py": ["ruff"]
   }
 }

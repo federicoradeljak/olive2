@@ -1,18 +1,20 @@
 <div align="center">
 
-# 🫒 Olive
+# Olive
 
-**Self-Hosted AI Meeting Intelligence, Speaker Diarization & Audio Archive**
+**Self-hosted meeting transcription, speaker diarization, and audio archive**
 
-A private, self-hosted system that ingests audio from hardware voice recorders, mobile voice memos, and browser uploads — automatically transcribing, diarizing with neural speaker identification, and generating structured AI summaries with customizable templates.
+Ingests audio from Plaud hardware recorders, iOS Voice Memos, and browser uploads. Runs local or cloud transcription, matches speakers across meetings with neural voiceprints, and generates Markdown summaries from prompt templates.
 
-[![Bun](https://img.shields.io/badge/Bun-1.4+-black?style=flat-square&logo=bun)](https://bun.sh)
+[![Python](https://img.shields.io/badge/Python-3.12+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue?style=flat-square&logo=typescript)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-19-61dafb?style=flat-square&logo=react)](https://react.dev/)
 [![TailwindCSS](https://img.shields.io/badge/Tailwind-v3-38bdf8?style=flat-square&logo=tailwindcss)](https://tailwindcss.com/)
-[![SQLite](https://img.shields.io/badge/SQLite-bun:sqlite-003B57?style=flat-square&logo=sqlite)](https://sqlite.org/)
-[![Sherpa ONNX](https://img.shields.io/badge/Diarization-Sherpa--ONNX-green?style=flat-square)](https://github.com/k2-fsa/sherpa-onnx)
-[![Qwen3 ASR](https://img.shields.io/badge/Local%20ASR-Qwen3--ASR%201.7B-purple?style=flat-square)](https://huggingface.co/ggml-org/Qwen3-ASR-1.7B-GGUF)
+[![SQLite](https://img.shields.io/badge/SQLite-SQLAlchemy%202-003B57?style=flat-square&logo=sqlite)](https://sqlite.org/)
+[![pyannote.audio](https://img.shields.io/badge/Diarization-pyannote%20community--1-green?style=flat-square)](https://github.com/pyannote/pyannote-audio)
+[![WeSpeaker](https://img.shields.io/badge/Voiceprints-WeSpeaker%20ResNet293-orange?style=flat-square)](https://github.com/wenet-e2e/wespeaker)
+[![Cohere Transcribe](https://img.shields.io/badge/Local%20ASR-Cohere%20Transcribe%20INT8-purple?style=flat-square)](https://huggingface.co/CohereLabs/cohere-transcribe-03-2026)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=flat-square&logo=docker)](https://docker.com)
 
 <br/>
@@ -23,53 +25,50 @@ A private, self-hosted system that ingests audio from hardware voice recorders, 
 
 ---
 
-## ✨ Features at a Glance
+## Features
 
 | Feature | Description |
 | :--- | :--- |
-| 🎙️ **Multi-Source Audio Ingestion** | Upload `.m4a`, `.mp3`, `.wav`, `.aac`, `.ogg`, `.flac`, `.webm` with automatic SHA-256 deduplication and instant transcription. |
-| 📲 **Plaud Note Integration** | Native OAuth 2.0 PKCE sync with official Plaud Cloud — automatically fetches recordings, transcripts, and AI notes. |
-| 📱 **Apple Voice Memos Shortcut** | One-tap iOS Share-Sheet shortcut to send recordings directly to your Olive instance from iPhone or iPad. |
-| 🧠 **Dual Transcription Pipeline** | Choose between fast **Local Neural STT** (Qwen3-ASR 1.7B GGUF / ONNX / Cohere / Granite) or cloud **Speechmatics**. |
-| 👤 **Neural Speaker Diarization** | Local Sherpa-ONNX 3D-Speaker / ECAPA-TDNN neural embeddings for cross-meeting voiceprint matching and speaker recognition. |
-| 🤖 **Multi-Provider LLM Summaries** | Powered by `pi-ai` model catalog. Connect to Google Gemini, Anthropic Claude, OpenAI, Ollama, LM Studio, or custom proxies. |
-| 📝 **Customizable Summary Templates** | Parameterized prompt templates (`1-on-1 Catchup`, `Action Items & Decisions`, `Sprint Retrospective`) with live Markdown previews. |
-| 📊 **Real-Time System & Job Logs** | Live 3-second streaming log viewer with category filters, severity levels (`DEBUG+` to `ERROR`), and structured payload inspection. |
-| 💾 **Complete Backup & Disaster Recovery** | Single-click `.tar.gz` export and restore containing database snapshots, configurations, prompt templates, and all audio files. |
+| **Multi-source audio ingestion** | Upload `.m4a`, `.mp3`, `.wav`, `.aac`, `.ogg`, `.flac`, `.webm` with SHA-256 deduplication and optional auto-transcription. |
+| **Plaud Note integration** | OAuth 2.0 PKCE sync with Plaud Cloud. Polls in the background for recordings, transcripts, and AI notes. |
+| **Apple Voice Memos shortcut** | One-tap iOS Share-Sheet shortcut to upload recordings directly from iPhone or iPad. |
+| **Dual transcription pipeline** | Local neural STT (Cohere Transcribe 03-2026 INT8 ONNX + CTC forced alignment) or cloud Speechmatics. |
+| **Speaker diarization & voiceprints** | Local `pyannote.audio` (`speaker-diarization-community-1`) + WeSpeaker ResNet293-LM 256-dim embeddings for cross-meeting speaker recognition. |
+| **Multi-provider LLM summaries** | Powered by `any-llm` and the `models.dev` catalog. Works with Gemini, Claude, OpenAI, Groq, OpenRouter, Ollama, or custom OpenAI-compatible proxies. |
+| **Summary templates** | Prompt templates (`Executive Summary`, `1-on-1 Catchup`, `Technical Architecture & Design Review`, `Action Items & Decisions`) with `{{title}}`, `{{date}}`, `{{speakers}}`, and `{{transcript}}` variables. |
+| **System & job logs** | Streaming log viewer with category filters, severity levels (`DEBUG` to `ERROR`), and JSON detail inspection. |
+| **Backup & restore** | Single-click `.tar.gz` export and restore containing the SQLite snapshot, settings, speaker clips, transcripts, summaries, and raw audio files. |
 
 ---
 
-## 📸 Application Showcase
+## Screenshots
 
-### Meeting Archive & Detail View
-Review audio recordings with interactive seekbars, voice enhancement indicators, speaker identification, and multi-version AI summaries with raw markdown copy & preview.
+### Meeting archive & detail view
 
 <div align="center">
   <img src="docs/screenshots/meetings-dashboard.png" alt="Olive Meetings Dashboard" width="100%" />
-  <p><em>Meetings Archive Dashboard with instant search, duration metadata, and source tags.</em></p>
+  <p><em>Meetings dashboard with full-text search across titles, tags, transcripts, and summaries.</em></p>
 </div>
 
 <br/>
 
 <div align="center">
   <img src="docs/screenshots/meeting-detail.png" alt="Meeting Detail with Audio and Summary" width="100%" />
-  <p><em>Detailed Meeting View featuring HTML5 audio player, speaker pills, and rendered Markdown AI summaries.</em></p>
+  <p><em>Meeting detail view with seekable audio player, speaker assignment pills, and Markdown summaries.</em></p>
 </div>
 
 ---
 
-### LLM Provider & Neural ASR Settings
-Switch between cloud and local AI providers on the fly with granular control over reasoning levels and diarization clustering sensitivities.
+### LLM provider & local ASR settings
 
 <div align="center">
   <img src="docs/screenshots/llm-settings.png" alt="LLM Provider and ASR Settings" width="70%" />
-  <p><em>Unified model catalog, thinking / reasoning level configuration, and diarization sensitivity sliders.</em></p>
+  <p><em>Model catalog, reasoning/thinking level config, Hugging Face token, and diarization/voiceprint thresholds.</em></p>
 </div>
 
 ---
 
-### Ingestion & Hardware Integration
-Easily upload local audio files or connect Plaud hardware devices via automated OAuth token sync.
+### Ingestion & Plaud sync
 
 <div align="center">
   <table>
@@ -77,12 +76,12 @@ Easily upload local audio files or connect Plaud hardware devices via automated 
       <td width="50%" align="center">
         <img src="docs/screenshots/upload-modal.png" alt="Upload Audio Recording" />
         <br/>
-        <em>Direct audio file upload with auto-transcribe toggle and engine picker.</em>
+        <em>Direct audio upload with auto-transcribe toggle and engine selector.</em>
       </td>
       <td width="50%" align="center">
         <img src="docs/screenshots/plaud-integration.png" alt="Plaud Device Sync" />
         <br/>
-        <em>Plaud Cloud OAuth 2.0 integration with automatic recording & PCS sync.</em>
+        <em>Plaud Cloud OAuth 2.0 PKCE login and background sync.</em>
       </td>
     </tr>
   </table>
@@ -90,37 +89,27 @@ Easily upload local audio files or connect Plaud hardware devices via automated 
 
 ---
 
-### Customizable Summary Templates
-Define structured summary formats tailored to specific meeting workflows (1-on-1s, Standups, Executive Briefs, Technical Architecture Reviews).
+### Summary templates, logs & backups
 
 <div align="center">
   <img src="docs/screenshots/summary-templates.png" alt="Summary Prompt Templates" width="100%" />
-  <p><em>Customizable prompt templates with variable interpolation (<code>{{title}}</code>, <code>{{date}}</code>, <code>{{speakers}}</code>, <code>{{transcript}}</code>).</em></p>
 </div>
 
----
-
-### Real-Time Observability & System Logs
-Monitor ingestion queues, diarization steps, model inference latency, and Plaud polling in real time with live streaming logs.
+<br/>
 
 <div align="center">
   <img src="docs/screenshots/system-logs.png" alt="System and Job Logs" width="100%" />
-  <p><em>Live 3s streaming log console with category filters and structured execution metadata.</em></p>
 </div>
 
----
-
-### Full Backup & Disaster Recovery
-Export and restore database snapshots, settings, templates, transcripts, notes, and raw audio files in a single self-contained archive.
+<br/>
 
 <div align="center">
   <img src="docs/screenshots/backup-restore.png" alt="Backup and Restore" width="100%" />
-  <p><em>One-click full system backup export and archive restore manager.</em></p>
 </div>
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 SOURCES                           PIPELINE & ARTIFACT STORE                       INTELLIGENCE & EXPORT
@@ -139,62 +128,61 @@ SOURCES                           PIPELINE & ARTIFACT STORE                     
                                  ▼                                           ▼
                     ┌─────────────────────────┐                 ┌─────────────────────────┐
                     │     Transcription &     │                 │   LLM Summarization &   │
-                    │   Speaker Diarization   │                 │    Action Item Engine   │
+                    │   Speaker Diarization   │                 │      Meeting Chat       │
                     │ ─────────────────────── │                 │ ─────────────────────── │
-                    │ • Local: Qwen3-ASR 1.7B │                 │ • pi-ai Unified Catalog │
-                    │ • Sherpa-ONNX 3D-Spkr   │                 │ • Gemini / Claude / GPT │
-                    │ • Cloud: Speechmatics   │                 │ • Local Ollama / vLLM   │
-                    │ • Voiceprint Enrollment │                 │ • Structured Templates  │
+                    │ • Cohere Transcribe INT8│                 │ • any-llm + models.dev  │
+                    │ • MMS CTC Forced Aligner│                 │ • Gemini / Claude / GPT │
+                    │ • pyannote community-1  │                 │ • Local Ollama / vLLM   │
+                    │ • WeSpeaker ResNet293   │                 │ • Structured Templates  │
+                    │ • Cloud: Speechmatics   │                 │ • Read-only /mcp Server │
                     └─────────────────────────┘                 └─────────────────────────┘
                                  │                                           │
                                  └─────────────────────┬─────────────────────┘
                                                        │
                                                        ▼
                                         ┌─────────────────────────────┐
-                                        │     Interactive Web App     │
+                                        │     React 19 + Vite SPA     │
                                         │  Markdown • Audio • Backup  │
                                         └─────────────────────────────┘
 ```
 
 ---
 
-## 🚀 Quickstart
+## Quickstart
 
 ### Prerequisites
-- [Bun](https://bun.sh) (v1.4+)
-- `ffmpeg` (for local audio decoding)
-- (Optional) Vulkan drivers / GPU for local ASR acceleration
+- [uv](https://docs.astral.sh/uv/) (Python 3.12+)
+- [pnpm](https://pnpm.io/) (Node.js 22+)
+- `ffmpeg` and `libsndfile1`
 
-### Local Installation
+### Local installation
 
 ```bash
 # 1. Clone the repository
 git clone https://github.com/mcowger/olive.git
 cd olive
 
-# 2. Install dependencies
-bun install
+# 2. Install Python backend dependencies
+cd backend && uv sync && cd ..
 
-# 3. Download local speech & diarization models (Qwen3-ASR & Sherpa-ONNX)
-bun run scripts/download-models.ts
+# 3. Pre-download local speech, diarization, alignment & voiceprint models
+cd backend && uv run olive models download && cd ..
 
-# 4. Build web frontend
-bun run build
+# 4. Install and build the React frontend
+cd frontend && pnpm install && pnpm run build && cd ..
 
 # 5. Start the server
-bun run start
+cd backend && uv run olive serve
 ```
 
-Visit **`http://localhost:4471`** in your browser.
+Open **`http://localhost:4471`**.
 
 ---
 
-## 🐳 Docker Deployment
-
-Olive includes a production-ready multi-stage Dockerfile with bundled `llama.cpp` Vulkan acceleration, `sherpa-onnx`, and `ffmpeg`.
+## Docker deployment
 
 ```bash
-# Build Docker image
+# Build image
 docker build -t olive:latest .
 
 # Run container with persistent data volume
@@ -208,32 +196,29 @@ docker run -d \
 
 ---
 
-## ⚙️ Configuration & Environment Variables
+## Configuration & environment variables
 
-Olive stores dynamic settings in `<data>/config/settings.json`, and accepts environment variables for bootstrap and secrets:
+Olive stores runtime settings in `<configDir>/settings.json` and accepts environment variables for bootstrap and secrets:
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `PORT` / `OLIVE_BIND_PORT` | `4471` | Port for the HTTP server |
-| `OLIVE_BIND_HOST` | `127.0.0.1` | Network interface to bind (use `0.0.0.0` for Docker / LAN access) |
-| `OLIVE_CONFIG_DIR` | `~/.config/olive` | Location for database, templates, and configuration |
-| `OLIVE_MEETINGS_DIR` | `~/.config/olive/meetings` | Storage directory for raw audio files and artifacts |
-| `OLIVE_MODELS_DIR` | `~/.config/olive/models` | Storage path for local ONNX/GGUF models |
-| `OLIVE_INGEST_TOKEN` | *(optional)* | Bearer token required for `/api/ingest` (used by iOS Shortcut) |
+| `PORT` / `OLIVE_BIND_PORT` | `4471` | HTTP server port |
+| `OLIVE_BIND_HOST` | `127.0.0.1` | Bind address (`0.0.0.0` in Docker) |
+| `OLIVE_CONFIG_DIR` | `~/.config/olive` | Directory for `olive.sqlite`, `settings.json`, and speaker clips (`~/Library/Application Support/olive` on macOS) |
+| `OLIVE_MEETINGS_DIR` | `<configDir>/meetings` | Storage directory for meeting folders (`audio/`, `transcripts/`, `summaries/`) |
+| `OLIVE_MODELS_DIR` | `<configDir>/models` | Cache directory for local Hugging Face and ONNX models |
+| `HF_TOKEN` | *(optional)* | Hugging Face token for gated `pyannote` models (overrides `hfToken` in Settings UI) |
+| `OLIVE_INGEST_TOKEN` | *(optional)* | Bearer token required for `POST /api/ingest` |
 | `OLIVE_MCP_TOKEN` | *(optional)* | Bearer token for `/mcp`; falls back to `OLIVE_INGEST_TOKEN` and is required for non-loopback binds |
-| `PLAUD_TOKEN_PATH` | `~/.plaud/tokens.json` | Path to persistent OAuth credentials for Plaud Cloud |
-| `SPEECHMATICS_API_KEY` | *(optional)* | API key for Speechmatics cloud transcription & diarization |
-| `SPEECHMATICS_WEBHOOK_SECRET` | *(optional)* | Secret used to sign and verify Speechmatics webhook callbacks |
+| `PLAUD_TOKEN_PATH` | `<configDir>/plaud-tokens.json` | OAuth token file for Plaud Cloud (migrates `~/.plaud/tokens.json` automatically if present) |
+| `SPEECHMATICS_API_KEY` | *(optional)* | API key for Speechmatics cloud batch transcription |
+| `SPEECHMATICS_WEBHOOK_SECRET` | *(optional)* | Shared secret for `POST /api/webhooks/speechmatics` |
 
-The default transcription engine is configured in **LLM Provider & Model Settings → Automatic Transcription Engine**. Local transcription is the default; choose Speechmatics there only when `SPEECHMATICS_API_KEY` is configured.
+### MCP endpoint
 
-### MCP integration
+Olive exposes a read-only Model Context Protocol server at `/mcp` on the main HTTP port (`list_meetings`, `get_meeting`, `search_transcripts`, `get_action_items`, `list_speakers`, `get_speaker_profile`).
 
-Olive exposes a read-only Model Context Protocol endpoint at `/mcp` on the main server port. It provides tools for listing meetings, retrieving meeting details, searching transcripts, extracting summary checklist items, and looking up speakers.
-
-Local loopback clients can connect without a token. Set `OLIVE_MCP_TOKEN` to protect the endpoint; it falls back to `OLIVE_INGEST_TOKEN`. A token is required when `OLIVE_BIND_HOST` is not a loopback address.
-
-Example client configuration:
+Loopback clients can connect without a token. Set `OLIVE_MCP_TOKEN` (or `OLIVE_INGEST_TOKEN`) when binding to a non-loopback interface.
 
 ```json
 {
@@ -250,71 +235,54 @@ Example client configuration:
 
 ---
 
-## 📱 Integrations
+## Integrations
 
-### 1. Apple Voice Memos (iOS Share-Sheet Shortcut)
-Upload voice memos directly from an iPhone or iPad to Olive in one tap:
-
+### 1. Apple Voice Memos (iOS Shortcut)
 1. Open **Shortcuts** on iOS and create a new shortcut.
-2. Set **Receive:** `Audio & Files` from the Share Sheet.
-3. Add action: **Get Contents of URL**
-   - **URL:** `https://<your-olive-instance>/api/ingest`
+2. Set **Receive:** `Audio` and `Files` from the Share Sheet.
+3. Add **Get Contents of URL**:
+   - **URL:** `https://<your-olive-host>/api/ingest`
    - **Method:** `POST`
    - **Headers:** `Authorization: Bearer <YOUR_OLIVE_INGEST_TOKEN>`
-   - **Request Body:** `Form`
-     - `file` $\rightarrow$ `Shortcut Input`
-     - `autoTranscribe` $\rightarrow$ `true`
-     - `source` $\rightarrow$ `ios-shortcut`
-4. Tap **Share** on any Voice Memo $\rightarrow$ select your shortcut.
+   - **Request Body:** `Form` (`file` = `Shortcut Input`, `autoTranscribe` = `true`, `source` = `ios-shortcut`)
 
-### 2. Plaud Note & Plaud AI Cloud
-1. Click the **Plaud** button in the header.
-2. Complete OAuth authentication.
-3. Olive polls in the background, automatically pulling recordings, PCS transcripts, and summaries when ready.
+### 2. Plaud Note & Plaud Cloud
+1. Click **Plaud** in the top navigation bar.
+2. Click **Start Login**, authorize in your browser, and paste the callback URL.
+3. Olive polls Plaud Cloud in the background and imports recordings, transcripts, and AI notes.
 
 ---
 
-## 💾 Backup & Disaster Recovery
+## Backup & restore
 
-Olive provides database-consistent snapshots combining SQLite data, configuration, templates, and raw audio files into a single `.tar.gz` archive.
-
-### Create a Backup
-- **Web UI:** Navigate to the **Backup** tab $\rightarrow$ click **Download Full Backup (.tar.gz)** or **Save Server Snapshot**.
+- **Web UI:** Open the **Backup** tab to download a `.tar.gz` archive, save a snapshot on the server, or upload an archive to restore.
 - **CLI:**
   ```bash
-  bun run scripts/backup.ts ./my-backup.tar.gz
-  ```
-
-### Restore from Backup
-- **Web UI:** Upload any Olive `.tar.gz` archive in the **Backup** tab.
-- **CLI:**
-  ```bash
-  bun run scripts/restore.ts ./my-backup.tar.gz
+  cd backend && uv run olive backup ./my-backup.tar.gz
+  cd backend && uv run olive restore ./my-backup.tar.gz
   ```
 
 ---
 
-## 🛠️ Development
+## Development
 
 ```bash
-# Start backend and web client concurrently with live watch and HMR
-bun run dev
+# Start backend with live reload
+cd backend && uv run uvicorn olive.main:app --reload --port 4471
 
-# Run only the backend API server with watch mode
-bun run dev:server
+# Start Vite dev server (proxies /api and /mcp to http://127.0.0.1:4471)
+cd frontend && pnpm run dev
 
-# Run only the web frontend with Bun HMR
-bun run dev:web
+# Lint, typecheck, and run backend tests
+cd backend && uv run ruff check src tests eval && uv run basedpyright && uv run pytest
 
-# Run full test suite
-bun test
-
-# Run TypeScript typechecks across all monorepo workspaces
-bun run typecheck
+# Export OpenAPI schema, regenerate frontend TS types, typecheck, and build
+cd backend && uv run python -c "import json; from olive.app import export_openapi_schema; open('openapi.json', 'w').write(json.dumps(export_openapi_schema(), indent=2) + '\n')"
+cd ../frontend && pnpm run generate:api && pnpm run typecheck && pnpm run build
 ```
 
 ---
 
-## 📄 License
+## License
 
 MIT © [Matt Cowger](https://github.com/mcowger)

@@ -1,8 +1,15 @@
 node_modules
-dist
+frontend/node_modules
+frontend/dist
+backend/.venv
+backend/.pytest_cache
+backend/.ruff_cache
+__pycache__
 .git
 .env
 .env.*
+mise.local.toml
+*.local.toml
 data
 /tmp
 *.log
