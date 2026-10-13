@@ -5517,6 +5517,25 @@ function DebugQueuesPage() {
                                 ) : null}
                               </div>
                             )}
+                            {(() => {
+                              const prog = job.meetingId
+                                ? snapshot.activeTranscriptions[job.meetingId]
+                                : undefined;
+                              if (!prog) return null;
+                              return (
+                                <div className="space-y-0.5 pt-0.5">
+                                  <div className="text-amber-300">
+                                    Stage: <span className="text-stone-100">{prog.stage}</span> · {prog.percent ?? 0}%
+                                    {prog.current != null && prog.total != null
+                                      ? ` · batch ${prog.current}/${prog.total}`
+                                      : ""}
+                                  </div>
+                                  {prog.message && (
+                                    <div className="text-stone-400">{prog.message}</div>
+                                  )}
+                                </div>
+                              );
+                            })()}
                           </div>
                         ))
                       )}
