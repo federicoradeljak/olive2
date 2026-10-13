@@ -237,6 +237,7 @@ class PyannoteSpeakerDiarizer:
         expected_speaker_count: int | None = None,
         progress_cb: Callable[[dict[str, Any]], Any] | None = None,
         meeting_id: str | None = None,
+        loop: asyncio.AbstractEventLoop | None = None,
     ) -> list[tuple[float, float, int]]:
         pipe = self._ensure_pipeline_sync()
         torch.set_num_threads(self.num_threads)
@@ -254,8 +255,11 @@ class PyannoteSpeakerDiarizer:
                 return
             try:
                 res = progress_cb(payload)
-                if inspect.isawaitable(res):
-                    pass
+                if inspect.iscoroutine(res):
+                    if loop is not None and not loop.is_closed():
+                        asyncio.run_coroutine_threadsafe(res, loop)
+                    else:
+                        res.close()
             except Exception:
                 pass
 
@@ -443,6 +447,7 @@ class PyannoteSpeakerDiarizer:
         )
 
         raw_segments: list[tuple[float, float, int]] = []
+        running_loop = asyncio.get_running_loop()
         try:
             raw_segments = await asyncio.to_thread(
                 self._run_pyannote_sync,
@@ -450,6 +455,7 @@ class PyannoteSpeakerDiarizer:
                 expected_speaker_count,
                 on_progress,
                 meeting_id,
+                running_loop,
             )
         except Exception as exc:
             logger.warn(

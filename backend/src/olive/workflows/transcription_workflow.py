@@ -1046,12 +1046,25 @@ async def get_debug_queues_snapshot(
 
     meeting_titles: dict[str, str] = {}
     running_stage_runs: list[dict[str, Any]] = []
+    active_meeting_ids = set((active_transcriptions or {}).keys())
+    for ctx in _TASK_CONTEXTS.values():
+        if ctx.meeting_id:
+            active_meeting_ids.add(ctx.meeting_id)
+    for w in all_wfs:
+        if getattr(w, "status", None) in ("PENDING", "ENQUEUED", "DELAYED"):
+            _, m_id = _extract_job_details(w)
+            if m_id:
+                active_meeting_ids.add(m_id)
+
     if db is not None:
-        try:
+
+        def _query_olive_db() -> tuple[dict[str, str], list[dict[str, Any]]]:
+            titles: dict[str, str] = {}
+            stage_runs: list[dict[str, Any]] = []
             with db.connect() as conn:
                 m_rows = conn.execute(text("SELECT id, title FROM meetings")).mappings().all()
                 for r in m_rows:
-                    meeting_titles[str(r["id"])] = str(r["title"])
+                    titles[str(r["id"])] = str(r["title"])
 
                 sr_rows = (
                     conn.execute(
@@ -1071,13 +1084,14 @@ async def get_debug_queues_snapshot(
                     .all()
                 )
                 for sr in sr_rows:
+                    if str(sr["meeting_id"]) not in active_meeting_ids:
+                        continue
                     started_at = sr.get("started_at")
-                    running_stage_runs.append(
+                    stage_runs.append(
                         {
                             "id": sr["id"],
                             "meetingId": sr["meeting_id"],
-                            "meetingTitle": sr.get("meeting_title")
-                            or meeting_titles.get(str(sr["meeting_id"])),
+                            "meetingTitle": sr.get("meeting_title") or titles.get(str(sr["meeting_id"])),
                             "stage": sr["stage"],
                             "status": sr["status"],
                             "jobId": sr.get("provider_job_id"),
@@ -1086,6 +1100,10 @@ async def get_debug_queues_snapshot(
                             "elapsedMs": max(0, now_ms - int(started_at)) if started_at else None,
                         }
                     )
+            return titles, stage_runs
+
+        try:
+            meeting_titles, running_stage_runs = await asyncio.to_thread(_query_olive_db)
         except Exception:
             pass
 

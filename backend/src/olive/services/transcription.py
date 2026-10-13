@@ -117,6 +117,7 @@ class TranscriptionService:
         self._active_jobs: dict[str, _ActiveTranscriptionJob] = {}
         self._active_progress: dict[str, TranscriptionProgressUpdate] = {}
         self._progress_listeners: dict[str, set[Callable[[TranscriptionProgressUpdate], Any]]] = {}
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     @property
     def speechmatics(self) -> SpeechmaticsClient:
@@ -133,17 +134,20 @@ class TranscriptionService:
             else TranscriptionProgressUpdate.model_validate(update)
         )
         self._active_progress[meeting_id] = upd
-        if upd.stage in ("done", "error", "cancelled"):
-            try:
-                loop = asyncio.get_running_loop()
+        try:
+            current_loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+            self._loop = current_loop
+        except RuntimeError:
+            current_loop = None
+        target_loop = current_loop or self._loop
 
-                def _cleanup() -> None:
-                    if self._active_progress.get(meeting_id) is upd:
-                        self._active_progress.pop(meeting_id, None)
+        if upd.stage in ("done", "error", "cancelled") and target_loop and not target_loop.is_closed():
 
-                loop.call_later(10.0, _cleanup)
-            except RuntimeError:
-                pass
+            def _cleanup() -> None:
+                if self._active_progress.get(meeting_id) is upd:
+                    self._active_progress.pop(meeting_id, None)
+
+            target_loop.call_soon_threadsafe(lambda: target_loop.call_later(10.0, _cleanup))
 
         listeners = self._progress_listeners.get(meeting_id)
         if listeners:
@@ -151,7 +155,12 @@ class TranscriptionService:
                 try:
                     res = listener(upd)
                     if asyncio.iscoroutine(res):
-                        asyncio.create_task(res)
+                        if current_loop is not None:
+                            current_loop.create_task(res)
+                        elif target_loop is not None and not target_loop.is_closed():
+                            asyncio.run_coroutine_threadsafe(res, target_loop)
+                        else:
+                            res.close()
                 except Exception:
                     pass
 
@@ -172,6 +181,10 @@ class TranscriptionService:
         meeting_id: str,
         listener: Callable[[TranscriptionProgressUpdate], Any],
     ) -> Callable[[], None]:
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            pass
         s = self._progress_listeners.setdefault(meeting_id, set())
         s.add(listener)
 

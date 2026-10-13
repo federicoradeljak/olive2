@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import gc
 import os
 import re
@@ -102,9 +103,7 @@ class CtcForcedAligner:
             sess_opts.inter_op_num_threads = 1
             sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
-            self._session = ort.InferenceSession(
-                path, sess_opts, providers=["CPUExecutionProvider"]
-            )
+            self._session = ort.InferenceSession(path, sess_opts, providers=["CPUExecutionProvider"])
             self._tokenizer = Tokenizer()
             _CACHED_ALIGNER[cache_key] = (self._session, self._tokenizer)
             return self._session, self._tokenizer
@@ -143,9 +142,7 @@ class CtcForcedAligner:
             session, tokenizer = self._ensure_loaded_sync()
             iso3 = ISO639_1_TO_3.get(language.lower()[:2], "eng")
             emissions, stride = generate_emissions(session, arr, batch_size=4)
-            tokens_starred, text_starred = preprocess_text(
-                clean_text, romanize=True, language=iso3
-            )
+            tokens_starred, text_starred = preprocess_text(clean_text, romanize=True, language=iso3)
             segments, scores, blank_token = get_alignments(emissions, tokens_starred, tokenizer)
             spans = get_spans(tokens_starred, segments, blank_token)
             stamps = postprocess_results(text_starred, spans, stride, scores)
@@ -182,7 +179,7 @@ class CtcForcedAligner:
         language: str = "en",
         offset_ms: int = 0,
     ) -> list[TranscriptWord]:
-        return self._align_sync(samples, sample_rate, text, language, offset_ms)
+        return await asyncio.to_thread(self._align_sync, samples, sample_rate, text, language, offset_ms)
 
     def release(self, clear_cache: bool = False) -> None:
         with _ALIGN_LOCK:

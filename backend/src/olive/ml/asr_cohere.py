@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import gc
 import os
 import re
@@ -81,6 +82,7 @@ def stage_cohere_int8_model_dir(hf_token: str | None = None) -> Path:
             shutil.copy2(src_tok, dst_tok)
 
     return cohere_dir
+
 
 COHERE_INT8_ONNX_REPO = "vigneshlabs/cohere-transcribe-03-2026-int8-onnx"
 COHERE_PROCESSOR_REPO = "onnx-community/cohere-transcribe-03-2026-ONNX"
@@ -318,7 +320,8 @@ class CohereAsrEngine:
 
         language = str(opts.get("language") or self.language or "en")
         strict = bool(opts.get("strict"))
-        return self._transcribe_sync(
+        return await asyncio.to_thread(
+            self._transcribe_sync,
             arr,
             sample_rate,
             language,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import gc
 import os
 import threading
@@ -55,9 +56,7 @@ class WeSpeakerEmbeddingExtractor:
             opts = {**(options or {}), **kwargs}
             self.model_path = opts.get("modelPath") or opts.get("model_path")
             self.num_threads = int(
-                opts.get("numThreads")
-                or opts.get("num_threads")
-                or _default_embedding_threads()
+                opts.get("numThreads") or opts.get("num_threads") or _default_embedding_threads()
             )
             self._dim = 256
 
@@ -163,7 +162,7 @@ class WeSpeakerEmbeddingExtractor:
         arr = np.asarray(samples, dtype=np.float32)
         if arr.size == 0:
             return [0.0] * self._dim
-        return self._extract_sync(arr, sample_rate)
+        return await asyncio.to_thread(self._extract_sync, arr, sample_rate)
 
     def release(self, clear_cache: bool = False) -> None:
         with _EMBED_LOCK:
