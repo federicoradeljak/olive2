@@ -2391,10 +2391,10 @@ function MeetingDetailView({
                     }
                   } catch {}
                 }
-                setTimeout(() => {
-                  void fetchDetail();
-                  onSpeakerUpdated();
-                }, 400);
+              }}
+              onSettled={() => {
+                void fetchDetail();
+                onSpeakerUpdated();
               }}
             />
           )}
@@ -2656,7 +2656,8 @@ function ReassignSpeakerModal({
   segmentIndex,
   knownSpeakers,
   onClose,
-  onSuccess
+  onSuccess,
+  onSettled
 }: {
   meetingId: string;
   fromLabel: string;
@@ -2664,6 +2665,7 @@ function ReassignSpeakerModal({
   knownSpeakers: SpeakerWithStats[];
   onClose: () => void;
   onSuccess: (optimistic?: { targetName: string; scope: "single" | "all"; segmentIndex?: number }) => void;
+  onSettled?: () => void;
 }): ReactElement {
   const [selectedSpeakerId, setSelectedSpeakerId] = useState<string>("");
   const [customName, setCustomName] = useState<string>("");
@@ -2704,7 +2706,7 @@ function ReassignSpeakerModal({
       segmentIndex
     });
 
-    // 2. Fire request asynchronously in background
+    // 2. Fire request asynchronously in background, then sync canonical state once it completes
     void fetch(`/api/meetings/${meetingId}/speakers/reassign`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -2718,6 +2720,9 @@ function ReassignSpeakerModal({
       })
       .catch((err) => {
         console.error("Async speaker reassignment network error:", err);
+      })
+      .finally(() => {
+        onSettled?.();
       });
   };
 
