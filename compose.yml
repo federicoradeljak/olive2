@@ -1,0 +1,28 @@
+# Olive — recommended deployment. Image supports linux/amd64 and linux/arm64.
+#
+# First start downloads ~4.5 GB of speech models (WeSpeaker, MMS aligner,
+# pyannote diarization, Cohere Transcribe INT8) into the olive_models volume,
+# then starts the server. Upgrades reuse the volume, so models survive.
+# The server refuses to start if /app/models is not a mounted, writable volume.
+#
+#   HF_TOKEN=hf_... OLIVE_MCP_TOKEN=... docker compose up -d
+services:
+  olive:
+    image: ghcr.io/mcowger/olive:latest
+    container_name: olive
+    ports:
+      - "4471:4470"
+    environment:
+      # Hugging Face token for gated pyannote models (or set hfToken in Settings UI).
+      - HF_TOKEN=${HF_TOKEN:-}
+      # Required: non-loopback binds need a token (MCP falls back to ingest token).
+      - OLIVE_INGEST_TOKEN=${OLIVE_INGEST_TOKEN:-}
+      - OLIVE_MCP_TOKEN=${OLIVE_MCP_TOKEN:-}
+    volumes:
+      - olive_data:/app/data
+      - olive_models:/app/models
+    restart: unless-stopped
+
+volumes:
+  olive_data:
+  olive_models:

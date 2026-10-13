@@ -10,14 +10,9 @@ from pathlib import Path
 import typer
 
 from .main import run_server
-from .ml.asr_cohere import (
-    COHERE_INT8_ONNX_REPO,
-    COHERE_PROCESSOR_REPO,
-    stage_cohere_int8_model_dir,
-)
-from .ml.embed import WESPEAKER_FILENAME, WESPEAKER_REPO_ID
+from .ml.model_store import ModelStorageError, download_local_models
 from .services.backup import BackupService
-from .settings import get_effective_hf_token, resolve_paths
+from .settings import get_effective_hf_token
 
 app = typer.Typer(help="Olive — Self-Hosted AI Meeting Intelligence CLI")
 models_app = typer.Typer(help="Manage local ML speech & diarization models")
@@ -69,35 +64,14 @@ def restore_cmd(
 @models_app.command("download")
 def download_models_cmd() -> None:
     """Pre-download local WeSpeaker, pyannote, MMS aligner, and Cohere INT8 models."""
-    paths = resolve_paths()
     token = get_effective_hf_token()
     if token:
         os.environ["HF_TOKEN"] = token
-
-    from huggingface_hub import hf_hub_download
-
-    typer.echo(f"Downloading WeSpeaker model ({WESPEAKER_REPO_ID})...")
-    hf_hub_download(repo_id=WESPEAKER_REPO_ID, filename=WESPEAKER_FILENAME, token=token)
-
-    typer.echo("Downloading ctc-forced-aligner MMS-300m ONNX model...")
-    from ctc_forced_aligner import MODEL_URL, ensure_onnx_model
-
-    align_dir = Path(paths.models_dir) / "aligner"
-    align_dir.mkdir(parents=True, exist_ok=True)
-    ensure_onnx_model(str(align_dir / "mms-300m-aligner.onnx"), MODEL_URL)
-
-    typer.echo("Downloading pyannote speaker-diarization-community-1...")
-    from .ml.diarize import PyannoteSpeakerDiarizer
-
-    PyannoteSpeakerDiarizer()._ensure_pipeline_sync()
-
-    typer.echo(f"Downloading Cohere Transcribe 03-2026 INT8 ONNX ({COHERE_INT8_ONNX_REPO})...")
-    from transformers import AutoProcessor
-
-    AutoProcessor.from_pretrained(COHERE_PROCESSOR_REPO, token=token)
-    stage_cohere_int8_model_dir(token)
-
-    typer.echo("All local ML models downloaded successfully.")
+    try:
+        download_local_models(token)
+    except ModelStorageError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
 
 
 if __name__ == "__main__":

@@ -148,14 +148,33 @@ SOURCES                           PIPELINE & ARTIFACT STORE                     
 
 ---
 
-## Quickstart
+## Quickstart (Docker — recommended)
 
-### Prerequisites
-- [uv](https://docs.astral.sh/uv/) (Python 3.12+)
-- [pnpm](https://pnpm.io/) (Node.js 22+)
-- `ffmpeg` and `libsndfile1`
+The multi-arch image (`linux/amd64`, `linux/arm64`) is the primary way to run Olive. On first start it downloads ~4.5 GB of local speech models (WeSpeaker, MMS aligner, pyannote diarization, Cohere Transcribe INT8) into a persistent models volume, then starts the server. Model downloads survive upgrades because they live on the volume, not in the image.
 
-### Local installation
+```bash
+# Pull and start (mounts required: olive_data for meetings/DB, olive_models for ML models)
+HF_TOKEN=hf_... OLIVE_MCP_TOKEN=... docker compose up -d
+
+# Or with plain docker run:
+docker run -d \
+  --name olive \
+  -p 4471:4470 \
+  -e HF_TOKEN=hf_... \
+  -e OLIVE_MCP_TOKEN=... \
+  -v olive_data:/app/data \
+  -v olive_models:/app/models \
+  --restart unless-stopped \
+  ghcr.io/mcowger/olive:latest
+```
+
+Open **`http://localhost:4471`**. Follow the logs on first start (`docker logs -f olive`) — model downloads take several minutes.
+
+The server **refuses to start** if `/app/models` is not a mounted, writable volume, or if a model cannot be downloaded — the error message says why. Do not skip the `olive_models` mount: without it, every upgrade would re-download gigabytes of models.
+
+### Local installation (advanced)
+
+Requires [uv](https://docs.astral.sh/uv/) (Python 3.12+), [pnpm](https://pnpm.io/) (Node.js 22+), `ffmpeg`, and `libsndfile1`.
 
 ```bash
 # 1. Clone the repository
@@ -179,23 +198,6 @@ Open **`http://localhost:4471`**.
 
 ---
 
-## Docker deployment
-
-```bash
-# Build image
-docker build -t olive:latest .
-
-# Run container with persistent data volume
-docker run -d \
-  --name olive \
-  -p 4471:4470 \
-  -v olive_data:/app/data \
-  --restart unless-stopped \
-  olive:latest
-```
-
----
-
 ## Configuration & environment variables
 
 Olive stores runtime settings in `<configDir>/settings.json` and accepts environment variables for bootstrap and secrets:
@@ -206,7 +208,7 @@ Olive stores runtime settings in `<configDir>/settings.json` and accepts environ
 | `OLIVE_BIND_HOST` | `127.0.0.1` | Bind address (`0.0.0.0` in Docker) |
 | `OLIVE_CONFIG_DIR` | `~/.config/olive` | Directory for `olive.sqlite`, `settings.json`, and speaker clips (`~/Library/Application Support/olive` on macOS) |
 | `OLIVE_MEETINGS_DIR` | `<configDir>/meetings` | Storage directory for meeting folders (`audio/`, `transcripts/`, `summaries/`) |
-| `OLIVE_MODELS_DIR` | `<configDir>/models` | Cache directory for local Hugging Face and ONNX models |
+| `OLIVE_MODELS_DIR` | `<configDir>/models` (`/app/models` in Docker) | Cache directory for local Hugging Face and ONNX models. In Docker this **must** be a mounted persistent volume — the server exits if it isn't mounted or writable |
 | `HF_TOKEN` | *(optional)* | Hugging Face token for gated `pyannote` models (overrides `hfToken` in Settings UI) |
 | `OLIVE_INGEST_TOKEN` | *(optional)* | Bearer token required for `POST /api/ingest` |
 | `OLIVE_MCP_TOKEN` | *(optional)* | Bearer token for `/mcp`; falls back to `OLIVE_INGEST_TOKEN` and is required for non-loopback binds |

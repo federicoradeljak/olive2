@@ -31,24 +31,33 @@ COPY backend/alembic.ini ./backend/alembic.ini
 COPY backend/migrations ./backend/migrations
 
 WORKDIR /app/backend
-RUN uv sync --frozen --no-dev
+# ctc-forced-aligner ships only an sdist that compiles a C++ extension; build tools are removed in the same layer.
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
+    && uv sync --frozen --no-dev \
+    && apt-get purge -y build-essential && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=web-builder /frontend/dist /app/frontend/dist
 
 ENV PORT=4470 \
+    OLIVE_DOCKER=1 \
     OLIVE_BIND_HOST=0.0.0.0 \
     OLIVE_BIND_PORT=4470 \
     OLIVE_WEB_ROOT=/app/frontend/dist \
     OLIVE_DATA_DIR=/app/data \
     OLIVE_CONFIG_DIR=/app/data/config \
     OLIVE_MEETINGS_DIR=/app/data/meetings \
-    OLIVE_MODELS_DIR=/app/data/models \
-    HF_HOME=/app/data/models/huggingface \
-    TRANSFORMERS_CACHE=/app/data/models/huggingface \
+    OLIVE_MODELS_DIR=/app/models \
+    HF_HOME=/app/models/huggingface \
+    TRANSFORMERS_CACHE=/app/models/huggingface \
     OTEL_SDK_DISABLED=true \
     HF_HUB_DISABLE_TELEMETRY=1
 
 EXPOSE 4470
-VOLUME ["/app/data"]
+# NOTE: no VOLUME directives on purpose — /app/models must be an explicitly mounted
+# persistent volume (named volume or bind mount). If it is not a mount, or is not
+# writable, the server refuses to start with an explanatory error instead of
+# silently downloading multi-GB models into throwaway container storage.
+# Run with e.g.: -v olive_data:/app/data -v olive_models:/app/models
 
 CMD ["uv", "run", "--no-dev", "olive", "serve"]
