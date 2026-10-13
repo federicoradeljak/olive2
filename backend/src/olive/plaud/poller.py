@@ -32,7 +32,14 @@ from .retry import (
     resolve_retry_policy,
     with_rate_limit_retry,
 )
-from .sdk import extract_summary_notes, parse_transcript_segments, segments_to_text
+from .sdk import (
+    NotFoundError,
+    alternate_plaud_file_id,
+    canonical_plaud_file_id,
+    extract_summary_notes,
+    parse_transcript_segments,
+    segments_to_text,
+)
 
 DEFAULT_PAGE_SIZE = 100
 DEFAULT_PCS_WAIT_MS = 5 * 60 * 1000
@@ -219,20 +226,16 @@ class PlaudPoller:
 
         self.meetings_dir: str = str(opts.get("meetingsDir") or opts.get("meetings_dir") or "")
         self.client: Any = opts.get("client")
-        self.transcription_service: Any = (
-            opts.get("transcriptionService") or opts.get("transcription_service")
+        self.transcription_service: Any = opts.get("transcriptionService") or opts.get(
+            "transcription_service"
         )
         self.retranscribe_plaud_when_unnamed: bool = bool(
-            opts.get("retranscribePlaudWhenUnnamed")
-            or opts.get("retranscribe_plaud_when_unnamed")
+            opts.get("retranscribePlaudWhenUnnamed") or opts.get("retranscribe_plaud_when_unnamed")
         )
         self.auto_transcribe_with_speechmatics: bool = bool(
-            opts.get("autoTranscribeWithSpeechmatics")
-            or opts.get("auto_transcribe_with_speechmatics")
+            opts.get("autoTranscribeWithSpeechmatics") or opts.get("auto_transcribe_with_speechmatics")
         )
-        self.now: Callable[[], int] = (
-            opts.get("now") or (lambda: int(time.time() * 1000))
-        )
+        self.now: Callable[[], int] = opts.get("now") or (lambda: int(time.time() * 1000))
         self.fetch_impl: Callable[[str], Any] = (
             opts.get("fetchImpl") or opts.get("fetch_impl") or _default_fetch
         )
@@ -314,9 +317,11 @@ class PlaudPoller:
     async def get_status(self) -> dict[str, Any]:
         if self._last_poll_at is None:
             with self.db.connect() as conn:
-                stored = conn.execute(
-                    text("SELECT value FROM sync_state WHERE key = 'plaud:last_poll_at'")
-                ).mappings().first()
+                stored = (
+                    conn.execute(text("SELECT value FROM sync_state WHERE key = 'plaud:last_poll_at'"))
+                    .mappings()
+                    .first()
+                )
             if stored and stored.get("value"):
                 try:
                     self._last_poll_at = int(stored["value"])
@@ -422,28 +427,31 @@ class PlaudPoller:
                 continue
             seen.add(file_id)
 
+            # Plaud migrated IDs from bare hex to an `of_` prefix; match on the
+            # canonical identity so an already-ingested recording is not re-imported.
+            canonical_id = canonical_plaud_file_id(file_id)
+
             with self.db.connect() as conn:
                 existing_rec = conn.execute(
                     text(
                         "SELECT id FROM recordings "
-                        "WHERE provider = :prov AND provider_recording_id = :fid LIMIT 1"
+                        "WHERE provider = :prov AND provider_recording_id IN (:fid, :canon) LIMIT 1"
                     ),
-                    {"prov": PLAUD_PROVIDER, "fid": file_id},
+                    {"prov": PLAUD_PROVIDER, "fid": file_id, "canon": canonical_id},
                 ).first()
                 existing_state = conn.execute(
                     text(
-                        "SELECT meeting_id FROM plaud_ingest_state WHERE plaud_file_id = :fid LIMIT 1"
+                        "SELECT meeting_id FROM plaud_ingest_state "
+                        "WHERE plaud_file_id IN (:fid, :canon) LIMIT 1"
                     ),
-                    {"fid": file_id},
+                    {"fid": file_id, "canon": canonical_id},
                 ).first()
 
             if existing_rec or existing_state:
                 continue
 
             seen_at = self.now()
-            start_time = _parse_timestamp(
-                file.get("start_at") or file.get("created_at"), seen_at
-            )
+            start_time = _parse_timestamp(file.get("start_at") or file.get("created_at"), seen_at)
             dur_ms = duration_to_ms(file.get("duration"))
             meeting_id = str(uuid.uuid4())
             title = (file.get("name") or "").strip() or f"Plaud recording {file_id}"
@@ -451,9 +459,10 @@ class PlaudPoller:
             with self.db.begin() as conn:
                 already = conn.execute(
                     text(
-                        "SELECT meeting_id FROM plaud_ingest_state WHERE plaud_file_id = :fid LIMIT 1"
+                        "SELECT meeting_id FROM plaud_ingest_state "
+                        "WHERE plaud_file_id IN (:fid, :canon) LIMIT 1"
                     ),
-                    {"fid": file_id},
+                    {"fid": file_id, "canon": canonical_id},
                 ).first()
                 if already:
                     continue
@@ -537,9 +546,9 @@ class PlaudPoller:
 
     async def _fetch_pending_assets(self) -> dict[str, Any]:
         with self.db.connect() as conn:
-            states = conn.execute(
-                text("SELECT * FROM plaud_ingest_state WHERE pcs_resolved = 0")
-            ).mappings().all()
+            states = (
+                conn.execute(text("SELECT * FROM plaud_ingest_state WHERE pcs_resolved = 0")).mappings().all()
+            )
 
         resolved = 0
         errors: list[str] = []
@@ -549,22 +558,29 @@ class PlaudPoller:
                 continue
 
             with self.db.connect() as conn:
-                meeting = conn.execute(
-                    text("SELECT * FROM meetings WHERE id = :id"),
-                    {"id": state["meeting_id"]},
-                ).mappings().first()
+                meeting = (
+                    conn.execute(
+                        text("SELECT * FROM meetings WHERE id = :id"),
+                        {"id": state["meeting_id"]},
+                    )
+                    .mappings()
+                    .first()
+                )
             if not meeting:
                 continue
 
             try:
-                get_file_fn = getattr(self.client, "get_file", None) or getattr(
-                    self.client, "getFile", None
-                )
+                get_file_fn = getattr(self.client, "get_file", None) or getattr(self.client, "getFile", None)
                 if not callable(get_file_fn):
                     continue
-                detail = await self._with_plaud_retry(
-                    lambda fid=state["plaud_file_id"], fn=get_file_fn: fn(fid)
-                )
+                try:
+                    detail, effective_file_id = await self._fetch_plaud_detail(
+                        get_file_fn, state["plaud_file_id"]
+                    )
+                except NotFoundError as missing:
+                    await self._mark_file_missing(meeting, state, missing)
+                    continue
+                state = {**state, "plaud_file_id": effective_file_id}
                 has_content = _content_is_ready(detail)
                 deadline_expired = (
                     self.now() >= int(state["pcs_deadline_at"])
@@ -600,6 +616,59 @@ class PlaudPoller:
                 )
 
         return {"resolved": resolved, "error": "; ".join(errors) if errors else None}
+
+    async def _fetch_plaud_detail(
+        self,
+        get_file_fn: Callable[[str], Any],
+        file_id: str,
+    ) -> tuple[Mapping[Any, Any], str]:
+        """Fetch a Plaud file, falling back to the other ID form on 404.
+
+        Plaud migrated recording IDs from bare hex to an ``of_`` prefix. Rows
+        created before the migration still hold the legacy form (which the API
+        now reports as ``FILE_NOT_FOUND``), so retry once with the alternate
+        form before treating the recording as permanently missing.
+        """
+        try:
+            detail = await self._with_plaud_retry(lambda fid=file_id: get_file_fn(fid))
+            return detail, file_id
+        except NotFoundError:
+            alternate = alternate_plaud_file_id(file_id)
+            if not alternate:
+                raise
+            detail = await self._with_plaud_retry(lambda alt=alternate: get_file_fn(alt))
+            return detail, alternate
+
+    async def _mark_file_missing(
+        self,
+        meeting: Mapping[Any, Any],
+        state: Mapping[Any, Any],
+        error: Exception,
+    ) -> None:
+        """Stop retrying a recording Plaud no longer serves under any ID form."""
+        msg = f"Plaud recording is no longer available: {error}"
+        resolved_at = self.now()
+        with self.db.begin() as conn:
+            conn.execute(
+                text("UPDATE plaud_ingest_state SET pcs_resolved = 1 WHERE meeting_id = :mid"),
+                {"mid": meeting["id"]},
+            )
+            conn.execute(
+                text(
+                    "UPDATE meetings SET status = 'error', last_error = :err, updated_at = :now "
+                    "WHERE id = :id"
+                ),
+                {"err": msg, "now": resolved_at, "id": meeting["id"]},
+            )
+        self.logger.warn(
+            "Plaud recording is permanently unavailable; stopping retries",
+            {
+                "category": "plaud",
+                "meetingId": meeting["id"],
+                "plaudFileId": state["plaud_file_id"],
+                "error": str(error),
+            },
+        )
 
     async def _ingest_ready_meeting(
         self,
@@ -677,9 +746,7 @@ class PlaudPoller:
                 {"id": meeting["id"]},
             )
 
-        has_only_generic = not segments or all(
-            is_generic_plaud_speaker(s.get("speaker")) for s in segments
-        )
+        has_only_generic = not segments or all(is_generic_plaud_speaker(s.get("speaker")) for s in segments)
         if self.transcription_service and (
             self.auto_transcribe_with_speechmatics
             or (self.retranscribe_plaud_when_unnamed and has_only_generic)
@@ -741,13 +808,17 @@ class PlaudPoller:
         detail: Mapping[Any, Any],
     ) -> dict[str, str]:
         with self.db.connect() as conn:
-            existing = conn.execute(
-                text(
-                    "SELECT id, path FROM recordings "
-                    "WHERE provider = :prov AND provider_recording_id = :fid LIMIT 1"
-                ),
-                {"prov": PLAUD_PROVIDER, "fid": state["plaud_file_id"]},
-            ).mappings().first()
+            existing = (
+                conn.execute(
+                    text(
+                        "SELECT id, path FROM recordings "
+                        "WHERE provider = :prov AND provider_recording_id = :fid LIMIT 1"
+                    ),
+                    {"prov": PLAUD_PROVIDER, "fid": state["plaud_file_id"]},
+                )
+                .mappings()
+                .first()
+            )
 
         if existing:
             existing_abs = (
@@ -767,10 +838,14 @@ class PlaudPoller:
         downloaded = await self._download_audio(detail)
 
         with self.db.connect() as conn:
-            existing_by_hash = conn.execute(
-                text("SELECT id, meeting_id, path FROM recordings WHERE sha256 = :sha LIMIT 1"),
-                {"sha": downloaded["sha256"]},
-            ).mappings().first()
+            existing_by_hash = (
+                conn.execute(
+                    text("SELECT id, meeting_id, path FROM recordings WHERE sha256 = :sha LIMIT 1"),
+                    {"sha": downloaded["sha256"]},
+                )
+                .mappings()
+                .first()
+            )
 
         if existing_by_hash:
             if existing_by_hash["meeting_id"] != meeting["id"]:
@@ -968,23 +1043,27 @@ class PlaudPoller:
         (dir_path / filename).write_text(content, encoding="utf-8")
 
         with self.db.begin() as conn:
-            existing = conn.execute(
-                text(
-                    """
+            existing = (
+                conn.execute(
+                    text(
+                        """
                     SELECT id FROM artifacts
                     WHERE meeting_id = :mid AND provider = :prov AND kind = :kind
                       AND format = :fmt AND path = :path
                     LIMIT 1
                     """
-                ),
-                {
-                    "mid": meeting_id,
-                    "prov": PLAUD_PROVIDER,
-                    "kind": kind,
-                    "fmt": fmt,
-                    "path": relative_path,
-                },
-            ).mappings().first()
+                    ),
+                    {
+                        "mid": meeting_id,
+                        "prov": PLAUD_PROVIDER,
+                        "kind": kind,
+                        "fmt": fmt,
+                        "path": relative_path,
+                    },
+                )
+                .mappings()
+                .first()
+            )
             if existing:
                 return existing["id"]
 

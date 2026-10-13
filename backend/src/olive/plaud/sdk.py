@@ -322,9 +322,7 @@ class PlaudClient:
             raise AuthError("Not authenticated. Please run login first.")
 
         url = f"{self.apiBase}{path}"
-        params = {
-            k: str(v) for k, v in (opts.get("query") or {}).items() if v is not None
-        }
+        params = {k: str(v) for k, v in (opts.get("query") or {}).items() if v is not None}
         attempt = 0
 
         while True:
@@ -401,9 +399,7 @@ class PlaudClient:
     async def get_file(self, file_id: str) -> dict[str, Any]:
         if not file_id:
             raise ValueError("File ID is required.")
-        return await self.request(
-            "GET", f"/open/third-party/files/{urllib.parse.quote(file_id)}"
-        )
+        return await self.request("GET", f"/open/third-party/files/{urllib.parse.quote(file_id)}")
 
     getFile = get_file
 
@@ -456,6 +452,37 @@ def format_display_timestamp(ms: float) -> str:
 
 
 formatDisplayTimestamp = format_display_timestamp
+
+
+PLAUD_FILE_ID_PREFIX = "of_"
+
+
+def canonical_plaud_file_id(file_id: str) -> str:
+    """Return the stable recording identity for a Plaud file ID.
+
+    Plaud migrated recording IDs from bare hex (``69bf84fe...``) to an ``of_``
+    prefixed form (``of_69bf84fe...``) while keeping the same underlying
+    recording. The suffix is the stable identity, so strip the prefix before
+    comparing IDs so the same recording is not ingested twice.
+    """
+    if file_id.startswith(PLAUD_FILE_ID_PREFIX):
+        return file_id[len(PLAUD_FILE_ID_PREFIX) :]
+    return file_id
+
+
+canonicalPlaudFileId = canonical_plaud_file_id
+
+
+def alternate_plaud_file_id(file_id: str) -> str | None:
+    """Return the other known form of a Plaud file ID, or ``None`` if equal."""
+    canonical = canonical_plaud_file_id(file_id)
+    alternate = (
+        canonical if file_id.startswith(PLAUD_FILE_ID_PREFIX) else f"{PLAUD_FILE_ID_PREFIX}{canonical}"
+    )
+    return alternate if alternate != file_id else None
+
+
+alternatePlaudFileId = alternate_plaud_file_id
 
 
 def parse_transcript_segments(source_list: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:

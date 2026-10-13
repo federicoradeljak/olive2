@@ -16,8 +16,11 @@ from olive.db import create_db, run_migrations
 from olive.layout import meeting_folder_name
 from olive.plaud import (
     FileTokenStore,
+    NotFoundError,
     PlaudPoller,
     RateLimitError,
+    alternate_plaud_file_id,
+    canonical_plaud_file_id,
     clean_plaud_summary_markdown,
     compute_retry_delay_ms,
     create_plaud_client,
@@ -115,7 +118,9 @@ class _FakePlaudClient:
 
 
 class _FakeResponse:
-    def __init__(self, content: bytes = AUDIO_BYTES, status: int = 200, headers: dict[str, str] | None = None) -> None:
+    def __init__(
+        self, content: bytes = AUDIO_BYTES, status: int = 200, headers: dict[str, str] | None = None
+    ) -> None:
         self.content = content
         self.status = status
         self.headers = headers or {"content-type": "audio/mp4"}
@@ -339,15 +344,17 @@ async def test_permanently_skips_duplicate_audio_meeting_instead_of_redownloadin
     assert download_calls == 2
 
     with handle.engine.connect() as conn:
-        meetings = conn.execute(
-            text("SELECT * FROM meetings ORDER BY created_at ASC")
-        ).mappings().all()
+        meetings = conn.execute(text("SELECT * FROM meetings ORDER BY created_at ASC")).mappings().all()
         original = next(m for m in meetings if m["title"] == FIXTURE_FILE["name"])
         duplicate = next(m for m in meetings if m["title"] == dup_file["name"])
-        dup_state = conn.execute(
-            text("SELECT * FROM plaud_ingest_state WHERE meeting_id = :mid"),
-            {"mid": duplicate["id"]},
-        ).mappings().one()
+        dup_state = (
+            conn.execute(
+                text("SELECT * FROM plaud_ingest_state WHERE meeting_id = :mid"),
+                {"mid": duplicate["id"]},
+            )
+            .mappings()
+            .one()
+        )
         recs = conn.execute(text("SELECT * FROM recordings")).fetchall()
 
     assert original["status"] == "ready"
@@ -440,9 +447,7 @@ def test_plaud_api_status_sync_trigger_and_pkce_auth_routes(tmp_path: Path) -> N
     )
     assert complete_res.status_code == 200
     assert complete_res.json() == {"status": "completed"}
-    assert completed == [
-        "https://localhost/callback?code=fake|verifier-not-returned|state-not-returned"
-    ]
+    assert completed == ["https://localhost/callback?code=fake|verifier-not-returned|state-not-returned"]
 
     reused_res = http_client.post(
         "/api/plaud/auth/complete",
@@ -508,9 +513,13 @@ async def test_token_store_duration_conversion_and_migration_repair(tmp_path: Pa
         )
     run_migrations(handle.engine)
     with handle.engine.connect() as conn:
-        repaired = conn.execute(
-            text("SELECT start_time, end_time FROM meetings WHERE id = 'corrupted-plaud-meeting'")
-        ).mappings().one()
+        repaired = (
+            conn.execute(
+                text("SELECT start_time, end_time FROM meetings WHERE id = 'corrupted-plaud-meeting'")
+            )
+            .mappings()
+            .one()
+        )
     assert int(repaired["end_time"]) - int(repaired["start_time"]) == 252_960
     handle.engine.dispose()
 
@@ -570,4 +579,207 @@ async def test_plaud_rate_limit_backoff_and_retry_helpers(tmp_path: Path) -> Non
     converted = summary_to_markdown([{"type": "auto_sum_note", "content": raw_note}])
     assert "Auto_sum_note" not in converted
     assert converted.startswith("**Project Requirements**")
+    handle.engine.dispose()
+
+
+def test_canonical_plaud_file_id_normalizes_migrated_prefix() -> None:
+    hex_id = "69bf84fe38ba0a1871b1e81842131f70"
+    assert canonical_plaud_file_id(hex_id) == hex_id
+    assert canonical_plaud_file_id(f"of_{hex_id}") == hex_id
+    assert alternate_plaud_file_id(hex_id) == f"of_{hex_id}"
+    assert alternate_plaud_file_id(f"of_{hex_id}") == hex_id
+
+
+def _seed_legacy_plaud_state(
+    handle: Any, meeting_id: str, file_id: str, now: int, title: str = "Legacy Plaud"
+) -> None:
+    with handle.engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO meetings (
+                  id, title, start_time, end_time, source, status, tags,
+                  primary_transcript_artifact_id, primary_summary_artifact_id,
+                  last_error, created_at, updated_at
+                ) VALUES (
+                  :id, :title, :now, :end, 'plaud', 'processing', '[]',
+                  NULL, NULL, NULL, :now, :now
+                )
+                """
+            ),
+            {"id": meeting_id, "title": title, "now": now, "end": now + 12_000},
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO plaud_ingest_state (
+                  meeting_id, plaud_file_id, first_seen_at, pcs_deadline_at, pcs_resolved
+                ) VALUES (:mid, :fid, :now, :deadline, 0)
+                """
+            ),
+            {"mid": meeting_id, "fid": file_id, "now": now, "deadline": now + 300_000},
+        )
+
+
+async def test_plaud_id_migration_does_not_reimport_recording(tmp_path: Path) -> None:
+    handle = create_db(":memory:")
+    meetings_dir = str(tmp_path / "meetings")
+    hex_id = "69bf84fe38ba0a1871b1e81842131f70"
+    legacy_file = {**FIXTURE_FILE, "id": hex_id}
+    migrated_file = {**FIXTURE_FILE, "id": f"of_{hex_id}"}
+
+    class _MigratingClient:
+        oauth = _FakeOAuth()
+
+        def __init__(self) -> None:
+            self.current = [legacy_file]
+
+        async def getCurrentUser(self) -> dict[str, str]:
+            return {"id": "fake-user"}
+
+        async def listFilesIterator(self, _opts: Any = None) -> AsyncIterator[dict[str, Any]]:
+            for item in self.current:
+                yield item
+
+        async def getFile(self, _fid: str) -> dict[str, Any]:
+            return _ready_detail()
+
+    client = _MigratingClient()
+    poller = PlaudPoller(
+        {
+            "db": handle.engine,
+            "meetingsDir": meetings_dir,
+            "client": client,
+            "fetchImpl": _fake_fetch(),
+            "now": lambda: 1_000_000,
+        }
+    )
+
+    first = await poller.trigger()
+    assert first["discovered"] == 1
+    assert first["resolved"] == 1
+
+    client.current = [migrated_file]
+    second = await poller.trigger()
+    assert second["discovered"] == 0
+    assert second["resolved"] == 0
+
+    with handle.engine.connect() as conn:
+        meeting_count = conn.execute(text("SELECT COUNT(*) FROM meetings")).scalar()
+        state_count = conn.execute(text("SELECT COUNT(*) FROM plaud_ingest_state")).scalar()
+    assert meeting_count == 1
+    assert state_count == 1
+    handle.engine.dispose()
+
+
+async def test_plaud_legacy_id_falls_back_to_prefixed_id(tmp_path: Path) -> None:
+    handle = create_db(":memory:")
+    meetings_dir = str(tmp_path / "meetings")
+    hex_id = "69bf84fe38ba0a1871b1e81842131f70"
+    prefixed_id = f"of_{hex_id}"
+    now = 1_000_000
+    _seed_legacy_plaud_state(handle, "legacy-meeting", hex_id, now)
+
+    calls: list[str] = []
+
+    class _MigratedClient:
+        oauth = _FakeOAuth()
+
+        async def getCurrentUser(self) -> dict[str, str]:
+            return {"id": "fake-user"}
+
+        async def listFilesIterator(self, _opts: Any = None) -> AsyncIterator[dict[str, Any]]:
+            for _ in ():
+                yield _
+
+        async def getFile(self, fid: str) -> dict[str, Any]:
+            calls.append(fid)
+            if fid == hex_id:
+                raise NotFoundError(f"Resource not found (/open/third-party/files/{fid})")
+            assert fid == prefixed_id
+            return _ready_detail()
+
+    poller = PlaudPoller(
+        {
+            "db": handle.engine,
+            "meetingsDir": meetings_dir,
+            "client": _MigratedClient(),
+            "fetchImpl": _fake_fetch(),
+            "now": lambda: now,
+        }
+    )
+
+    res = await poller.trigger()
+    assert res["error"] is None
+    assert res["resolved"] == 1
+    assert calls == [hex_id, prefixed_id]
+
+    with handle.engine.connect() as conn:
+        meeting = conn.execute(text("SELECT * FROM meetings WHERE id = 'legacy-meeting'")).mappings().one()
+        state = (
+            conn.execute(text("SELECT * FROM plaud_ingest_state WHERE meeting_id = 'legacy-meeting'"))
+            .mappings()
+            .one()
+        )
+        recording = conn.execute(text("SELECT * FROM recordings")).mappings().one()
+    assert meeting["status"] == "ready"
+    assert state["pcs_resolved"] == 1
+    assert recording["provider_recording_id"] == prefixed_id
+    handle.engine.dispose()
+
+
+async def test_plaud_permanently_missing_file_stops_retrying(tmp_path: Path) -> None:
+    handle = create_db(":memory:")
+    meetings_dir = str(tmp_path / "meetings")
+    hex_id = "c5d65a5dec71e7a78399482286596cad"
+    now = 1_000_000
+    _seed_legacy_plaud_state(handle, "missing-meeting", hex_id, now)
+
+    calls = 0
+
+    class _MissingClient:
+        oauth = _FakeOAuth()
+
+        async def getCurrentUser(self) -> dict[str, str]:
+            return {"id": "fake-user"}
+
+        async def listFilesIterator(self, _opts: Any = None) -> AsyncIterator[dict[str, Any]]:
+            for _ in ():
+                yield _
+
+        async def getFile(self, fid: str) -> dict[str, Any]:
+            nonlocal calls
+            calls += 1
+            raise NotFoundError(f"Resource not found (/open/third-party/files/{fid})")
+
+    poller = PlaudPoller(
+        {
+            "db": handle.engine,
+            "meetingsDir": meetings_dir,
+            "client": _MissingClient(),
+            "fetchImpl": _fake_fetch(),
+            "now": lambda: now,
+        }
+    )
+
+    first = await poller.trigger()
+    assert first["error"] is None
+    assert first["resolved"] == 0
+    assert first["pcsPending"] == 0
+    assert calls == 2
+
+    with handle.engine.connect() as conn:
+        meeting = conn.execute(text("SELECT * FROM meetings WHERE id = 'missing-meeting'")).mappings().one()
+        state = (
+            conn.execute(text("SELECT * FROM plaud_ingest_state WHERE meeting_id = 'missing-meeting'"))
+            .mappings()
+            .one()
+        )
+    assert meeting["status"] == "error"
+    assert "no longer available" in meeting["last_error"]
+    assert state["pcs_resolved"] == 1
+
+    second = await poller.trigger()
+    assert calls == 2
+    assert second["resolved"] == 0
     handle.engine.dispose()
