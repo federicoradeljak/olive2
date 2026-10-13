@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import AsyncIterator, Callable
@@ -417,18 +418,18 @@ def test_plaud_api_status_sync_trigger_and_pkce_auth_routes(tmp_path: Path) -> N
     assert initial_status.json() == {"connected": True, "lastPollAt": None, "pcsPending": 0}
 
     trigger_res = http_client.post("/api/plaud/sync/trigger")
-    assert trigger_res.status_code == 200
-    assert trigger_res.json() == {
-        "status": "completed",
-        "discoveryCompleted": True,
-        "discoveryError": None,
-        "discovered": 1,
-        "resolved": 0,
-        "pcsPending": 1,
-        "startedAt": 1_000,
-        "completedAt": 1_000,
-        "error": None,
-    }
+    assert trigger_res.status_code == 202
+    assert trigger_res.json() == {"status": "started", "alreadyRunning": False}
+
+    deadline = time.time() + 5
+    status_body: dict[str, Any] = {}
+    while time.time() < deadline:
+        status_body = http_client.get("/api/plaud/status").json()
+        if status_body.get("lastPollAt") is not None:
+            break
+        time.sleep(0.05)
+    assert status_body.get("lastPollAt") == 1_000
+    assert status_body.get("pcsPending") == 1
 
     start_res = http_client.post("/api/plaud/auth/start")
     assert start_res.status_code == 200
@@ -782,4 +783,68 @@ async def test_plaud_permanently_missing_file_stops_retrying(tmp_path: Path) -> 
     second = await poller.trigger()
     assert calls == 2
     assert second["resolved"] == 0
+    handle.engine.dispose()
+
+
+async def test_plaud_trigger_background_does_not_block_and_dedupes(tmp_path: Path) -> None:
+    handle = create_db(":memory:")
+    meetings_dir = str(tmp_path / "meetings")
+    poller = PlaudPoller(
+        {
+            "db": handle.engine,
+            "meetingsDir": meetings_dir,
+            "client": _FakePlaudClient(_ready_detail()),
+            "fetchImpl": _fake_fetch(),
+            "now": lambda: 1_000_000,
+        }
+    )
+
+    assert poller.trigger_background() is True
+    assert poller.trigger_background() is False
+    in_flight = poller._in_flight
+    assert in_flight is not None
+    await in_flight
+
+    with handle.engine.connect() as conn:
+        meetings = conn.execute(text("SELECT * FROM meetings")).mappings().all()
+    assert len(meetings) == 1
+    assert meetings[0]["status"] == "ready"
+    assert poller._in_flight is None
+    handle.engine.dispose()
+
+
+async def test_plaud_hands_off_transcription_without_blocking(tmp_path: Path) -> None:
+    handle = create_db(":memory:")
+    meetings_dir = str(tmp_path / "meetings")
+    release = asyncio.Event()
+    calls: list[str] = []
+
+    class _BlockingTranscription:
+        async def transcribe_meeting(self, meeting_id: str) -> dict[str, Any]:
+            calls.append(meeting_id)
+            await release.wait()
+            return {"status": "done"}
+
+    poller = PlaudPoller(
+        {
+            "db": handle.engine,
+            "meetingsDir": meetings_dir,
+            "client": _FakePlaudClient(_ready_detail()),
+            "fetchImpl": _fake_fetch(),
+            "now": lambda: 1_000_000,
+            "transcriptionService": _BlockingTranscription(),
+            "autoTranscribeWithSpeechmatics": True,
+        }
+    )
+
+    res = await poller.trigger()
+    assert res["resolved"] == 1
+    assert not release.is_set()
+
+    await asyncio.sleep(0)
+    assert len(calls) == 1
+    assert not release.is_set()
+
+    release.set()
+    await asyncio.sleep(0)
     handle.engine.dispose()

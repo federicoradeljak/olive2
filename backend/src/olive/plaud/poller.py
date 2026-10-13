@@ -246,6 +246,7 @@ class PlaudPoller:
 
         self._scheduler: AsyncIOScheduler | None = None
         self._in_flight: asyncio.Task[dict[str, Any]] | None = None
+        self._background_tasks: set[asyncio.Task[Any]] = set()
         self._connected = False
         self._last_poll_at: int | None = None
 
@@ -308,11 +309,34 @@ class PlaudPoller:
         if self._in_flight is not None and not self._in_flight.done():
             return await self._in_flight
 
-        self._in_flight = asyncio.create_task(self._run_poll())
-        try:
-            return await self._in_flight
-        finally:
+        self.trigger_background()
+        if self._in_flight is None:  # pragma: no cover - defensive
+            raise RuntimeError("Failed to start Plaud poll cycle")
+        return await self._in_flight
+
+    def trigger_background(self) -> bool:
+        """Start a poll cycle without waiting for it to finish.
+
+        Returns ``False`` when a cycle is already running so callers can avoid
+        queueing duplicate work.
+        """
+        if self._in_flight is not None and not self._in_flight.done():
+            return False
+        task = asyncio.create_task(self._run_poll())
+        self._in_flight = task
+        task.add_done_callback(self._clear_in_flight)
+        return True
+
+    triggerBackground = trigger_background
+
+    def _clear_in_flight(self, task: asyncio.Task[Any]) -> None:
+        if self._in_flight is task:
             self._in_flight = None
+
+    def _spawn_background(self, coro: Any) -> None:
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     async def get_status(self) -> dict[str, Any]:
         if self._last_poll_at is None:
@@ -670,6 +694,29 @@ class PlaudPoller:
             },
         )
 
+    def _hand_off_transcription(self, meeting_id: str, context: str) -> None:
+        """Queue automatic transcription without blocking the poll cycle."""
+        if not self.transcription_service:
+            return
+        fn = getattr(self.transcription_service, "transcribe_meeting", None) or getattr(
+            self.transcription_service, "transcribeMeeting", None
+        )
+        if not callable(fn):
+            return
+
+        async def _run() -> None:
+            try:
+                res = fn(meeting_id)
+                if inspect.isawaitable(res):
+                    await res
+            except Exception as exc:
+                self.logger.warn(
+                    f"Automatic transcription failed for {context}",
+                    {"meetingId": meeting_id, "error": str(exc)},
+                )
+
+        self._spawn_background(_run())
+
     async def _ingest_ready_meeting(
         self,
         meeting: Mapping[Any, Any],
@@ -747,23 +794,10 @@ class PlaudPoller:
             )
 
         has_only_generic = not segments or all(is_generic_plaud_speaker(s.get("speaker")) for s in segments)
-        if self.transcription_service and (
-            self.auto_transcribe_with_speechmatics
-            or (self.retranscribe_plaud_when_unnamed and has_only_generic)
+        if self.auto_transcribe_with_speechmatics or (
+            self.retranscribe_plaud_when_unnamed and has_only_generic
         ):
-            try:
-                fn = getattr(self.transcription_service, "transcribe_meeting", None) or getattr(
-                    self.transcription_service, "transcribeMeeting", None
-                )
-                if callable(fn):
-                    res = fn(meeting["id"])
-                    if inspect.isawaitable(res):
-                        await res
-            except Exception as exc:
-                self.logger.warn(
-                    "Automatic transcription failed for Plaud meeting",
-                    {"meetingId": meeting["id"], "error": str(exc)},
-                )
+            self._hand_off_transcription(meeting["id"], "Plaud meeting")
 
     async def _ingest_audio_only_meeting(
         self,
@@ -786,20 +820,7 @@ class PlaudPoller:
                 {"id": meeting["id"]},
             )
 
-        if self.transcription_service:
-            try:
-                fn = getattr(self.transcription_service, "transcribe_meeting", None) or getattr(
-                    self.transcription_service, "transcribeMeeting", None
-                )
-                if callable(fn):
-                    res = fn(meeting["id"])
-                    if inspect.isawaitable(res):
-                        await res
-            except Exception as exc:
-                self.logger.warn(
-                    "Automatic transcription failed for audio-only Plaud meeting",
-                    {"meetingId": meeting["id"], "error": str(exc)},
-                )
+        self._hand_off_transcription(meeting["id"], "audio-only Plaud meeting")
 
     async def _ensure_recording(
         self,

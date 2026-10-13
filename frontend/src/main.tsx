@@ -643,7 +643,11 @@ function PlaudModal({
       if (!res.ok) {
         throw new Error(data.error || `HTTP ${res.status}`);
       }
-      setSyncMessage(`Sync completed: ${data.discovered} discovered, ${data.resolved} resolved.`);
+      setSyncMessage(
+        data.alreadyRunning
+          ? "A Plaud sync is already running in the background."
+          : "Plaud sync started in the background. New recordings will appear as they finish."
+      );
       onRefreshStatus();
     } catch (err) {
       setSyncMessage(`Sync failed: ${err instanceof Error ? err.message : String(err)}`);

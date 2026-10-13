@@ -102,22 +102,12 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         or opts.get("speechmatics_webhook_secret")
         or os.environ.get("SPEECHMATICS_WEBHOOK_SECRET")
     )
-    ingest_token = (
-        opts.get("ingestToken")
-        or opts.get("ingest_token")
-        or os.environ.get("OLIVE_INGEST_TOKEN")
-    )
+    ingest_token = opts.get("ingestToken") or opts.get("ingest_token") or os.environ.get("OLIVE_INGEST_TOKEN")
     mcp_token = (
-        opts.get("mcpToken")
-        or opts.get("mcp_token")
-        or os.environ.get("OLIVE_MCP_TOKEN")
-        or ingest_token
+        opts.get("mcpToken") or opts.get("mcp_token") or os.environ.get("OLIVE_MCP_TOKEN") or ingest_token
     )
     bind_host = str(
-        opts.get("bindHost")
-        or opts.get("bind_host")
-        or os.environ.get("OLIVE_BIND_HOST")
-        or "127.0.0.1"
+        opts.get("bindHost") or opts.get("bind_host") or os.environ.get("OLIVE_BIND_HOST") or "127.0.0.1"
     )
     if not mcp_token and not _is_loopback_host(bind_host):
         raise ValueError(
@@ -268,9 +258,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
     )
 
     template_service: TemplateService = (
-        opts.get("templateService")
-        or opts.get("template_service")
-        or TemplateService(db)
+        opts.get("templateService") or opts.get("template_service") or TemplateService(db)
     )
 
     app = FastAPI(title="Olive API", version="0.2.0")
@@ -288,7 +276,12 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             bind_host=bind_host,
         )
 
-    if opts.get("startPlaudPoller") or opts.get("start_plaud_poller") or opts.get("syncOnStartup") or opts.get("sync_on_startup"):
+    if (
+        opts.get("startPlaudPoller")
+        or opts.get("start_plaud_poller")
+        or opts.get("syncOnStartup")
+        or opts.get("sync_on_startup")
+    ):
         try:
             get_speaker_service().sync_meeting_speakers_and_transcripts_sync()
         except Exception:
@@ -354,13 +347,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
 
         user_agent = request.headers.get("user-agent") or ""
         is_shortcut = ("Shortcuts" in user_agent) or (source_param == "ios-shortcut")
-        source = (
-            "ios-shortcut"
-            if is_shortcut
-            else "plaud"
-            if source_param == "plaud"
-            else "upload"
-        )
+        source = "ios-shortcut" if is_shortcut else "plaud" if source_param == "plaud" else "upload"
 
         auto_transcribe = str(auto_transcribe_param) in ("true", "1")
         transcription_provider = load_app_config(app_config_paths).transcriptionProvider
@@ -485,16 +472,24 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
     @app.get("/api/meetings/{meeting_id}/audio")
     async def get_meeting_audio_route(meeting_id: str, request: Request) -> Response:
         with db.connect() as conn:
-            meeting = conn.execute(
-                text("SELECT * FROM meetings WHERE id = :id"),
-                {"id": meeting_id},
-            ).mappings().first()
+            meeting = (
+                conn.execute(
+                    text("SELECT * FROM meetings WHERE id = :id"),
+                    {"id": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
             if not meeting:
                 return JSONResponse({"error": "Meeting not found"}, status_code=404)
-            recording = conn.execute(
-                text("SELECT * FROM recordings WHERE meeting_id = :id ORDER BY created_at ASC LIMIT 1"),
-                {"id": meeting_id},
-            ).mappings().first()
+            recording = (
+                conn.execute(
+                    text("SELECT * FROM recordings WHERE meeting_id = :id ORDER BY created_at ASC LIMIT 1"),
+                    {"id": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
             if not recording:
                 return JSONResponse({"error": "Recording not found"}, status_code=404)
 
@@ -558,11 +553,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         try:
             msgs = await _call_maybe_async(get_chat_service(), ("get_messages", "getMessages"), meeting_id)
             return JSONResponse(
-                {
-                    "messages": [
-                        m.model_dump() if hasattr(m, "model_dump") else m for m in msgs
-                    ]
-                }
+                {"messages": [m.model_dump() if hasattr(m, "model_dump") else m for m in msgs]}
             )
         except Exception as exc:
             msg = str(exc)
@@ -612,9 +603,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                         },
                     )
                     msg_dict = (
-                        assistant_msg.model_dump()
-                        if hasattr(assistant_msg, "model_dump")
-                        else assistant_msg
+                        assistant_msg.model_dump() if hasattr(assistant_msg, "model_dump") else assistant_msg
                     )
                     await queue.put({"event": "done", "data": json.dumps({"message": msg_dict})})
                 except Exception as exc:
@@ -668,6 +657,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         )
 
         if wants_stream:
+
             async def sse_gen():
                 queue: asyncio.Queue[dict[str, str] | None] = asyncio.Queue()
                 stream_closed = False
@@ -676,9 +666,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                     if stream_closed:
                         return
                     upd_dict = (
-                        update.model_dump(exclude_none=True)
-                        if hasattr(update, "model_dump")
-                        else update
+                        update.model_dump(exclude_none=True) if hasattr(update, "model_dump") else update
                     )
                     await queue.put({"event": "progress", "data": json.dumps(upd_dict)})
 
@@ -827,11 +815,11 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
 
     @app.get("/api/meetings/{meeting_id}/transcribe/progress")
     async def get_transcribe_progress_route(meeting_id: str, request: Request) -> Response:
-        wants_stream = (
-            request.query_params.get("stream") == "true"
-            or "text/event-stream" in (request.headers.get("accept") or "")
+        wants_stream = request.query_params.get("stream") == "true" or "text/event-stream" in (
+            request.headers.get("accept") or ""
         )
         if wants_stream:
+
             async def progress_sse():
                 queue: asyncio.Queue[dict[str, str] | None] = asyncio.Queue()
                 current = _call_sync(
@@ -841,17 +829,13 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                 )
                 if current:
                     c_dict = (
-                        current.model_dump(exclude_none=True)
-                        if hasattr(current, "model_dump")
-                        else current
+                        current.model_dump(exclude_none=True) if hasattr(current, "model_dump") else current
                     )
                     yield {"event": "progress", "data": json.dumps(c_dict)}
 
                 async def listener(update: Any) -> None:
                     upd_dict = (
-                        update.model_dump(exclude_none=True)
-                        if hasattr(update, "model_dump")
-                        else update
+                        update.model_dump(exclude_none=True) if hasattr(update, "model_dump") else update
                     )
                     stage = upd_dict.get("stage")
                     evt = (
@@ -893,11 +877,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             ("get_transcription_progress", "getTranscriptionProgress"),
             meeting_id,
         )
-        p_dict = (
-            progress.model_dump(exclude_none=True)
-            if hasattr(progress, "model_dump")
-            else progress
-        )
+        p_dict = progress.model_dump(exclude_none=True) if hasattr(progress, "model_dump") else progress
         return JSONResponse({"progress": p_dict})
 
     @app.get("/api/transcriptions/active")
@@ -1186,8 +1166,10 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         except Exception:
             return JSONResponse({"error": "Valid JSON body required"}, status_code=400)
 
-        if not isinstance(body, dict) or not body.get("fromLabel") or (
-            not body.get("toSpeakerName") and not body.get("toSpeakerId")
+        if (
+            not isinstance(body, dict)
+            or not body.get("fromLabel")
+            or (not body.get("toSpeakerName") and not body.get("toSpeakerId"))
         ):
             return JSONResponse(
                 {"error": "fromLabel and either toSpeakerName or toSpeakerId are required"},
@@ -1440,11 +1422,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
     async def get_llm_providers_route() -> JSONResponse:
         providers = await _call_maybe_async(get_llm_service(), ("list_providers", "listProviders"))
         return JSONResponse(
-            {
-                "providers": [
-                    p.model_dump() if hasattr(p, "model_dump") else p for p in providers
-                ]
-            }
+            {"providers": [p.model_dump() if hasattr(p, "model_dump") else p for p in providers]}
         )
 
     @app.get("/api/llm/models")
@@ -1460,12 +1438,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             },
         )
         return JSONResponse(
-            {
-                "models": [
-                    m.model_dump(exclude_none=True) if hasattr(m, "model_dump") else m
-                    for m in models
-                ]
-            }
+            {"models": [m.model_dump(exclude_none=True) if hasattr(m, "model_dump") else m for m in models]}
         )
 
     @app.post("/api/llm/refresh-catalog")
@@ -1600,11 +1573,16 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
 
     @app.post("/api/plaud/sync/trigger")
     async def post_plaud_trigger_route() -> JSONResponse:
-        res = await _call_maybe_async(get_plaud_poller(), ("trigger",))
-        has_err = bool(res.get("error")) if isinstance(res, dict) else False
+        poller = get_plaud_poller()
+        start_bg = getattr(poller, "trigger_background", None) or getattr(poller, "triggerBackground", None)
+        if callable(start_bg):
+            started = bool(start_bg())
+        else:
+            asyncio.create_task(_call_maybe_async(poller, ("trigger",)))
+            started = True
         return JSONResponse(
-            {"status": "error" if has_err else "completed", **(res if isinstance(res, dict) else {})},
-            status_code=502 if has_err else 200,
+            {"status": "started", "alreadyRunning": not started},
+            status_code=202,
         )
 
     @app.post("/api/plaud/auth/start")
@@ -1663,7 +1641,11 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             if "application/json" in content_type.lower():
                 try:
                     body = await request.json()
-                    if isinstance(body, dict) and isinstance(body.get("filename"), str) and body["filename"].strip():
+                    if (
+                        isinstance(body, dict)
+                        and isinstance(body.get("filename"), str)
+                        and body["filename"].strip()
+                    ):
                         filename = body["filename"].strip()
                 except Exception:
                     pass
@@ -1742,7 +1724,9 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                         {"error": "filename is required when restoring from stored backups"},
                         status_code=400,
                     )
-                res = await _call_maybe_async(get_backup_service(), ("restore_backup", "restoreBackup"), filename)
+                res = await _call_maybe_async(
+                    get_backup_service(), ("restore_backup", "restoreBackup"), filename
+                )
                 return JSONResponse({"ok": True, "result": res})
             return JSONResponse(
                 {"error": "Content-Type must be multipart/form-data or application/json"},
@@ -1771,9 +1755,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             }
             allowed_levels = level_hierarchy.get(min_level, level_hierarchy["debug"])
             lvl_placeholders = ", ".join(f":lvl_{i}" for i in range(len(allowed_levels)))
-            params: dict[str, Any] = {
-                f"lvl_{i}": lvl for i, lvl in enumerate(allowed_levels)
-            }
+            params: dict[str, Any] = {f"lvl_{i}": lvl for i, lvl in enumerate(allowed_levels)}
             params["limit"] = limit
             params["offset"] = offset
 
@@ -1805,9 +1787,10 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             count_where_sql = " AND ".join(count_where_clauses)
 
             with db.connect() as conn:
-                rows = conn.execute(
-                    text(
-                        f"""
+                rows = (
+                    conn.execute(
+                        text(
+                            f"""
                         SELECT logs.id, logs.level, logs.category, logs.message,
                                logs.meeting_id AS meetingId, meetings.title AS meetingTitle,
                                logs.details, logs.created_at AS createdAt
@@ -1817,18 +1800,23 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                         ORDER BY logs.created_at DESC
                         LIMIT :limit OFFSET :offset
                         """
-                    ),
-                    params,
-                ).mappings().all()
+                        ),
+                        params,
+                    )
+                    .mappings()
+                    .all()
+                )
 
                 total = conn.execute(
                     text(f"SELECT COUNT(id) FROM logs WHERE {count_where_sql}"),
                     params,
                 ).scalar()
 
-                cat_rows = conn.execute(
-                    text("SELECT DISTINCT category FROM logs ORDER BY category ASC")
-                ).mappings().all()
+                cat_rows = (
+                    conn.execute(text("SELECT DISTINCT category FROM logs ORDER BY category ASC"))
+                    .mappings()
+                    .all()
+                )
 
             logs = [
                 LogItem(
@@ -1873,6 +1861,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
 
     web_root = opts.get("webRoot") or opts.get("web_root")
     if web_root:
+
         @app.get("/{full_path:path}")
         async def spa_fallback(full_path: str) -> Response:
             if full_path.startswith("api/"):
@@ -1939,9 +1928,7 @@ def export_openapi_schema() -> dict[str, Any]:
         elif model_cls.__name__ == "Speaker":
             req_set.update(props.keys())
         elif model_cls.__name__ == "MeetingDetailAggregate":
-            req_set.update(
-                ["meeting", "recordings", "artifacts", "speakers", "stageRuns", "summaries"]
-            )
+            req_set.update(["meeting", "recordings", "artifacts", "speakers", "stageRuns", "summaries"])
         elif model_cls.__name__ in ("TranscriptionProgressUpdate", "SummaryGenerationStatus"):
             for k, prop_schema in list(props.items()):
                 if k not in req_set and "anyOf" in prop_schema:
