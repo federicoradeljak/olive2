@@ -222,3 +222,39 @@ def test_turns_and_centroid_matching() -> None:
     by_name = {d.name: d for d in discovered}
     assert by_name["Alice"].isEnrolled is True
     assert by_name["Speaker 2"].isEnrolled is False
+
+
+async def test_identify_speakers_emits_progress() -> None:
+    import numpy as np
+
+    from olive.ml.identify import identify_speakers_from_turns
+
+    class _FakeExtractor:
+        dim = 2
+
+        async def extract(self, samples: Any, sample_rate: int = 16000) -> list[float]:
+            return [1.0, 0.0]
+
+    transcript = Transcript(
+        segments=[
+            TranscriptSegment(startMs=0, endMs=5000, speaker="Speaker 1", text="hello world"),
+            TranscriptSegment(startMs=6000, endMs=11000, speaker="Speaker 2", text="hi there"),
+        ]
+    )
+    enrolled = [
+        EnrolledSpeaker(id="spk-alice", name="Alice", providerIds={"local": [json.dumps([1.0, 0.0])]})
+    ]
+    updates: list[dict[str, Any]] = []
+    result = await identify_speakers_from_turns(
+        np.zeros(16000 * 12, dtype=np.float32),
+        16000,
+        transcript,
+        enrolled,
+        embedding_extractor=_FakeExtractor(),
+        on_progress=updates.append,
+    )
+    assert result is not None
+    phases = [str(u.get("phase")) for u in updates]
+    assert "embedding" in phases
+    assert "matching" in phases
+    assert any(u.get("total") == 2 for u in updates)

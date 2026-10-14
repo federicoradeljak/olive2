@@ -15,7 +15,9 @@ cloud speaker labels.
 
 from __future__ import annotations
 
+import inspect
 import json
+from collections.abc import Callable
 from typing import Any
 
 from ..logging_db import logger
@@ -151,6 +153,16 @@ def rename_transcript_speakers(transcript: Transcript, cluster_to_name: dict[str
     )
 
 
+async def _emit_progress(
+    on_progress: Callable[[dict[str, Any]], Any] | None, payload: dict[str, Any]
+) -> None:
+    if not callable(on_progress):
+        return
+    res = on_progress(payload)
+    if inspect.isawaitable(res):
+        await res
+
+
 async def identify_speakers_from_turns(
     samples: Any,
     sample_rate: int,
@@ -160,6 +172,7 @@ async def identify_speakers_from_turns(
     similarity_threshold: float = 0.45,
     decision_margin: float = 0.06,
     meeting_id: str | None = None,
+    on_progress: Callable[[dict[str, Any]], Any] | None = None,
 ) -> tuple[Transcript, list[DiscoveredSpeakerVoiceprint]] | None:
     """Identify cloud speaker clusters against enrolled local voiceprints.
 
@@ -174,10 +187,29 @@ async def identify_speakers_from_turns(
     if not turns:
         return None
 
+    clusters = {str(t["speakerId"]) for t in turns}
+    await _emit_progress(
+        on_progress,
+        {
+            "phase": "embedding",
+            "current": 0,
+            "total": len(clusters),
+            "message": f"Extracting voiceprints for {len(clusters)} speaker(s) from {len(turns)} turns...",
+        },
+    )
     extractor = embedding_extractor or WeSpeakerEmbeddingExtractor()
     diarizer = PyannoteSpeakerDiarizer(extractor)
     _segments, centroids = await diarizer.extract_cluster_voiceprints(
-        samples, turns, sample_rate, meeting_id=meeting_id
+        samples, turns, sample_rate, on_progress=on_progress, meeting_id=meeting_id
+    )
+    await _emit_progress(
+        on_progress,
+        {
+            "phase": "matching",
+            "current": len(clusters),
+            "total": len(clusters),
+            "message": f"Matching {len(clusters)} voiceprint(s) against {len(enrolled_speakers)} enrolled speaker(s)...",
+        },
     )
     usable = {cid: vec for cid, vec in centroids.items() if vec and any(abs(v) > 1e-9 for v in vec)}
     if not usable:
@@ -209,9 +241,14 @@ async def identify_cloud_transcript_speakers(
     similarity_threshold: float = 0.45,
     decision_margin: float = 0.06,
     meeting_id: str | None = None,
+    on_progress: Callable[[dict[str, Any]], Any] | None = None,
 ) -> tuple[Transcript, list[DiscoveredSpeakerVoiceprint]] | None:
     """Decode ``audio_path`` and identify speakers; ``None`` on any failure."""
     try:
+        await _emit_progress(
+            on_progress,
+            {"phase": "decoding", "message": "Decoding audio for speaker identification..."},
+        )
         decoded = await load_audio_samples(
             {"audioPath": audio_path, "audioBytes": None, "enhance": False}, 16000
         )
@@ -222,6 +259,7 @@ async def identify_cloud_transcript_speakers(
             enrolled_speakers,
             similarity_threshold=similarity_threshold,
             decision_margin=decision_margin,
+            on_progress=on_progress,
             meeting_id=meeting_id,
         )
     except Exception as exc:

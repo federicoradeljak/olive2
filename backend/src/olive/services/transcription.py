@@ -1429,23 +1429,71 @@ class TranscriptionService:
         if not audio_path:
             return None
         opts = options or {}
+
+        async def _identify_progress(update: dict[str, Any]) -> None:
+            phase = str(update.get("phase") or "")
+            raw_msg = str(update.get("message") or "")
+            detail = raw_msg.removeprefix("Diarization: ").strip()
+            current = update.get("current")
+            total = update.get("total")
+            if phase == "decoding":
+                percent, message = 96.0, "Identifying speakers: decoding audio..."
+            elif phase == "matching":
+                percent, message = 99.0, f"Identifying speakers: {detail}"
+            elif current is not None and total:
+                frac = min(1.0, float(current) / max(1.0, float(total)))
+                percent = 96.0 + 2.5 * frac
+                message = (
+                    f"Identifying speakers: {detail} ({current}/{total} speaker(s))"
+                    if detail
+                    else "Identifying speakers..."
+                )
+            else:
+                percent, message = (
+                    97.0,
+                    f"Identifying speakers: {detail}" if detail else "Identifying speakers...",
+                )
+            self.emit_progress(
+                meeting_id,
+                {
+                    "stage": "finalizing",
+                    "percent": float(round(percent)),
+                    "message": message,
+                },
+            )
+
         try:
             enrolled = await self._get_enrolled_speakers()
             if self.cloud_speaker_identifier is not None:
                 res = self.cloud_speaker_identifier(audio_path, transcript, enrolled)
                 if inspect.isawaitable(res):
                     res = await res
-                return res
-            threshold = opts.get("similarityThreshold")
-            if threshold is None:
-                threshold = self._configured_similarity_threshold()
-            return await identify_cloud_transcript_speakers(
-                audio_path,
-                transcript,
-                enrolled,
-                similarity_threshold=float(threshold) if threshold is not None else 0.45,
-                meeting_id=meeting_id,
-            )
+                result = res
+            else:
+                threshold = opts.get("similarityThreshold")
+                if threshold is None:
+                    threshold = self._configured_similarity_threshold()
+                result = await identify_cloud_transcript_speakers(
+                    audio_path,
+                    transcript,
+                    enrolled,
+                    similarity_threshold=float(threshold) if threshold is not None else 0.45,
+                    meeting_id=meeting_id,
+                    on_progress=_identify_progress,
+                )
+            if result is not None:
+                _renamed, discovered = result
+                matched = [d.name for d in discovered if d.isEnrolled]
+                clusters = len(discovered)
+                if matched:
+                    msg = f"Identified {len(matched)} of {clusters} speaker(s): " + ", ".join(matched)
+                else:
+                    msg = "No enrolled speakers matched; keeping cloud speaker labels"
+                self.emit_progress(
+                    meeting_id,
+                    {"stage": "finalizing", "percent": 99, "message": msg},
+                )
+            return result
         except Exception as exc:
             self.logger.warn(
                 "Cloud speaker identification failed; keeping cloud speaker labels",
