@@ -286,6 +286,21 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         from .workflows import reset_shutdown_flag, shutdown_dbos
 
         reset_shutdown_flag()
+        # The Plaud poller must start here — inside the server's running
+        # event loop. Starting it during app construction leaves
+        # AsyncIOScheduler bound to a loop that never runs, so interval
+        # polls (and the boot backfill/trigger) silently never fire and only
+        # manual "Sync Now" works.
+        if opts.get("startPlaudPoller") or opts.get("start_plaud_poller"):
+            try:
+                poll_interval = int(
+                    opts.get("pollIntervalMinutes") or opts.get("poll_interval_minutes") or 15
+                )
+                get_plaud_poller().start(poll_interval)
+            except Exception as exc:
+                from .logging_db import logger as _lifespan_logger
+
+                _lifespan_logger.warn("Failed to start Plaud poller", {"error": str(exc)})
         try:
             yield
         finally:
@@ -340,10 +355,6 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             get_speaker_service().sync_meeting_speakers_and_transcripts_sync()
         except Exception:
             pass
-
-    if opts.get("startPlaudPoller") or opts.get("start_plaud_poller"):
-        poll_interval = int(opts.get("pollIntervalMinutes") or opts.get("poll_interval_minutes") or 15)
-        get_plaud_poller().start(poll_interval)
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:

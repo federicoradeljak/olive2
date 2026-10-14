@@ -848,3 +848,51 @@ async def test_plaud_hands_off_transcription_without_blocking(tmp_path: Path) ->
     release.set()
     await asyncio.sleep(0)
     handle.engine.dispose()
+
+
+def test_poller_start_runs_in_lifespan_with_running_loop(tmp_path: Path) -> None:
+    handle = create_db(":memory:")
+    started: dict[str, Any] = {}
+
+    class _FakePoller:
+        def start(self, interval_minutes: int) -> None:
+            started["interval"] = interval_minutes
+
+        def stop(self) -> None:
+            started["stopped"] = True
+
+    app = create_app(
+        {
+            "db": handle.engine,
+            "meetingsDir": str(tmp_path / "meetings"),
+            "plaudPoller": _FakePoller(),
+            "startPlaudPoller": True,
+            "pollIntervalMinutes": 7,
+        }
+    )
+    with TestClient(app):
+        assert started == {"interval": 7}
+    assert started.get("stopped") is True
+    handle.engine.dispose()
+
+
+def test_poller_does_not_start_without_flag(tmp_path: Path) -> None:
+    handle = create_db(":memory:")
+
+    class _FakePoller:
+        def start(self, _interval_minutes: int) -> None:
+            raise AssertionError("must not start")
+
+        def stop(self) -> None:
+            pass
+
+    app = create_app(
+        {
+            "db": handle.engine,
+            "meetingsDir": str(tmp_path / "meetings"),
+            "plaudPoller": _FakePoller(),
+        }
+    )
+    with TestClient(app):
+        pass
+    handle.engine.dispose()
