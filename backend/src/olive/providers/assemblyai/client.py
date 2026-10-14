@@ -32,12 +32,33 @@ class _SdkTranscriber:
         import assemblyai as aai  # lazy: only needed for real transcription
 
         self._aai = aai
+        self._api_key = api_key
         self._transcriber = aai.Transcriber(api_key=api_key)
 
     def transcribe(self, audio_input: str | bytes, config: dict[str, Any]) -> AssemblyAITranscript:
         aai_config = self._aai.TranscriptionConfig(**config)
         transcript = self._transcriber.transcribe(audio_input, config=aai_config)
         return _to_transcript_dict(transcript)
+
+    def submit(self, audio_input: str | bytes, config: dict[str, Any]) -> AssemblyAITranscript:
+        """Upload + create a transcript job without polling for completion."""
+        aai_config = self._aai.TranscriptionConfig(**config)
+        transcript = self._transcriber.submit(audio_input, config=aai_config)
+        return _to_transcript_dict(transcript)
+
+    def get_transcript(self, job_id: str) -> AssemblyAITranscript:
+        """Fetch the current transcript state (status, plus words when done)."""
+        import httpx
+
+        res = httpx.get(
+            f"https://api.assemblyai.com/v2/transcript/{job_id}",
+            headers={"authorization": self._api_key},
+            timeout=60.0,
+        )
+        res.raise_for_status()
+        data: dict[str, Any] = res.json()
+        data["status"] = _enum_value(data.get("status"))
+        return data  # type: ignore[return-value]
 
 
 def _read(obj: Any, key: str) -> Any:
@@ -130,6 +151,7 @@ class AssemblyAIClient:
         self.submit_timeout_ms: int | None = int(st_opt) if st_opt is not None else 1_800_000
 
         self._transcriber: Any = opts.get("transcriber") or opts.get("transcriber_client") or None
+        self._staged_results: dict[str, AssemblyAITranscript] = {}
 
     @property
     def is_configured(self) -> bool:
@@ -179,3 +201,59 @@ class AssemblyAIClient:
         return data
 
     submitAndTranscribe = submit_and_transcribe
+
+    async def _call_staged(self, transcriber: Any, method: str, *args: Any) -> Any:
+        fn = getattr(transcriber, method)
+        result = await asyncio.to_thread(fn, *args)
+        if inspect.isawaitable(result):
+            result = await result
+        return result
+
+    async def submit_job(self, options: dict[str, Any]) -> AssemblyAITranscript:
+        """Upload + submit a job; returns {id, status} without waiting.
+
+        Injected transcribers may implement ``submit(audio, config)`` for the
+        staged flow; ones with only ``transcribe`` are run to completion and
+        their result is stashed for :meth:`get_transcript`.
+        """
+        if not self.is_configured:
+            raise RuntimeError("AssemblyAI API key is not configured")
+        audio_input = _audio_input(options.get("audio"))
+        config = _build_config(options)
+        transcriber = self._transcriber or _SdkTranscriber(self.api_key)
+
+        if callable(getattr(transcriber, "submit", None)):
+            timeout = self.submit_timeout_ms / 1000.0 if self.submit_timeout_ms is not None else None
+            try:
+                result = await asyncio.wait_for(
+                    self._call_staged(transcriber, "submit", audio_input, config),
+                    timeout=timeout,
+                )
+            except TimeoutError as exc:
+                raise RuntimeError(f"AssemblyAI upload timed out after {self.submit_timeout_ms}ms") from exc
+            data = _to_transcript_dict(result)
+            if data.get("status") == "error":
+                raise RuntimeError(str(data.get("error") or "AssemblyAI transcription failed"))
+            return data
+
+        data = await self.submit_and_transcribe(options)
+        job_id = str(data.get("id") or "")
+        if job_id:
+            self._staged_results[job_id] = data
+        return {**data, "status": data.get("status") or "completed"}  # type: ignore[return-value]
+
+    submitJob = submit_job
+
+    async def get_transcript(self, job_id: str) -> AssemblyAITranscript:
+        """Fetch current transcript state for a submitted job."""
+        if job_id in self._staged_results:
+            return self._staged_results[job_id]
+        transcriber = self._transcriber or _SdkTranscriber(self.api_key)
+        if not callable(getattr(transcriber, "get_transcript", None)):
+            raise RuntimeError("Transcriber does not support staged polling")
+        result = await self._call_staged(transcriber, "get_transcript", job_id)
+        data = _to_transcript_dict(result) if not isinstance(result, dict) else result
+        data["status"] = _enum_value(data.get("status"))
+        return data  # type: ignore[return-value]
+
+    getTranscript = get_transcript

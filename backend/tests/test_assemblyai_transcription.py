@@ -49,7 +49,16 @@ RAW_TRANSCRIPT: dict[str, Any] = {
 
 
 class _FakeTranscriber:
-    async def transcribe(self, _audio: Any, _config: dict[str, Any]) -> dict[str, Any]:
+    def __init__(self) -> None:
+        self.polls = 0
+
+    async def submit(self, _audio: Any, _config: dict[str, Any]) -> dict[str, Any]:
+        return {"id": "aai-job-123", "status": "queued"}
+
+    async def get_transcript(self, _job_id: str) -> dict[str, Any]:
+        self.polls += 1
+        if self.polls < 2:
+            return {"id": "aai-job-123", "status": "processing"}
         return RAW_TRANSCRIPT
 
 
@@ -102,17 +111,22 @@ async def test_assemblyai_polling_flow_persists_artifacts_and_cloud_labels(tmp_p
     handle, meeting_id, paths = _seed_meeting(tmp_path)
     service = _service(handle, str(tmp_path / "meetings"))
 
-    progress_stages: list[str] = []
+    progress_updates: list[tuple[str, float, str]] = []
     result = await service.transcribe_meeting(
         meeting_id,
         {
             "provider": "assemblyai",
-            "onProgress": lambda u: progress_stages.append(u.stage),
+            "pollIntervalMs": 10,
+            "onProgress": lambda u: progress_updates.append((u.stage, u.percent, u.message)),
         },
     )
 
     assert result["status"] == "done"
-    assert progress_stages[-1] == "done"
+    stages = [s for s, _p, _m in progress_updates]
+    assert stages[0] == "uploading"
+    assert "transcribing" in stages
+    assert any("poll #" in m for _s, _p, m in progress_updates)
+    assert stages[-1] == "done"
     assert result["jobId"] == "aai-job-123"
     with handle.engine.connect() as conn:
         stage_run = (
@@ -163,7 +177,7 @@ async def test_assemblyai_flow_renames_speakers_from_local_voiceprints(tmp_path:
         ]
 
     service = _service(handle, str(tmp_path / "meetings"), cloudSpeakerIdentifier=fake_identifier)
-    result = await service.transcribe_meeting(meeting_id, {"provider": "assemblyai"})
+    result = await service.transcribe_meeting(meeting_id, {"provider": "assemblyai", "pollIntervalMs": 10})
     assert result["status"] == "done"
 
     saved = json.loads((Path(paths.folder) / "transcripts/assemblyai.json").read_text())

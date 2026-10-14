@@ -1753,10 +1753,18 @@ class TranscriptionService:
                 on_progress=on_progress,
             )
 
-        try:
-            # The AssemblyAI SDK submits + polls internally (polling chosen
-            # over webhooks); this call returns the completed transcript.
-            raw = await self.assemblyai_client.submit_and_transcribe(
+        async def _emit_aai(stage: str, percent: float, message: str) -> None:
+            if callable(on_progress):
+                r = on_progress(
+                    TranscriptionProgressUpdate(stage=stage, percent=percent, message=message)  # type: ignore[arg-type]
+                )
+                if inspect.isawaitable(r):
+                    await r
+
+        # Upload + submit with a heartbeat, since the upload is a single
+        # request with no byte-level progress from the SDK.
+        submit_task = asyncio.create_task(
+            self.assemblyai_client.submit_job(
                 {
                     "audio": {"path": audio_full_path},
                     "filename": Path(recording["path"]).name,
@@ -1764,27 +1772,101 @@ class TranscriptionService:
                     "additionalVocab": opts.get("additionalVocab") or opts.get("additional_vocab"),
                 }
             )
+        )
+        submit_start = self.now()
+        submitted: Any
+        try:
+            while not submit_task.done():
+                if _signal_aborted(sig):
+                    submit_task.cancel()
+                    return await self._fail_assemblyai(
+                        meeting_id,
+                        stage_run_id,
+                        "",
+                        "Transcription was cancelled.",
+                        cancelled=True,
+                        on_progress=on_progress,
+                    )
+                done, _pending = await asyncio.wait({submit_task}, timeout=5.0)
+                if done:
+                    break
+                elapsed_s = int((self.now() - submit_start) / 1000)
+                await _emit_aai("uploading", 15, f"Uploading audio to AssemblyAI... ({elapsed_s}s elapsed)")
+            submitted = submit_task.result()
         except Exception as exc:
             return await self._fail_assemblyai(
                 meeting_id, stage_run_id, "", str(exc), on_progress=on_progress
             )
 
-        if _signal_aborted(sig):
-            return await self._fail_assemblyai(
-                meeting_id,
-                stage_run_id,
-                "",
-                "Transcription was cancelled.",
-                cancelled=True,
-                on_progress=on_progress,
-            )
-
-        job_id = str(raw.get("id") or "") if isinstance(raw, dict) else ""
+        job_id = str(submitted.get("id") or "") if isinstance(submitted, dict) else ""
         with self.db.begin() as conn:
             conn.execute(
                 text("UPDATE stage_runs SET provider_job_id = :jid, updated_at = :now WHERE id = :id"),
                 {"jid": job_id or None, "now": self.now(), "id": stage_run_id},
             )
+        await _emit_aai(
+            "transcribing",
+            25,
+            f"Submitted to AssemblyAI (job {job_id[:8]}...). Processing...",
+        )
+
+        raw: Any = None
+        if (
+            isinstance(submitted, dict)
+            and submitted.get("status") == "completed"
+            and (submitted.get("words") or submitted.get("utterances"))
+        ):
+            raw = submitted
+        else:
+            interval_ms = int(opts.get("pollIntervalMs") or 5000)
+            max_wait_ms = int(opts.get("maxPollWaitMs") or 3_600_000)
+            duration_s = (recording.get("duration_ms") or 0) / 1000.0
+            expected_s = min(900.0, max(45.0, duration_s / 8.0 if duration_s else 120.0))
+            poll_start = self.now()
+            poll_count = 0
+            while self.now() - poll_start < max_wait_ms:
+                if _signal_aborted(sig):
+                    return await self._fail_assemblyai(
+                        meeting_id,
+                        stage_run_id,
+                        job_id,
+                        "Transcription was cancelled.",
+                        cancelled=True,
+                        on_progress=on_progress,
+                    )
+                state = await self.assemblyai_client.get_transcript(job_id)
+                status = str(state.get("status") or "") if isinstance(state, dict) else ""
+                if status == "completed":
+                    raw = state
+                    break
+                if status == "error":
+                    return await self._fail_assemblyai(
+                        meeting_id,
+                        stage_run_id,
+                        job_id,
+                        str(state.get("error") or "AssemblyAI transcription failed"),
+                        on_progress=on_progress,
+                    )
+                poll_count += 1
+                elapsed_s = int((self.now() - poll_start) / 1000)
+                if status == "queued":
+                    pct = 30.0
+                else:
+                    pct = min(92.0, 30.0 + 62.0 * min(1.0, (elapsed_s / expected_s) if expected_s else 1.0))
+                await _emit_aai(
+                    "transcribing",
+                    pct,
+                    f"AssemblyAI {status or 'processing'} (poll #{poll_count}, {elapsed_s}s elapsed)...",
+                )
+                await asyncio.sleep(interval_ms / 1000.0)
+            if raw is None:
+                return await self._fail_assemblyai(
+                    meeting_id,
+                    stage_run_id,
+                    job_id,
+                    f"AssemblyAI job timed out after {max_wait_ms}ms",
+                    on_progress=on_progress,
+                )
 
         if callable(on_progress):
             r = on_progress(

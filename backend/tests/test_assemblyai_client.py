@@ -138,3 +138,34 @@ async def test_camel_case_alias_works() -> None:
     client, _ = _client({"id": "t5", "status": "completed"})
     out = await client.submitAndTranscribe({"audio": b"x"})
     assert out["id"] == "t5"
+
+
+class _StagedFakeTranscriber:
+    def __init__(self) -> None:
+        self.states = [
+            {"id": "job-9", "status": "processing"},
+            {"id": "job-9", "status": "completed", "text": "done", "words": []},
+        ]
+
+    def submit(self, audio_input: Any, config: dict[str, Any]) -> dict[str, Any]:
+        return {"id": "job-9", "status": "queued"}
+
+    def get_transcript(self, job_id: str) -> dict[str, Any]:
+        assert job_id == "job-9"
+        return self.states.pop(0)
+
+
+async def test_staged_submit_and_poll() -> None:
+    client = AssemblyAIClient({"apiKey": "test-key", "transcriber": _StagedFakeTranscriber()})
+    submitted = await client.submit_job({"audio": b"x"})
+    assert submitted == {"id": "job-9", "status": "queued"}
+    assert (await client.get_transcript("job-9"))["status"] == "processing"
+    assert (await client.get_transcript("job-9"))["status"] == "completed"
+
+
+async def test_staged_submit_falls_back_to_transcribe_only_fake() -> None:
+    payload = {"id": "t-legacy", "status": "completed", "text": "hi", "words": []}
+    client, _ = _client(payload)
+    submitted = await client.submit_job({"audio": b"x"})
+    assert submitted["id"] == "t-legacy"
+    assert (await client.get_transcript("t-legacy"))["text"] == "hi"
