@@ -18,6 +18,7 @@ from sqlalchemy.engine import Engine
 from ..layout import ensure_meeting_folder, meeting_paths
 from ..logging_db import Logger
 from ..logging_db import logger as default_logger
+from ..ml.opus import is_raw_plaud_opus, wrap_raw_opus_bytes
 from .meetings import to_meeting
 
 MIME_TO_EXT: dict[str, str] = {
@@ -97,6 +98,9 @@ class IngestService:
         current_time = self.now()
         start_time = int(options.get("startTime") or options.get("start_time") or current_time)
         audio_bytes = bytes(options.get("audioBytes") or options.get("audio_bytes") or b"")
+        # Canonicalize headerless raw Plaud Opus on disk as Ogg Opus.
+        if is_raw_plaud_opus(audio_bytes):
+            audio_bytes = wrap_raw_opus_bytes(audio_bytes)
         filename: str | None = options.get("filename")
         mime_in: str | None = options.get("mime")
         sha256 = hashlib.sha256(audio_bytes).hexdigest()

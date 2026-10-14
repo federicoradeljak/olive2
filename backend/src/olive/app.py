@@ -91,6 +91,15 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         settings_path=str(Path(config_dir) / "settings.json"),
         plaud_tokens_path=plaud_tokens_path,
     )
+    # Canonicalize any legacy headerless raw Plaud Opus recordings on disk
+    # (idempotent; wrapped files are valid Ogg Opus for every consumer).
+    try:
+        from .ml.opus import migrate_raw_opus_recordings
+
+        migrate_raw_opus_recordings(db, meetings_dir)
+    except Exception:
+        pass
+
     configured_provider = load_app_config(app_config_paths).transcriptionProvider
     default_provider = (
         opts.get("defaultTranscriptionProvider")

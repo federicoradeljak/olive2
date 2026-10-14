@@ -13,8 +13,10 @@ against real Plaud downloads and independently by the localplaud project.
 
 from __future__ import annotations
 
+import hashlib
 import struct
 from pathlib import Path
+from typing import Any
 
 PACKET_BYTES = 80
 PACKETS_PER_PAGE = 50
@@ -62,13 +64,56 @@ def wrap_raw_opus_bytes(data: bytes) -> bytes:
     return bytes(out)
 
 
-def wrap_raw_opus_file(source: str | Path, dest: str | Path) -> bool:
-    """Wrap ``source`` into ``dest`` when it is raw Plaud Opus; return success."""
-    data = Path(source).read_bytes()
-    if not is_raw_plaud_opus(data):
-        return False
-    Path(dest).write_bytes(wrap_raw_opus_bytes(data))
-    return True
+def migrate_raw_opus_recordings(db: Any, meetings_dir: str) -> int:
+    """Rewrite stored raw Plaud Opus recordings in place as Ogg Opus.
+
+    Canonicalizing on disk means every consumer (browser player, ffmpeg,
+    cloud ASR, external tools) sees a valid file without any per-exit-point
+    wrapping. Idempotent: wrapped files no longer match the raw layout.
+    Returns the number of recordings migrated.
+    """
+    from sqlalchemy import text
+
+    from ..layout import meeting_paths
+
+    with db.connect() as conn:
+        rows = (
+            conn.execute(
+                text(
+                    """
+                    SELECT r.id AS recording_id, r.path, m.start_time, m.title, m.id AS meeting_id
+                    FROM recordings r JOIN meetings m ON m.id = r.meeting_id
+                    """
+                )
+            )
+            .mappings()
+            .all()
+        )
+
+    migrated = 0
+    for row in rows:
+        folder = meeting_paths(meetings_dir, int(row["start_time"]), row["title"], row["meeting_id"]).folder
+        full_path = Path(folder) / row["path"]
+        if not full_path.exists():
+            continue
+        data = full_path.read_bytes()
+        if not is_raw_plaud_opus(data):
+            continue
+        wrapped = wrap_raw_opus_bytes(data)
+        tmp_path = full_path.with_name(f"{full_path.name}.wrapping.tmp")
+        tmp_path.write_bytes(wrapped)
+        tmp_path.replace(full_path)
+        with db.begin() as conn:
+            conn.execute(
+                text("UPDATE recordings SET size_bytes = :sz, sha256 = :sha WHERE id = :id"),
+                {
+                    "sz": len(wrapped),
+                    "sha": hashlib.sha256(wrapped).hexdigest(),
+                    "id": row["recording_id"],
+                },
+            )
+        migrated += 1
+    return migrated
 
 
 def _opus_head() -> bytes:
