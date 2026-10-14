@@ -986,6 +986,55 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=500)
 
+    @app.post("/api/meetings/bulk-transcribe")
+    async def post_bulk_transcribe_route(request: Request) -> JSONResponse:
+        """Queue re-transcription for many meetings with one chosen engine.
+
+        Body: ``{ meetingIds?, provider, force=true, language?, filters? }``
+        where ``filters`` may carry ``search``/``startTime``/``endTime``/
+        ``currentProvider``. Returns per-meeting queue results; progress can
+        be followed via ``GET /api/transcriptions/active``.
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "JSON body required"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "JSON object required"}, status_code=400)
+
+        provider = body.get("provider")
+        if isinstance(provider, str) and provider.startswith("local"):
+            body = {**body, "provider": "local"}
+            provider = "local"
+        if provider not in ("local", "speechmatics", "assemblyai"):
+            return JSONResponse(
+                {"error": "provider must be one of 'local', 'speechmatics', 'assemblyai'"},
+                status_code=400,
+            )
+
+        try:
+            cfg = load_app_config(app_config_paths)
+            if body.get("similarityThreshold") is None:
+                body["similarityThreshold"] = cfg.localSimilarityThreshold
+            if body.get("clusteringThreshold") is None:
+                body["clusteringThreshold"] = cfg.localClusteringThreshold
+            if body.get("modelId") is None and body.get("provider") == "local":
+                body["modelId"] = cfg.localAsrModel
+        except Exception:
+            pass
+
+        try:
+            result = await _call_maybe_async(
+                get_transcription_service(),
+                ("start_bulk_transcription", "startBulkTranscription"),
+                body,
+            )
+            return JSONResponse(result, status_code=202)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
     # Summaries API
     @app.post("/api/meetings/{meeting_id}/summarize")
     async def post_summarize_route(meeting_id: str, request: Request) -> JSONResponse:
@@ -2018,6 +2067,10 @@ def export_openapi_schema() -> dict[str, Any]:
         s.MeetingSummaryItem,
         s.SummaryGenerationStatus,
         s.TranscriptionProgressUpdate,
+        s.BulkTranscribeFilters,
+        s.BulkTranscribeRequest,
+        s.BulkTranscribeItemResult,
+        s.BulkTranscribeResponse,
         s.MeetingDetailAggregate,
         s.BackupManifestStats,
         s.BackupManifest,

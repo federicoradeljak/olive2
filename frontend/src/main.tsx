@@ -828,6 +828,9 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [showUploadModal, setShowUploadModal] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [showBulkModal, setShowBulkModal] = useState(false);
+  const [bulkNotice, setBulkNotice] = useState<string | null>(null);
 
   const fetchMeetings = async (opts?: { silent?: boolean }) => {
     if (!opts?.silent && meetings.length === 0) {
@@ -857,6 +860,18 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
   useEffect(() => {
     void fetchMeetings();
   }, [search]);
+
+  const toggleSelectMeeting = (id: string) => {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((m) => m !== id) : [...prev, id]));
+  };
+
+  const handleSelectVisible = () => {
+    setSelectedIds(meetings.map((m) => m.id));
+  };
+
+  const handleClearSelection = () => {
+    setSelectedIds([]);
+  };
 
   const handleDeleteMeeting = async (id: string, title: string) => {
     if (!confirm(`Are you sure you want to delete meeting "${title}"? This will permanently remove its recordings, transcripts, and summaries.`)) {
@@ -909,7 +924,7 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
           <h1 className="text-3xl font-bold tracking-tight">Meetings</h1>
           <p className="mt-1 text-sm text-stone-400">Recorded and ingested audio archive</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <input
             type="text"
             placeholder="Search meetings…"
@@ -919,6 +934,17 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
           />
           <button
             type="button"
+            onClick={() => {
+              setBulkNotice(null);
+              setShowBulkModal(true);
+            }}
+            className="flex items-center gap-2 rounded-lg border border-lime-400/40 bg-lime-400/10 px-4 py-2 text-sm font-semibold text-lime-300 transition hover:bg-lime-400/20 shrink-0"
+            title="Re-transcribe many meetings with one engine"
+          >
+            <span>⟳</span> Bulk re-transcribe
+          </button>
+          <button
+            type="button"
             onClick={() => setShowUploadModal(true)}
             className="flex items-center gap-2 rounded-lg bg-lime-400 px-4 py-2 text-sm font-semibold text-stone-950 transition hover:bg-lime-300 shrink-0"
           >
@@ -926,6 +952,27 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
           </button>
         </div>
       </div>
+
+      {bulkNotice && (
+        <div className="rounded-xl border border-lime-900 bg-lime-950/40 p-4 text-sm text-lime-200">{bulkNotice}</div>
+      )}
+
+      {!loading && !error && meetings.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 text-xs text-stone-400">
+          <span className={selectedIds.length > 0 ? "font-semibold text-lime-300" : ""}>
+            {selectedIds.length > 0 ? `${selectedIds.length} selected` : "No meetings selected"}
+          </span>
+          <button type="button" onClick={handleSelectVisible} className="rounded-md border border-stone-700 px-2.5 py-1 hover:border-lime-400/60 hover:text-lime-300 transition">
+            Select visible ({meetings.length})
+          </button>
+          {selectedIds.length > 0 && (
+            <button type="button" onClick={handleClearSelection} className="rounded-md border border-stone-700 px-2.5 py-1 hover:border-rose-500/60 hover:text-rose-300 transition">
+              Clear selection
+            </button>
+          )}
+          <span className="text-stone-500">Tick meetings, then use “Bulk re-transcribe” — or run it filter-based for the whole library.</span>
+        </div>
+      )}
 
       {loading && <p className="text-stone-400">Loading meetings…</p>}
       {error && <div className="rounded-xl border border-red-900 bg-red-950/40 p-4 text-red-200">{error}</div>}
@@ -945,7 +992,17 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
               className="group cursor-pointer rounded-xl border border-stone-800 bg-stone-900/90 p-5 transition hover:border-lime-400/60 hover:bg-stone-900 shadow-sm space-y-2.5"
             >
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
+                <div className="flex min-w-0 items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.includes(meeting.id)}
+                    onChange={() => toggleSelectMeeting(meeting.id)}
+                    onClick={(e) => e.stopPropagation()}
+                    className="mt-1.5 h-4 w-4 shrink-0 accent-lime-400"
+                    title={`Select "${meeting.title}" for bulk actions`}
+                    aria-label={`Select meeting ${meeting.title}`}
+                  />
+                  <div className="min-w-0">
                   <h2 className="text-lg font-semibold text-stone-100 group-hover:text-lime-300 transition">
                     {meeting.title}
                   </h2>
@@ -968,6 +1025,7 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
                       ))}
                     </div>
                   )}
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
                   {activeProgressMap[meeting.id] ? (
@@ -1029,6 +1087,22 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
         </div>
       )}
 
+      {showBulkModal && (
+        <BulkTranscribeModal
+          selectedIds={selectedIds}
+          listSearch={search}
+          onClose={() => setShowBulkModal(false)}
+          onQueued={(summary, queuedIds) => {
+            setShowBulkModal(false);
+            setBulkNotice(summary);
+            if (queuedIds.length > 0) {
+              setSelectedIds([]);
+            }
+            void fetchMeetings({ silent: true });
+          }}
+        />
+      )}
+
       {showUploadModal && (
         <UploadAudioModal
           onClose={() => setShowUploadModal(false)}
@@ -1038,6 +1112,201 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
           }}
         />
       )}
+    </div>
+  );
+}
+
+interface BulkQueueResult {
+  bulkId: string;
+  provider: string;
+  total: number;
+  queued: number;
+  alreadyRunning: number;
+  skipped: number;
+  results: Array<{ meetingId: string; status: string; jobId?: string | null; alreadyRunning?: boolean; error?: string | null }>;
+}
+
+function BulkTranscribeModal({
+  selectedIds,
+  listSearch,
+  onClose,
+  onQueued
+}: {
+  selectedIds: string[];
+  listSearch: string;
+  onClose: () => void;
+  onQueued: (summary: string, queuedIds: string[]) => void;
+}): ReactElement {
+  const [scope, setScope] = useState<"selected" | "filtered">(selectedIds.length > 0 ? "selected" : "filtered");
+  const [provider, setProvider] = useState<string>("assemblyai");
+  const [force, setForce] = useState(true);
+  const [search, setSearch] = useState(listSearch);
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [currentProvider, setCurrentProvider] = useState("any");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<BulkQueueResult | null>(null);
+
+  useEffect(() => {
+    if (selectedIds.length > 0) setScope("selected");
+  }, [selectedIds.length]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      const filters: Record<string, unknown> = {};
+      if (scope === "filtered") {
+        if (search.trim()) filters.search = search.trim();
+        if (startDate) {
+          const ms = new Date(`${startDate}T00:00:00`).getTime();
+          if (!Number.isNaN(ms)) filters.startTime = ms;
+        }
+        if (endDate) {
+          const ms = new Date(`${endDate}T23:59:59.999`).getTime();
+          if (!Number.isNaN(ms)) filters.endTime = ms;
+        }
+        if (currentProvider && currentProvider !== "any") filters.currentProvider = currentProvider;
+      }
+      const body: Record<string, unknown> = { provider, force };
+      if (scope === "selected") {
+        body.meetingIds = selectedIds;
+      } else {
+        body.filters = filters;
+      }
+      const res = await fetch("/api/meetings/bulk-transcribe", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as { error?: string }).error || `HTTP ${res.status}`);
+      const queued = data as BulkQueueResult;
+      setResult(queued);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const failures = (result?.results || []).filter((r) => r.status === "skipped").slice(0, 8);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/80 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-label="Bulk re-transcribe meetings">
+      <div className="w-full max-w-lg rounded-2xl border border-stone-800 bg-stone-900 p-6 shadow-2xl space-y-5 max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between border-b border-stone-800 pb-3">
+          <h3 className="text-lg font-bold">Bulk re-transcribe</h3>
+          <button type="button" onClick={onClose} className="text-stone-400 hover:text-stone-200 text-lg" aria-label="Close bulk re-transcribe">✕</button>
+        </div>
+
+        {error && <div className="rounded-xl border border-red-900 bg-red-950/40 p-3 text-xs text-red-200">{error}</div>}
+
+        {result ? (
+          <div className="space-y-4 text-sm">
+            <div className="rounded-xl border border-lime-900 bg-lime-950/40 p-4 text-lime-200">
+              Queued {result.queued} of {result.total} meeting{result.total === 1 ? "" : "s"} with <strong>{result.provider}</strong>
+              {result.alreadyRunning > 0 && <span> ({result.alreadyRunning} already running)</span>}
+              {result.skipped > 0 && <span> ({result.skipped} skipped)</span>}. Watch progress on the meetings list.
+            </div>
+            {failures.length > 0 && (
+              <ul className="space-y-1 text-xs text-stone-400">
+                {failures.map((f) => (
+                  <li key={f.meetingId} className="rounded-lg border border-stone-800 bg-stone-950/60 px-3 py-2">
+                    <span className="font-mono text-stone-300">{f.meetingId.slice(0, 8)}…</span>: {f.error || "skipped"}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => onQueued(
+                  `Bulk job ${result.bulkId}: queued ${result.queued}/${result.total} with ${result.provider}.`,
+                  (result.results || []).filter((r) => r.status === "running").map((r) => r.meetingId)
+                )}
+                className="rounded-lg bg-lime-400 px-5 py-2 text-sm font-semibold text-stone-950 hover:bg-lime-300 transition"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-4 text-sm">
+            <div className="grid gap-2">
+              <span className="text-xs font-semibold uppercase tracking-wider text-stone-400">Which meetings?</span>
+              <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-stone-800 bg-stone-950/60 px-3 py-2.5 hover:border-stone-600 transition">
+                <input type="radio" name="bulk-scope" checked={scope === "selected"} onChange={() => setScope("selected")} disabled={selectedIds.length === 0} className="accent-lime-400" />
+                <span>Selected meetings ({selectedIds.length}){selectedIds.length === 0 && " — tick meetings in the list first"}</span>
+              </label>
+              <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-stone-800 bg-stone-950/60 px-3 py-2.5 hover:border-stone-600 transition">
+                <input type="radio" name="bulk-scope" checked={scope === "filtered"} onChange={() => setScope("filtered")} className="accent-lime-400" />
+                <span>All meetings matching filters (whole library, server-side)</span>
+              </label>
+            </div>
+
+            {scope === "filtered" && (
+              <div className="space-y-3 rounded-xl border border-stone-800 bg-stone-950/60 p-4">
+                <input
+                  type="text"
+                  placeholder="Search title, tags, transcript…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none"
+                />
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="space-y-1 text-xs text-stone-400">
+                    <span>From date</span>
+                    <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-stone-100 focus:border-lime-400 focus:outline-none" />
+                  </label>
+                  <label className="space-y-1 text-xs text-stone-400">
+                    <span>To date</span>
+                    <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-stone-100 focus:border-lime-400 focus:outline-none" />
+                  </label>
+                </div>
+                <label className="space-y-1 text-xs text-stone-400">
+                  <span>Current transcript provider</span>
+                  <select value={currentProvider} onChange={(e) => setCurrentProvider(e.target.value)} className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-stone-100 focus:border-lime-400 focus:outline-none">
+                    <option value="any">Any (no filter)</option>
+                    <option value="local">Local</option>
+                    <option value="speechmatics">Speechmatics</option>
+                    <option value="assemblyai">AssemblyAI</option>
+                    <option value="plaud">Plaud</option>
+                    <option value="none">No transcript yet</option>
+                  </select>
+                </label>
+              </div>
+            )}
+
+            <label className="space-y-1 text-xs text-stone-400">
+              <span className="text-xs font-semibold uppercase tracking-wider">Transcribe with</span>
+              <select value={provider} onChange={(e) => setProvider(e.target.value)} className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-stone-100 focus:border-lime-400 focus:outline-none">
+                <option value="assemblyai">AssemblyAI (Cloud)</option>
+                <option value="speechmatics">Speechmatics (Cloud)</option>
+                <option value="local">Local (Cohere + Diarization)</option>
+              </select>
+            </label>
+
+            <label className="flex cursor-pointer items-center gap-2 text-xs text-stone-300">
+              <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} className="h-4 w-4 accent-lime-400" />
+              Force re-transcribe even if already done (recommended when switching engines)
+            </label>
+
+            <div className="flex justify-end gap-3 pt-1">
+              <button type="button" onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-stone-400 hover:text-stone-200">Cancel</button>
+              <button
+                type="submit"
+                disabled={submitting || (scope === "selected" && selectedIds.length === 0)}
+                className="rounded-lg bg-lime-400 px-5 py-2 text-sm font-semibold text-stone-950 hover:bg-lime-300 disabled:opacity-50 transition"
+              >
+                {submitting ? "Queueing…" : scope === "selected" ? `Queue ${selectedIds.length} meeting${selectedIds.length === 1 ? "" : "s"}` : "Queue matching meetings"}
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
     </div>
   );
 }

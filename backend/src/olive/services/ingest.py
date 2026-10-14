@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
+import inspect
 import re
 import time
 import uuid
@@ -281,12 +281,21 @@ class IngestService:
                 },
             )
 
-            async def _bg_transcribe() -> None:
+            # Durable work must go through the DBOS job queue (see AGENTS.md).
+            # start_transcription enqueues onto the provider's queue and
+            # returns immediately, so awaiting it here only waits for the
+            # enqueue — never run transcribe_meeting in a bare asyncio task.
+            start_fn = getattr(self.transcription_service, "start_transcription", None) or getattr(
+                self.transcription_service, "startTranscription", None
+            )
+            if callable(start_fn):
                 try:
-                    await self.transcription_service.transcribe_meeting(
+                    res = start_fn(
                         meeting_id,
                         {"provider": provider, "modelId": model_id},
                     )
+                    if inspect.isawaitable(res):
+                        await res
                 except Exception as exc:
                     self.logger.error(
                         "Auto-transcription after ingest failed",
@@ -296,8 +305,6 @@ class IngestService:
                             "error": str(exc),
                         },
                     )
-
-            asyncio.create_task(_bg_transcribe())
 
         return {
             "meetingId": meeting_id,

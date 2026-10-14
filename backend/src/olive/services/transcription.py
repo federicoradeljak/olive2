@@ -36,8 +36,12 @@ from ..providers.speechmatics import (
 )
 from ..schemas import EnrolledSpeaker, Transcript, TranscriptionProgressUpdate
 from ..workflows import (
+    QUEUE_ASSEMBLYAI,
+    QUEUE_PIPELINE,
+    QUEUE_SPEECHMATICS,
     QUEUE_SUMMARIZE,
     cancel_dbos_workflows_for_meeting,
+    enqueue_driver_job,
     enqueue_stage_job,
     ensure_dbos_launched_async,
     get_dbos_active_progress_map,
@@ -51,6 +55,39 @@ PROVIDER_ASSEMBLYAI = "assemblyai"
 PROVIDER_LOCAL = "local"
 
 TranscriptionProviderName = Literal["speechmatics", "assemblyai", "local"]
+
+# Durable-queue routing for background transcription work (see AGENTS.md:
+# the DBOS job queue is the SOLE acceptable path for enqueuing work).
+TRANSCRIBE_QUEUE_BY_PROVIDER: dict[str, str] = {
+    PROVIDER_LOCAL: QUEUE_PIPELINE,
+    PROVIDER_SPEECHMATICS: QUEUE_SPEECHMATICS,
+    PROVIDER_ASSEMBLYAI: QUEUE_ASSEMBLYAI,
+}
+
+
+def normalize_transcription_provider(value: Any, default: str = PROVIDER_LOCAL) -> str:
+    """Maps engine labels (e.g. ``local:cohere``) to a queue-routable provider.
+
+    Mirrors :meth:`TranscriptionService.transcribe_meeting` dispatch: ``None``
+    falls back to ``default``; anything unrecognized executes as
+    ``speechmatics`` there, so it routes to the speechmatics queue here.
+    """
+    if value is None or str(value).strip() == "":
+        return str(default)
+    raw = str(value).strip().lower()
+    if raw.startswith(PROVIDER_LOCAL):
+        return PROVIDER_LOCAL
+    if raw == PROVIDER_ASSEMBLYAI:
+        return PROVIDER_ASSEMBLYAI
+    return PROVIDER_SPEECHMATICS
+
+
+def is_known_transcription_provider(value: Any) -> bool:
+    """Whether ``value`` names a real transcription provider (``local:*`` allowed)."""
+    if value is None:
+        return True
+    raw = str(value).strip().lower()
+    return raw.startswith(PROVIDER_LOCAL) or raw in (PROVIDER_SPEECHMATICS, PROVIDER_ASSEMBLYAI)
 
 
 def _parse_json_field(value: str | None, fallback: Any) -> Any:
@@ -441,7 +478,24 @@ class TranscriptionService:
                 "alreadyRunning": True,
             }
 
-        job_id = f"transcribe-{uuid.uuid4().hex[:8]}"
+        provider = normalize_transcription_provider(
+            opts.get("provider") or self.default_provider,
+            default=self.default_provider,
+        )
+        queue_name = TRANSCRIBE_QUEUE_BY_PROVIDER[provider]
+        job_id = f"transcribe:{meeting_id}:{uuid.uuid4().hex[:8]}"
+        await ensure_dbos_launched_async(
+            config_dir=self.config_dir,
+            meetings_dir=self.meetings_dir,
+        )
+        await enqueue_driver_job(
+            queue_name,
+            lambda: self._run_queued_transcription(meeting_id, opts),
+            deduplication_id=f"transcribe:{meeting_id}",
+            workflow_id=job_id,
+            label=f"transcribe:{provider}",
+            meeting_id=meeting_id,
+        )
         self.emit_progress(
             meeting_id,
             {
@@ -450,17 +504,6 @@ class TranscriptionService:
                 "message": "Queued transcription...",
             },
         )
-
-        async def _run_bg() -> None:
-            try:
-                await self.transcribe_meeting(meeting_id, opts)
-            except Exception as exc:
-                self.logger.error(
-                    "Background transcription failed",
-                    {"category": "transcription", "meetingId": meeting_id, "error": str(exc)},
-                )
-
-        asyncio.create_task(_run_bg())
         return {
             "status": "running",
             "jobId": job_id,
@@ -469,6 +512,237 @@ class TranscriptionService:
         }
 
     startTranscription = start_transcription
+
+    async def _run_queued_transcription(
+        self,
+        meeting_id: str,
+        options: dict[str, Any],
+    ) -> None:
+        """DBOS-queue worker body for one meeting's transcription.
+
+        This is the SOLE path by which transcription work executes in the
+        background: :meth:`start_transcription` enqueues it via
+        ``enqueue_driver_job`` (workflow context, so nested stage enqueues
+        stay legal) and never via ``asyncio.create_task``.
+        """
+        try:
+            await self.transcribe_meeting(meeting_id, options)
+        except Exception as exc:
+            self.logger.error(
+                "Background transcription failed",
+                {"category": "transcription", "meetingId": meeting_id, "error": str(exc)},
+            )
+
+    async def start_bulk_transcription(
+        self,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Queue background re-transcription for many meetings at once.
+
+        Accepts either an explicit ``meetingIds`` list or ``filters``
+        (``search``/``startTime``/``endTime``/``currentProvider``) that are
+        resolved server-side so callers don't need to paginate through the
+        whole library. Each eligible meeting is enqueued as a durable job on
+        its provider's DBOS queue via :meth:`start_transcription`, so bulk
+        runs get bounded worker concurrency, deduplication, restart
+        recovery, and per-meeting progress/cancel — never bare asyncio tasks.
+        """
+        opts = dict(options or {})
+        if not is_known_transcription_provider(opts.get("provider")):
+            raise ValueError("provider must be one of 'local', 'speechmatics', 'assemblyai'")
+        provider = normalize_transcription_provider(
+            opts.get("provider") or self.default_provider,
+            default=self.default_provider,
+        )
+        force = opts.get("force", True)
+        if force is None:
+            force = True
+        force = bool(force)
+        language = opts.get("language")
+
+        meeting_ids = opts.get("meetingIds") or opts.get("meeting_ids")
+        filters = opts.get("filters") or {}
+        if not isinstance(filters, dict):
+            filters = {}
+        search = filters.get("search") or opts.get("search")
+        start_time = filters.get("startTime", filters.get("start_time", opts.get("startTime")))
+        end_time = filters.get("endTime", filters.get("end_time", opts.get("endTime")))
+        current_provider = filters.get("currentProvider") or filters.get("current_provider")
+        if current_provider is not None:
+            current_provider = str(current_provider).strip().lower() or None
+
+        if meeting_ids is not None and not isinstance(meeting_ids, list):
+            raise ValueError("meetingIds must be an array of meeting id strings")
+        if meeting_ids:
+            seen: list[str] = []
+            for mid in meeting_ids:
+                if isinstance(mid, str) and mid.strip() and mid not in seen:
+                    seen.append(mid)
+            target_ids = seen
+        else:
+            target_ids = self._resolve_bulk_meeting_ids(
+                search=search,
+                start_time=start_time,
+                end_time=end_time,
+                current_provider=current_provider,
+            )
+        if not target_ids:
+            raise ValueError("No meetings matched: provide meetingIds or matching filters")
+        if len(target_ids) > 2000:
+            raise ValueError("Bulk transcribe supports at most 2000 meetings per request")
+
+        per_meeting_opts: dict[str, Any] = {
+            "provider": provider,
+            "force": force,
+        }
+        if language:
+            per_meeting_opts["language"] = language
+        for key in (
+            "poll",
+            "pollIntervalMs",
+            "maxPollWaitMs",
+            "similarityThreshold",
+            "clusteringThreshold",
+            "modelId",
+        ):
+            if opts.get(key) is not None:
+                per_meeting_opts[key] = opts[key]
+
+        bulk_id = f"bulk-{uuid.uuid4().hex[:8]}"
+        results: list[dict[str, Any]] = []
+        for meeting_id in target_ids:
+            try:
+                started = await self.start_transcription(meeting_id, dict(per_meeting_opts))
+                results.append(
+                    {
+                        "meetingId": meeting_id,
+                        "status": str(started.get("status", "running")),
+                        "jobId": started.get("jobId"),
+                        "alreadyRunning": bool(started.get("alreadyRunning", False)),
+                    }
+                )
+            except Exception as exc:
+                results.append(
+                    {
+                        "meetingId": meeting_id,
+                        "status": "skipped",
+                        "error": str(exc),
+                    }
+                )
+
+        queued = sum(1 for r in results if r["status"] == "running" and not r.get("alreadyRunning"))
+        already_running = sum(1 for r in results if r.get("alreadyRunning"))
+        skipped = sum(1 for r in results if r["status"] == "skipped")
+        self.logger.info(
+            "Bulk transcription queued",
+            {
+                "category": "transcription",
+                "bulkId": bulk_id,
+                "provider": provider,
+                "total": len(results),
+                "queued": queued,
+            },
+        )
+        return {
+            "bulkId": bulk_id,
+            "provider": provider,
+            "total": len(results),
+            "queued": queued,
+            "alreadyRunning": already_running,
+            "skipped": skipped,
+            "results": results,
+        }
+
+    startBulkTranscription = start_bulk_transcription
+
+    def _resolve_bulk_meeting_ids(
+        self,
+        *,
+        search: Any = None,
+        start_time: Any = None,
+        end_time: Any = None,
+        current_provider: str | None = None,
+    ) -> list[str]:
+        clauses: list[str] = []
+        params: dict[str, Any] = {}
+        if search is not None and str(search).strip():
+            clauses.append("(title LIKE :search OR tags LIKE :search)")
+            params["search"] = f"%{str(search).strip()}%"
+        try:
+            start_ms = (
+                int(float(start_time)) if start_time is not None and str(start_time).strip() != "" else None
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("startTime must be an epoch-milliseconds number") from exc
+        try:
+            end_ms = int(float(end_time)) if end_time is not None and str(end_time).strip() != "" else None
+        except (TypeError, ValueError) as exc:
+            raise ValueError("endTime must be an epoch-milliseconds number") from exc
+        if start_ms is not None:
+            clauses.append("start_time >= :start_time")
+            params["start_time"] = start_ms
+        if end_ms is not None:
+            clauses.append("start_time <= :end_time")
+            params["end_time"] = end_ms
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self.db.connect() as conn:
+            rows = (
+                conn.execute(
+                    text(f"SELECT id FROM meetings {where_sql} ORDER BY start_time DESC"),
+                    params,
+                )
+                .mappings()
+                .all()
+            )
+            candidate_ids = [r["id"] for r in rows]
+            if current_provider is None or current_provider in ("", "any", "all"):
+                return candidate_ids
+            resolved: list[str] = []
+            for mid in candidate_ids:
+                prov = self._current_transcript_provider(conn, mid)
+                if current_provider == "none":
+                    if prov is None:
+                        resolved.append(mid)
+                elif prov == current_provider:
+                    resolved.append(mid)
+            return resolved
+
+    @staticmethod
+    def _current_transcript_provider(conn: Any, meeting_id: str) -> str | None:
+        meeting = (
+            conn.execute(
+                text("SELECT primary_transcript_artifact_id FROM meetings WHERE id = :id"),
+                {"id": meeting_id},
+            )
+            .mappings()
+            .first()
+        )
+        primary_id = meeting["primary_transcript_artifact_id"] if meeting else None
+        if primary_id:
+            art = (
+                conn.execute(
+                    text("SELECT provider FROM artifacts WHERE id = :id"),
+                    {"id": primary_id},
+                )
+                .mappings()
+                .first()
+            )
+            if art and art["provider"]:
+                return str(art["provider"]).strip().lower()
+        latest = (
+            conn.execute(
+                text(
+                    "SELECT provider FROM artifacts WHERE meeting_id = :mid AND kind = 'transcript' "
+                    "ORDER BY created_at DESC LIMIT 1"
+                ),
+                {"mid": meeting_id},
+            )
+            .mappings()
+            .first()
+        )
+        if latest and latest["provider"]:
+            return str(latest["provider"]).strip().lower()
+        return None
 
     async def transcribe_meeting(
         self,

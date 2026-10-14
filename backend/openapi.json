@@ -476,6 +476,23 @@
         }
       }
     },
+    "/api/meetings/bulk-transcribe": {
+      "post": {
+        "summary": "Post Bulk Transcribe Route",
+        "description": "Queue re-transcription for many meetings with one chosen engine.\n\nBody: ``{ meetingIds?, provider, force=true, language?, filters? }``\nwhere ``filters`` may carry ``search``/``startTime``/``endTime``/\n``currentProvider``. Returns per-meeting queue results; progress can\nbe followed via ``GET /api/transcriptions/active``.",
+        "operationId": "post_bulk_transcribe_route_api_meetings_bulk_transcribe_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/meetings/{meeting_id}/summarize": {
       "post": {
         "summary": "Post Summarize Route",
@@ -2714,6 +2731,207 @@
           "stage"
         ],
         "title": "TranscriptionProgressUpdate",
+        "type": "object"
+      },
+      "BulkTranscribeFilters": {
+        "properties": {
+          "search": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Search"
+          },
+          "startTime": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Starttime"
+          },
+          "endTime": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Endtime"
+          },
+          "currentProvider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Currentprovider"
+          }
+        },
+        "title": "BulkTranscribeFilters",
+        "type": "object"
+      },
+      "BulkTranscribeRequest": {
+        "properties": {
+          "meetingIds": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Meetingids"
+          },
+          "provider": {
+            "default": "local",
+            "title": "Provider",
+            "type": "string"
+          },
+          "force": {
+            "default": true,
+            "title": "Force",
+            "type": "boolean"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Language"
+          },
+          "filters": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BulkTranscribeFilters"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "title": "BulkTranscribeRequest",
+        "type": "object"
+      },
+      "BulkTranscribeItemResult": {
+        "properties": {
+          "meetingId": {
+            "title": "Meetingid",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "jobId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Jobid"
+          },
+          "alreadyRunning": {
+            "default": false,
+            "title": "Alreadyrunning",
+            "type": "boolean"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          }
+        },
+        "required": [
+          "meetingId",
+          "status"
+        ],
+        "title": "BulkTranscribeItemResult",
+        "type": "object"
+      },
+      "BulkTranscribeResponse": {
+        "properties": {
+          "bulkId": {
+            "title": "Bulkid",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "queued": {
+            "title": "Queued",
+            "type": "integer"
+          },
+          "alreadyRunning": {
+            "title": "Alreadyrunning",
+            "type": "integer"
+          },
+          "skipped": {
+            "title": "Skipped",
+            "type": "integer"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/BulkTranscribeItemResult"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "alreadyRunning",
+          "bulkId",
+          "provider",
+          "queued",
+          "results",
+          "skipped",
+          "total"
+        ],
+        "title": "BulkTranscribeResponse",
         "type": "object"
       },
       "MeetingDetailAggregate": {

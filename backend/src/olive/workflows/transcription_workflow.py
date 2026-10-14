@@ -1124,6 +1124,26 @@ async def step_run_registered_job(job_id: str, metadata: dict[str, Any] | None =
     return res
 
 
+@DBOS.workflow()
+async def run_transcription_driver(job_id: str, metadata: dict[str, Any] | None = None) -> Any:
+    """Workflow wrapper for a registered driver callable.
+
+    Unlike :func:`step_run_registered_job` (a step, for leaf work), this runs
+    in *workflow* context so the driver may enqueue child workflows — DBOS
+    forbids child enqueue from inside a step. Transcription drivers need
+    this because the local path enqueues ``local_transcription_workflow``
+    and its stage children.
+    """
+    _ = metadata
+    fn = _GENERIC_JOBS.pop(job_id, None)
+    if fn is None:
+        return None
+    res = fn()
+    if inspect.isawaitable(res):
+        return await res
+    return res
+
+
 async def enqueue_stage_job(
     queue_name: str,
     fn: Callable[[], Any],
@@ -1142,6 +1162,30 @@ async def enqueue_stage_job(
     return handle
 
 
+async def enqueue_driver_job(
+    queue_name: str,
+    fn: Callable[[], Any],
+    *,
+    deduplication_id: str | None = None,
+    workflow_id: str | None = None,
+    label: str | None = None,
+    meeting_id: str | None = None,
+) -> Any:
+    """Enqueues ``fn`` as a *workflow* (not a step) on ``queue_name``.
+
+    Use this instead of :func:`enqueue_stage_job` when the callable itself
+    enqueues child workflows — e.g. transcription drivers, whose local path
+    fans out to ``local_transcription_workflow`` and its stage queues.
+    """
+    job_id = str(uuid.uuid4())
+    _GENERIC_JOBS[job_id] = fn
+    wf_id = workflow_id or f"job:{queue_name}:{job_id}"
+    meta = {"label": label or queue_name, "meetingId": meeting_id}
+    with SetWorkflowID(wf_id), SetEnqueueOptions(deduplication_id=deduplication_id):
+        handle = await DBOS.enqueue_workflow_async(queue_name, run_transcription_driver, job_id, meta)
+    return handle
+
+
 def _extract_job_details(wf: Any) -> tuple[str, str | None]:
     raw_name = str(getattr(wf, "name", "") or "job")
     short_name = raw_name.split(".")[-1].replace("<temp>.", "")
@@ -1154,7 +1198,7 @@ def _extract_job_details(wf: Any) -> tuple[str, str | None]:
             if isinstance(arg, dict):
                 if not meeting_id and arg.get("meetingId"):
                     meeting_id = str(arg["meetingId"])
-                if short_name == "step_run_registered_job" and arg.get("label"):
+                if short_name in ("step_run_registered_job", "run_transcription_driver") and arg.get("label"):
                     short_name = str(arg["label"])
 
     wf_id = str(getattr(wf, "workflow_id", "") or "")
@@ -1810,6 +1854,12 @@ async def cancel_dbos_workflows_for_meeting(
                     or pid in parent_ids
                     or wid.startswith(f"local-transcribe:{meeting_id}:")
                     or pid.startswith(f"local-transcribe:{meeting_id}:")
+                    # Durable per-meeting transcription jobs enqueued via
+                    # TranscriptionService.start_transcription use
+                    # ``transcribe:{meeting_id}:{job8}`` workflow ids — keep
+                    # this prefix matcher in sync with that format.
+                    or wid.startswith(f"transcribe:{meeting_id}:")
+                    or pid.startswith(f"transcribe:{meeting_id}:")
                     or any(wid.startswith(f"{p}-") for p in parent_ids)
                 ):
                     wf_ids_to_cancel.add(wid)
@@ -1846,6 +1896,7 @@ __all__ = [
     "TaskExecutionContext",
     "cancel_dbos_workflows_for_meeting",
     "configure_recovery_runtime",
+    "enqueue_driver_job",
     "enqueue_stage_job",
     "get_dbos_active_progress_map",
     "get_debug_queues_snapshot",
@@ -1853,6 +1904,7 @@ __all__ = [
     "local_transcription_workflow",
     "register_task_context",
     "run_staged_local_transcription",
+    "run_transcription_driver",
     "step_align_and_finalize",
     "step_decode_audio",
     "step_diarize_turns",

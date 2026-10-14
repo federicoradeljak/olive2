@@ -211,6 +211,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/meetings/bulk-transcribe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Bulk Transcribe Route
+         * @description Queue re-transcription for many meetings with one chosen engine.
+         *
+         *     Body: ``{ meetingIds?, provider, force=true, language?, filters? }``
+         *     where ``filters`` may carry ``search``/``startTime``/``endTime``/
+         *     ``currentProvider``. Returns per-meeting queue results; progress can
+         *     be followed via ``GET /api/transcriptions/active``.
+         */
+        post: operations["post_bulk_transcribe_route_api_meetings_bulk_transcribe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/meetings/{meeting_id}/summarize": {
         parameters: {
             query?: never;
@@ -1320,6 +1345,93 @@ export interface components {
             /** Error */
             error?: string;
         };
+        /** BulkTranscribeFilters */
+        BulkTranscribeFilters: {
+            /**
+             * Search
+             * @default null
+             */
+            search: string | null;
+            /**
+             * Starttime
+             * @default null
+             */
+            startTime: number | null;
+            /**
+             * Endtime
+             * @default null
+             */
+            endTime: number | null;
+            /**
+             * Currentprovider
+             * @default null
+             */
+            currentProvider: string | null;
+        };
+        /** BulkTranscribeRequest */
+        BulkTranscribeRequest: {
+            /**
+             * Meetingids
+             * @default null
+             */
+            meetingIds: string[] | null;
+            /**
+             * Provider
+             * @default local
+             */
+            provider: string;
+            /**
+             * Force
+             * @default true
+             */
+            force: boolean;
+            /**
+             * Language
+             * @default null
+             */
+            language: string | null;
+            /** @default null */
+            filters: components["schemas"]["BulkTranscribeFilters"] | null;
+        };
+        /** BulkTranscribeItemResult */
+        BulkTranscribeItemResult: {
+            /** Meetingid */
+            meetingId: string;
+            /** Status */
+            status: string;
+            /**
+             * Jobid
+             * @default null
+             */
+            jobId: string | null;
+            /**
+             * Alreadyrunning
+             * @default false
+             */
+            alreadyRunning: boolean;
+            /**
+             * Error
+             * @default null
+             */
+            error: string | null;
+        };
+        /** BulkTranscribeResponse */
+        BulkTranscribeResponse: {
+            /** Bulkid */
+            bulkId: string;
+            /** Provider */
+            provider: string;
+            /** Total */
+            total: number;
+            /** Queued */
+            queued: number;
+            /** Alreadyrunning */
+            alreadyRunning: number;
+            /** Skipped */
+            skipped: number;
+            /** Results */
+            results: components["schemas"]["BulkTranscribeItemResult"][];
+        };
         /** MeetingDetailAggregate */
         MeetingDetailAggregate: {
             meeting: components["schemas"]["Meeting"];
@@ -1891,6 +2003,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_bulk_transcribe_route_api_meetings_bulk_transcribe_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };

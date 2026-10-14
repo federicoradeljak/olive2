@@ -242,14 +242,46 @@ class TranscriptionProgressUpdate(CamelModel):
     error: str | None = None
 
 
+class BulkTranscribeFilters(CamelModel):
+    search: str | None = None
+    startTime: int | None = None
+    endTime: int | None = None
+    currentProvider: str | None = None
+
+
+class BulkTranscribeRequest(CamelModel):
+    meetingIds: list[str] | None = None
+    provider: str = "local"
+    force: bool = True
+    language: str | None = None
+    filters: BulkTranscribeFilters | None = None
+
+
+class BulkTranscribeItemResult(CamelModel):
+    meetingId: str
+    status: str
+    jobId: str | None = None
+    alreadyRunning: bool = False
+    error: str | None = None
+
+
+class BulkTranscribeResponse(CamelModel):
+    bulkId: str
+    provider: str
+    total: int
+    queued: int
+    alreadyRunning: int
+    skipped: int
+    results: list[BulkTranscribeItemResult]
+
+
 def coalesce_speaker_segments(
     segments: Sequence[TranscriptSegment | dict[str, Any]],
     max_gap_ms: int = 15000,
 ) -> list[TranscriptSegment]:
     """Merges consecutive segments from the same speaker if the silence gap between them is reasonable."""
     parsed = [
-        s if isinstance(s, TranscriptSegment) else TranscriptSegment.model_validate(s)
-        for s in segments
+        s if isinstance(s, TranscriptSegment) else TranscriptSegment.model_validate(s) for s in segments
     ]
     if len(parsed) <= 1:
         return parsed

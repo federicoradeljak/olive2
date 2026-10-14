@@ -341,7 +341,7 @@ async def test_post_transcribe_background_returns_202_and_streams_progress(
             assert res.status_code == 202
             body = res.json()
             assert body["status"] == "running"
-            assert body["jobId"].startswith("transcribe-")
+            assert body["jobId"].startswith(f"transcribe:{meeting_id}:")
             assert body["alreadyRunning"] is False
 
             for _ in range(100):

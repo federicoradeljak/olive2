@@ -699,8 +699,16 @@ class PlaudPoller:
         """Queue automatic transcription without blocking the poll cycle."""
         if not self.transcription_service:
             return
-        fn = getattr(self.transcription_service, "transcribe_meeting", None) or getattr(
-            self.transcription_service, "transcribeMeeting", None
+        # Durable work must go through the DBOS job queue (see AGENTS.md):
+        # prefer the queue-enqueueing start_transcription entry point. The
+        # spawned coroutine below is only scheduling glue that awaits the
+        # enqueue — the transcription itself runs as a durable queue job.
+        # transcribe_meeting is kept as a fallback for duck-typed doubles.
+        fn = (
+            getattr(self.transcription_service, "start_transcription", None)
+            or getattr(self.transcription_service, "startTranscription", None)
+            or getattr(self.transcription_service, "transcribe_meeting", None)
+            or getattr(self.transcription_service, "transcribeMeeting", None)
         )
         if not callable(fn):
             return
