@@ -1749,7 +1749,16 @@ async def cancel_dbos_workflows_for_meeting(
 ) -> int:
     invalidate_dbos_progress_cache()
     if not is_dbos_launched():
-        return 0
+        # DBOS launches lazily on first enqueue, so after a restart it may
+        # not be running in this process yet — but the workflows to cancel
+        # are still in its database. Launch it so cancellation can proceed.
+        try:
+            await ensure_dbos_launched_async(
+                config_dir=config_dir or _RECOVERY_CONFIG_DIR,
+                meetings_dir=meetings_dir or _RECOVERY_MEETINGS_DIR,
+            )
+        except Exception:
+            return 0
     dbos_path = get_existing_dbos_sqlite_path(
         config_dir=config_dir or _RECOVERY_CONFIG_DIR,
         meetings_dir=meetings_dir or _RECOVERY_MEETINGS_DIR,
