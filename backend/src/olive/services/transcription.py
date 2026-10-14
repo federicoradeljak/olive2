@@ -28,6 +28,7 @@ from ..ml import (
     LocalTranscriptionWorkerRunner,
 )
 from ..ml.identify import identify_cloud_transcript_speakers
+from ..ml.opus import is_raw_plaud_opus, wrap_raw_opus_bytes
 from ..providers.assemblyai import AssemblyAIClient, parse_assemblyai_transcript
 from ..providers.speechmatics import (
     SpeechmaticsClient,
@@ -169,6 +170,13 @@ class TranscriptionService:
             if isinstance(update, TranscriptionProgressUpdate)
             else TranscriptionProgressUpdate.model_validate(update)
         )
+        if upd.stage not in ("done", "error", "cancelled"):
+            # The in-flight job can drain queued updates for a few hundred ms
+            # after cancellation; drop them so a cancel stays cancelled instead
+            # of flipping back to in-progress.
+            active = self._active_jobs.get(meeting_id)
+            if active is not None and _signal_aborted(active.abort_controller.signal):
+                return
         self._active_progress[meeting_id] = upd
         try:
             current_loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
@@ -405,6 +413,11 @@ class TranscriptionService:
                 raise ValueError(f"No recording found for meeting {meeting_id}")
 
         existing = self._active_jobs.get(meeting_id)
+        if existing is not None and _signal_aborted(existing.abort_controller.signal):
+            # A cancelled job lingers until the in-flight task drains; evict it
+            # so a fresh start is not blocked and its "queued" update is kept.
+            self._active_jobs.pop(meeting_id, None)
+            existing = None
         if existing is not None and not existing.abort_controller.signal.aborted:
             return {
                 "status": "running",
@@ -479,6 +492,19 @@ class TranscriptionService:
         user_on_progress = opts.get("onProgress") or opts.get("on_progress")
 
         async def on_progress_handler(update: Any) -> None:
+            try:
+                update_stage = (
+                    update.get("stage") if isinstance(update, dict) else getattr(update, "stage", None)
+                )
+            except Exception:
+                update_stage = None
+            if update_stage not in ("done", "error", "cancelled") and (
+                self._active_jobs.get(meeting_id) is not active_job
+                or _signal_aborted(abort_controller.signal)
+            ):
+                # Stale update from a cancelled or superseded job; must not
+                # overwrite the terminal state (or a newer job's progress).
+                return
             self.emit_progress(meeting_id, update)
             if callable(user_on_progress):
                 upd_obj = (
@@ -918,6 +944,26 @@ class TranscriptionService:
             {"category": "transcription", "meetingId": meeting_id, "workflowId": workflow_id},
         )
 
+    def _prepare_cloud_upload(self, audio_full_path: str) -> tuple[str, str, str | None]:
+        """Return an uploadable (path, filename, mime) for a recording.
+
+        Headerless raw Plaud Opus files are wrapped into a cached Ogg Opus
+        sibling so cloud providers receive a file they can identify.
+        """
+        try:
+            data = Path(audio_full_path).read_bytes()
+            if is_raw_plaud_opus(data):
+                wrapped = Path(audio_full_path).with_suffix(".ogg")
+                if not wrapped.exists() or wrapped.stat().st_mtime < Path(audio_full_path).stat().st_mtime:
+                    wrapped.write_bytes(wrap_raw_opus_bytes(data))
+                return str(wrapped), wrapped.name, "audio/ogg"
+        except Exception as exc:
+            self.logger.warn(
+                "Could not prepare wrapped upload audio; sending original file",
+                {"category": "transcription", "error": str(exc)},
+            )
+        return audio_full_path, Path(audio_full_path).name, None
+
     async def transcribe_meeting_speechmatics(
         self,
         meeting_id: str,
@@ -1023,12 +1069,14 @@ class TranscriptionService:
             if inspect.isawaitable(r):
                 await r
 
+        upload_path, upload_name, upload_mime = self._prepare_cloud_upload(audio_full_path)
+
         try:
             submit_res = await self.client.submit_job(
                 {
-                    "audio": {"path": audio_full_path},
-                    "filename": Path(recording["path"]).name,
-                    "mime": recording["mime"],
+                    "audio": {"path": upload_path},
+                    "filename": upload_name,
+                    "mime": upload_mime or recording["mime"],
                     "language": opts.get("language") or "en",
                     "getSpeakers": True,
                     "webhookUrl": webhook_url,
@@ -1712,13 +1760,15 @@ class TranscriptionService:
                 on_progress=on_progress,
             )
 
+        upload_path, upload_name, upload_mime = self._prepare_cloud_upload(audio_full_path)
+
         try:
             # The AssemblyAI SDK submits + polls internally (polling chosen
             # over webhooks); this call returns the completed transcript.
             raw = await self.assemblyai_client.submit_and_transcribe(
                 {
-                    "audio": {"path": audio_full_path},
-                    "filename": Path(recording["path"]).name,
+                    "audio": {"path": upload_path},
+                    "filename": upload_name,
                     "language": opts.get("language"),
                     "additionalVocab": opts.get("additionalVocab") or opts.get("additional_vocab"),
                 }

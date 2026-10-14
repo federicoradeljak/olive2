@@ -13,6 +13,8 @@ from typing import Any
 import numpy as np
 import soundfile as sf
 
+from .opus import is_raw_plaud_opus, wrap_raw_opus_bytes
+
 _ENHANCE_LOCKS: dict[str, asyncio.Lock] = {}
 
 SPEECH_ENHANCEMENT_FILTER = (
@@ -191,7 +193,18 @@ def _load_audio_samples_sync(
 
     args = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y"]
     stdin_data: bytes | None = None
+    # Plaud headerless raw Opus: wrap into Ogg Opus so ffmpeg can decode it.
+    path_bytes: bytes | None = None
     if audio_path is not None and Path(audio_path).exists():
+        try:
+            path_bytes = Path(audio_path).read_bytes()
+        except Exception:
+            path_bytes = None
+    candidate = audio_bytes if audio_bytes is not None else path_bytes
+    if candidate is not None and is_raw_plaud_opus(candidate):
+        args.extend(["-i", "pipe:0"])
+        stdin_data = wrap_raw_opus_bytes(candidate)
+    elif audio_path is not None and Path(audio_path).exists():
         args.extend(["-i", str(audio_path)])
     elif audio_bytes is not None:
         args.extend(["-i", "pipe:0"])

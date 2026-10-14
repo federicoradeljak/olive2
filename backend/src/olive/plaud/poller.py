@@ -25,6 +25,7 @@ from ..db import DbHandle, get_db
 from ..layout import ensure_meeting_folder, meeting_paths
 from ..logging_db import Logger
 from ..logging_db import logger as default_logger
+from ..ml.opus import is_raw_plaud_opus, wrap_raw_opus_bytes
 from .retry import (
     compute_retry_delay_ms,
     is_rate_limit_error,
@@ -1028,6 +1029,10 @@ class PlaudPoller:
             raw_bytes = bytes(response.content)
 
         audio_bytes = raw_bytes
+        # Plaud serves some recordings as headerless raw Opus packets that
+        # nothing can decode; store them wrapped in an Ogg Opus container.
+        if is_raw_plaud_opus(audio_bytes):
+            audio_bytes = wrap_raw_opus_bytes(audio_bytes)
         sha256 = hashlib.sha256(audio_bytes).hexdigest()
         headers = getattr(response, "headers", None) or {}
         resp_mime = (headers.get("content-type") if hasattr(headers, "get") else "") or ""
