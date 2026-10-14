@@ -783,3 +783,95 @@ async def test_rapid_enroll_candidates_and_assign(tmp_path: Path) -> None:
     remaining = client.get(f"/api/meetings/{meeting_id}/speakers/rapid-enroll-candidates").json()["groups"]
     assert [g["label"] for g in remaining] == ["Eran"]
     handle.engine.dispose()
+
+
+async def test_adopt_trims_overlong_confirm_sample_to_12s(tmp_path: Path) -> None:
+    """Over-long confirm samples enroll via center-trim instead of duration_skipped."""
+    from olive.services.speakers import ENROLL_TRIM_TARGET_SEC
+
+    handle = create_db(":memory:")
+    config_dir = str(tmp_path / "config")
+    now = 1_700_000_000_000
+
+    seen_lengths: list[int] = []
+
+    class _RecordingEmbedder:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def extract(self, samples, sample_rate):  # noqa: ANN001, ANN202
+            self.calls += 1
+            seen_lengths.append(len(samples))
+            angle = self.calls * 0.5
+            vec = np.zeros(256, dtype=np.float64)
+            vec[0] = np.cos(angle)
+            vec[1] = np.sin(angle)
+            return vec.tolist()
+
+    service = SpeakerService(
+        {
+            "db": handle.engine,
+            "configDir": config_dir,
+            "now": lambda: now,
+            "embeddingExtractor": _RecordingEmbedder(),
+        }
+    )
+
+    speaker = await service.enroll_speaker(
+        {"name": "Trim", "audioBytes": _create_single_voice_wav(220.0, 4.0), "mime": "audio/wav"}
+    )
+    seen_lengths.clear()
+
+    sr = 16000
+    long_samples = (0.5 * np.sin(2 * np.pi * 220 * np.arange(sr * 25, dtype=np.float32) / sr)).astype(
+        np.float32
+    )
+    res = await service._adopt_voiceprint_sample(
+        speaker_row={
+            "id": speaker["id"],
+            "name": speaker["name"],
+            "provider_ids": json.dumps(speaker["providerIds"]),
+            "enrollment_clip_paths": json.dumps(speaker["enrollmentClipPaths"]),
+            "enrolled_at": speaker["enrolledAt"],
+            "created_at": now,
+        },
+        samples=long_samples,
+        sample_rate=sr,
+        clip_filename="clip_trim_test.wav",
+        is_anchor=False,
+    )
+    assert res["voiceprintEnrolled"] is True
+    assert res["status"] == "enrolled"
+    # Embedder received the 12s center window, not the full 25s.
+    assert seen_lengths == [int(ENROLL_TRIM_TARGET_SEC * sr)]
+    assert "Trimmed" in (res["statusReason"] or "")
+
+    # Saved clip on disk is the trimmed audio.
+    updated = await service.get_speaker(speaker["id"])
+    assert updated is not None
+    clip_path = Path(config_dir) / updated["speaker"]["enrollmentClipPaths"][-1]
+    assert clip_path.exists()
+    from olive.ml import decode_wav
+
+    decoded = decode_wav(clip_path.read_bytes())
+    assert abs(len(decoded.samples) / sr - ENROLL_TRIM_TARGET_SEC) < 0.05
+
+    # Too-short clips still skip (nothing to trim from).
+    short = (0.5 * np.sin(2 * np.pi * 220 * np.arange(sr * 1, dtype=np.float32) / sr)).astype(np.float32)
+    short_res = await service._adopt_voiceprint_sample(
+        speaker_row={
+            "id": speaker["id"],
+            "name": speaker["name"],
+            "provider_ids": json.dumps(updated["speaker"]["providerIds"]),
+            "enrollment_clip_paths": json.dumps(updated["speaker"]["enrollmentClipPaths"]),
+            "enrolled_at": updated["speaker"]["enrolledAt"],
+            "created_at": now,
+        },
+        samples=short,
+        sample_rate=sr,
+        clip_filename="clip_short_test.wav",
+        is_anchor=False,
+    )
+    assert short_res["voiceprintEnrolled"] is False
+    assert short_res["status"] == "duration_skipped"
+    handle.engine.dispose()

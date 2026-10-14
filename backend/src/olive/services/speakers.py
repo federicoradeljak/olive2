@@ -47,6 +47,10 @@ MAX_ENROLLMENT_CLIPS = 8
 MIN_CONFIRM_DURATION_SEC = 3.0
 MAX_CONFIRM_DURATION_SEC = 15.0
 MAX_ENROLL_DURATION_SEC = 30.0
+# Over-long clips are center-cropped to this before embedding (mirrors
+# MAX_VOICEPRINT_TURN_SECONDS in ml/diarize.py). Short clips (< MIN) still
+# skip: audio can't be invented, but long clips can always be trimmed.
+ENROLL_TRIM_TARGET_SEC = 12.0
 OUTLIER_MIN_SIMILARITY = 0.55
 REDUNDANT_MAX_SIMILARITY = 0.95
 
@@ -155,18 +159,17 @@ RAPID_ENROLL_MIN_SEPARATION_MS = 20_000
 def _score_candidate_segment(segment: TranscriptSegment) -> float:
     """Rank how useful a segment is as a voiceprint enrollment sample (0..1).
 
-    Favours the 3-15s adoption window (peak ~8s), enough spoken words to be
-    phonetically varied, and high ASR word confidence when available.
+    Favours ~8s samples (peak) with a 3-12s high band; longer clips score
+    at their trimmed 12s duration since they are center-cropped on adopt.
     """
     duration_sec = max(0.0, (segment.endMs - segment.startMs) / 1000.0)
-    if duration_sec < 3.0:
-        duration_score = 0.4 * (duration_sec / 3.0)
-    elif duration_sec <= 12.0:
-        duration_score = 1.0 - abs(duration_sec - 8.0) * 0.03
-    elif duration_sec <= 15.0:
-        duration_score = 0.88 - (duration_sec - 12.0) * 0.03
-    else:
-        duration_score = max(0.3, 0.79 - (duration_sec - 15.0) * 0.02)
+    # Clips longer than the trim target are center-cropped before embedding,
+    # so score them at their effective (post-trim) duration.
+    scoring_duration = min(duration_sec, ENROLL_TRIM_TARGET_SEC)
+    if scoring_duration < 3.0:
+        duration_score = 0.4 * (scoring_duration / 3.0)
+    elif scoring_duration <= 12.0:
+        duration_score = 1.0 - abs(scoring_duration - 8.0) * 0.03
 
     word_count = len((segment.text or "").split())
     text_score = min(word_count / 12.0, 1.0)
@@ -210,9 +213,8 @@ def _select_candidate_samples(
             durationMs=max(0, seg.endMs - seg.startMs),
             text=(seg.text or "").strip()[:300],
             score=_score_candidate_segment(seg),
-            enrollEligible=MIN_CONFIRM_DURATION_SEC
-            <= (seg.endMs - seg.startMs) / 1000.0
-            <= MAX_CONFIRM_DURATION_SEC,
+            enrollEligible=MIN_CONFIRM_DURATION_SEC <= (seg.endMs - seg.startMs) / 1000.0,
+            # No upper bound: over-long clips are center-trimmed to 12s on adopt.
         )
         for idx, seg in picked
     ]
@@ -296,13 +298,27 @@ class SpeakerService:
 
         min_sec = MIN_CONFIRM_DURATION_SEC
         max_sec = MAX_ENROLL_DURATION_SEC if is_anchor else MAX_CONFIRM_DURATION_SEC
-        if duration_sec < min_sec or duration_sec > max_sec:
+        if duration_sec < min_sec:
             return {
                 "status": "duration_skipped",
                 "voiceprintEnrolled": False,
-                "statusReason": f"Duration ({duration_sec:.1f}s) outside optimal window [{min_sec:.1f}s - {max_sec:.1f}s]",
+                "statusReason": f"Duration ({duration_sec:.1f}s) below minimum enrollable length ({min_sec:.1f}s)",
                 "updatedSpeakerRow": speaker_row,
             }
+        trimmed_note = ""
+        if duration_sec > max_sec:
+            # Center-crop to the trim target (same as the diarizer's voiceprint
+            # turn cap) so a long-only sample is still usable instead of
+            # rename-only.
+            target_samples = int(ENROLL_TRIM_TARGET_SEC * sample_rate)
+            if len(samples) > target_samples:
+                mid = len(samples) // 2
+                half = target_samples // 2
+                samples = samples[mid - half : mid - half + target_samples]
+                trimmed_note = (
+                    f"Trimmed {duration_sec:.1f}s clip to {ENROLL_TRIM_TARGET_SEC:.1f}s center window; "
+                )
+                duration_sec = len(samples) / float(sample_rate)
 
         try:
             new_embedding = await self.local_embedding_extractor.extract(samples, sample_rate)
@@ -416,7 +432,11 @@ class SpeakerService:
             "statusReason": (
                 "Enrolled new sample, evicted oldest non-anchor clip (cap reached)"
                 if status == "enrolled_evicted"
-                else "Enrolled new voiceprint sample"
+                else (
+                    f"{trimmed_note}Enrolled new voiceprint sample"
+                    if trimmed_note
+                    else "Enrolled new voiceprint sample"
+                )
             ),
             "updatedSpeakerRow": updated_row,
         }
@@ -811,9 +831,7 @@ class SpeakerService:
             if speaker_name and speaker_name.strip():
                 trimmed = speaker_name.strip()
                 if _is_placeholder_name(trimmed):
-                    raise ValueError(
-                        f'"{trimmed}" is a generic speaker label, not a person name'
-                    )
+                    raise ValueError(f'"{trimmed}" is a generic speaker label, not a person name')
                 all_rows = conn.execute(text("SELECT * FROM speakers")).mappings().all()
                 existing = next(
                     (s for s in all_rows if s["name"].strip().lower() == trimmed.lower()),
@@ -938,8 +956,8 @@ class SpeakerService:
 
         Unlike reassign (which concatenates every turn into one usually-oversized
         clip), each selected sample is adopted individually through
-        _adopt_voiceprint_sample, so samples inside the 3-15s window actually
-        enroll, and later samples are outlier-checked against earlier ones.
+        _adopt_voiceprint_sample, length-trimming over-long turns to 12s so
+        every sample >= 3s enrolls, and later samples are outlier-checked against earlier ones.
         """
         meeting_id = str(options.get("meetingId") or options.get("meeting_id") or "")
         from_label = str(options.get("fromLabel") or options.get("from_label") or "")

@@ -1985,7 +1985,7 @@ function MeetingDetailView({
       } else if (data.voiceprintStatus === "outlier_rejected") {
         setConfirmationNotice(`✓ Confirmed "${data.speaker?.name || "speaker"}" in transcript (voiceprint skipped: acoustic mismatch/noise)`);
       } else if (data.voiceprintStatus === "duration_skipped") {
-        setConfirmationNotice(`✓ Confirmed "${data.speaker?.name || "speaker"}" in transcript (voiceprint skipped: clip outside 3–15s window)`);
+        setConfirmationNotice(`✓ Confirmed "${data.speaker?.name || "speaker"}" in transcript (voiceprint skipped: clip under 3s — too short to enroll)`);
       } else {
         setConfirmationNotice(`✓ Confirmed "${data.speaker?.name || "speaker"}"`);
       }
@@ -3378,7 +3378,7 @@ function RapidEnrollModal({
                     <p className="text-xs leading-relaxed text-stone-300 line-clamp-2">{sample.text}</p>
                     <p className="mt-0.5 text-[10px] text-stone-500">
                       {(sample.durationMs / 1000).toFixed(1)}s
-                      {!sample.enrollEligible && <span className="text-amber-400"> • outside 3–15s enroll window (rename only)</span>}
+                      {!sample.enrollEligible && <span className="text-amber-400"> • under 3s — too short to enroll (rename only)</span>}
                     </p>
                   </div>
                 </div>
