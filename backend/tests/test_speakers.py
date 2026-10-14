@@ -22,6 +22,7 @@ FIXTURE_SPEECHMATICS_PATH = FIXTURES_DIR / "speechmatics-sample.wav"
 
 AUDIO_BYTES = encode_wav(np.zeros(16000 * 4, dtype=np.float32), 16000)
 
+
 def _create_single_voice_wav(
     freq_hz: float = 220.0, duration_sec: float = 4.0, sample_rate: int = 16000
 ) -> bytes:
@@ -590,4 +591,196 @@ async def test_rebuild_speaker_profiles_cleans_contaminated_clips_and_extracts_v
     assert did_rebuild is True
     did_rebuild_again = await service.ensure_embedding_model_current()
     assert did_rebuild_again is False
+    handle.engine.dispose()
+
+
+class _FakeEmbedder:
+    """Deterministic embedder: each call rotates the vector so successive
+    samples are similar (cos ~0.88) but not redundant (>0.95)."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def extract(self, samples, sample_rate):  # noqa: ANN001, ANN202
+        self.calls += 1
+        angle = self.calls * 0.5
+        vec = np.zeros(256, dtype=np.float64)
+        vec[0] = np.cos(angle)
+        vec[1] = np.sin(angle)
+        return vec.tolist()
+
+
+async def test_rapid_enroll_candidates_and_assign(tmp_path: Path) -> None:
+    handle = create_db(":memory:")
+    config_dir = str(tmp_path / "config")
+    meetings_dir = str(tmp_path / "meetings")
+    now = 1_700_000_000_000
+    meeting_id = "m-rapid-1"
+
+    paths = meeting_paths(meetings_dir, now, "Rapid Sync", meeting_id)
+    Path(paths.audio_dir).mkdir(parents=True, exist_ok=True)
+    Path(paths.transcripts_dir).mkdir(parents=True, exist_ok=True)
+
+    total_sec = 75
+    meeting_wav = _create_single_voice_wav(220.0, float(total_sec))
+    (Path(paths.folder) / "audio/meeting.wav").write_bytes(meeting_wav)
+
+    transcript_data = {
+        "language": "en",
+        "durationMs": total_sec * 1000,
+        "segments": [
+            {
+                "startMs": 0,
+                "endMs": 6000,
+                "speaker": "Speaker 1",
+                "text": "hello everyone this is a long enough opening turn today",
+            },
+            {
+                "startMs": 10000,
+                "endMs": 16000,
+                "speaker": "Eran",
+                "text": "thanks for joining the call this morning everyone",
+            },
+            {
+                "startMs": 20000,
+                "endMs": 26000,
+                "speaker": "Matt",
+                "text": "verified turn from an enrolled speaker here",
+                "verified": True,
+            },
+            {
+                "startMs": 30000,
+                "endMs": 36000,
+                "speaker": "Speaker 1",
+                "text": "second good sample with plenty of spoken words inside",
+            },
+            {
+                "startMs": 60000,
+                "endMs": 64000,
+                "speaker": "Speaker 1",
+                "text": "a shorter but still eligible sample turn",
+            },
+            {"startMs": 70000, "endMs": 71000, "speaker": "Speaker 1", "text": "yeah"},
+        ],
+    }
+    (Path(paths.folder) / "transcripts/local.json").write_text(
+        json.dumps(transcript_data, indent=2), encoding="utf-8"
+    )
+    (Path(paths.folder) / "transcripts/local.txt").write_text("x", encoding="utf-8")
+
+    with handle.engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO meetings (
+                  id, title, start_time, end_time, source, status, tags,
+                  primary_transcript_artifact_id, primary_summary_artifact_id,
+                  last_error, created_at, updated_at
+                ) VALUES (
+                  :id, 'Rapid Sync', :now, :end, 'upload', 'ready', '[]',
+                  NULL, NULL, NULL, :now, :now
+                )
+                """
+            ),
+            {"id": meeting_id, "now": now, "end": now + total_sec * 1000},
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO recordings (
+                  id, meeting_id, path, mime, duration_ms, size_bytes, sha256,
+                  provider, provider_recording_id, created_at
+                ) VALUES ('rec-rapid-1', :mid, 'audio/meeting.wav', 'audio/wav', :dur, :sz, 'sha', 'upload', NULL, :now)
+                """
+            ),
+            {"mid": meeting_id, "dur": total_sec * 1000, "sz": len(meeting_wav), "now": now},
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO artifacts (id, meeting_id, recording_id, kind, provider, format, path, created_at)
+                VALUES ('art-rapid-json', :mid, 'rec-rapid-1', 'transcript', 'local', 'json', 'transcripts/local.json', :now)
+                """
+            ),
+            {"mid": meeting_id, "now": now},
+        )
+        conn.execute(
+            text("UPDATE meetings SET primary_transcript_artifact_id = 'art-rapid-json' WHERE id = :id"),
+            {"id": meeting_id},
+        )
+        # Eran + Matt are enrolled; Matt's turn is verified, Eran's is not.
+        for name in ("Eran", "Matt"):
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO speakers (id, name, provider_ids, enrolled_at, enrollment_clip_paths, created_at)
+                    VALUES (:id, :name, :pids, :now, '[]', :now)
+                    """
+                ),
+                {
+                    "id": f"spk-{name.lower()}",
+                    "name": name,
+                    "pids": json.dumps({"local": [json.dumps([1.0] + [0.0] * 255)]}),
+                    "now": now,
+                },
+            )
+
+    service = SpeakerService(
+        {
+            "db": handle.engine,
+            "configDir": config_dir,
+            "meetingsDir": meetings_dir,
+            "now": lambda: now + 100,
+            "embeddingExtractor": _FakeEmbedder(),
+        }
+    )
+    app = create_app(
+        {
+            "db": handle.engine,
+            "configDir": config_dir,
+            "meetingsDir": meetings_dir,
+            "speakerService": service,
+        }
+    )
+    client = TestClient(app)
+
+    cand_res = client.get(f"/api/meetings/{meeting_id}/speakers/rapid-enroll-candidates")
+    assert cand_res.status_code == 200
+    groups = cand_res.json()["groups"]
+    # Unmatched first, then unverified; verified enrolled Matt is excluded.
+    assert [g["label"] for g in groups] == ["Speaker 1", "Eran"]
+    assert groups[0]["status"] == "unmatched"
+    assert groups[0]["segmentCount"] == 4
+    assert groups[1]["status"] == "unverified"
+    samples = groups[0]["samples"]
+    assert 1 <= len(samples) <= 5
+    assert samples[0]["enrollEligible"] is True
+    # The 1s "yeah" turn ranks last and is not enrollment-eligible.
+    assert samples[-1]["segmentIndex"] == 5
+    assert samples[-1]["enrollEligible"] is False
+    top_indices = [s["segmentIndex"] for s in samples[:2]]
+
+    assign_res = client.post(
+        f"/api/meetings/{meeting_id}/speakers/rapid-enroll",
+        json={
+            "fromLabel": "Speaker 1",
+            "toSpeakerName": "Asad",
+            # Index 1 belongs to Eran and must be ignored for enrollment.
+            "segmentIndices": [*top_indices, 1],
+        },
+    )
+    assert assign_res.status_code == 200
+    result = assign_res.json()
+    assert result["speaker"]["name"] == "Asad"
+    assert result["updatedSegmentsCount"] == 4
+    assert result["enrolledSamplesCount"] == 2
+    assert [r["segmentIndex"] for r in result["sampleResults"]] == top_indices
+    assert all(r["status"] == "enrolled" for r in result["sampleResults"])
+    assert len(result["speaker"]["providerIds"]["local"]) == 2
+    asad_segments = [s for s in result["transcript"]["segments"] if s["speaker"] == "Asad"]
+    assert asad_segments and all(s.get("verified") for s in asad_segments)
+
+    # Assigned group is resolved; only the unverified group remains.
+    remaining = client.get(f"/api/meetings/{meeting_id}/speakers/rapid-enroll-candidates").json()["groups"]
+    assert [g["label"] for g in remaining] == ["Eran"]
     handle.engine.dispose()

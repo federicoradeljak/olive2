@@ -330,6 +330,53 @@ class EnrolledSpeaker(CamelModel):
     providerIds: dict[str, list[str]] = Field(default_factory=dict)
 
 
+RapidEnrollGroupStatus = Literal["unmatched", "unverified"]
+
+
+class RapidEnrollCandidateSample(CamelModel):
+    segmentIndex: int
+    startMs: int
+    endMs: int
+    durationMs: int
+    text: str
+    score: float
+    enrollEligible: bool
+
+
+class RapidEnrollCandidateGroup(CamelModel):
+    label: str
+    status: RapidEnrollGroupStatus
+    reason: str
+    speakerId: str | None = None
+    speakerName: str | None = None
+    enrolled: bool = False
+    segmentCount: int
+    totalDurationMs: int
+    verifiedSegmentCount: int = 0
+    samples: list[RapidEnrollCandidateSample] = Field(default_factory=list)
+
+
+class RapidEnrollCandidatesResponse(CamelModel):
+    meetingId: str
+    groups: list[RapidEnrollCandidateGroup] = Field(default_factory=list)
+
+
+class RapidEnrollSampleResult(CamelModel):
+    segmentIndex: int
+    status: str
+    voiceprintEnrolled: bool = False
+    similarity: float | None = None
+    statusReason: str | None = None
+
+
+class RapidEnrollAssignResponse(CamelModel):
+    speaker: Speaker
+    transcript: Transcript
+    updatedSegmentsCount: int
+    enrolledSamplesCount: int = 0
+    sampleResults: list[RapidEnrollSampleResult] = Field(default_factory=list)
+
+
 class TranscriptionProviderCaps(CamelModel):
     diarization: bool
     speakerId: bool

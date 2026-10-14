@@ -1308,6 +1308,52 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
 
+    @app.get("/api/meetings/{meeting_id}/speakers/rapid-enroll-candidates")
+    async def get_rapid_enroll_candidates_route(meeting_id: str, limit: int = 5) -> JSONResponse:
+        try:
+            res = await _call_maybe_async(
+                get_speaker_service(),
+                ("get_rapid_enroll_candidates",),
+                meeting_id,
+                limit,
+            )
+            return JSONResponse(res)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @app.post("/api/meetings/{meeting_id}/speakers/rapid-enroll")
+    async def post_rapid_enroll_route(meeting_id: str, request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Valid JSON body required"}, status_code=400)
+
+        if (
+            not isinstance(body, dict)
+            or not body.get("fromLabel")
+            or (not body.get("toSpeakerName") and not body.get("toSpeakerId"))
+        ):
+            return JSONResponse(
+                {"error": "fromLabel and either toSpeakerName or toSpeakerId are required"},
+                status_code=400,
+            )
+
+        try:
+            res = await _call_maybe_async(
+                get_speaker_service(),
+                ("rapid_enroll_assign",),
+                {
+                    "meetingId": meeting_id,
+                    "fromLabel": body.get("fromLabel"),
+                    "toSpeakerName": body.get("toSpeakerName"),
+                    "toSpeakerId": body.get("toSpeakerId"),
+                    "segmentIndices": body.get("segmentIndices") or [],
+                },
+            )
+            return JSONResponse(res)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
     @app.post("/api/meetings/{meeting_id}/speakers/reassign")
     async def post_meeting_speaker_reassign_route(meeting_id: str, request: Request) -> JSONResponse:
         try:
@@ -2148,6 +2194,8 @@ def export_openapi_schema() -> dict[str, Any]:
         s.LogItem,
         s.LogPagination,
         s.LogListResponse,
+        s.RapidEnrollCandidatesResponse,
+        s.RapidEnrollAssignResponse,
     ]
     for model_cls in domain_models:
         json_schema = model_cls.model_json_schema(

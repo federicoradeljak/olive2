@@ -30,6 +30,11 @@ from ..ml import (
 )
 from ..providers.speechmatics import transcript_to_text
 from ..schemas import (
+    RapidEnrollAssignResponse,
+    RapidEnrollCandidateGroup,
+    RapidEnrollCandidateSample,
+    RapidEnrollCandidatesResponse,
+    RapidEnrollSampleResult,
     Speaker,
     Transcript,
     TranscriptSegment,
@@ -139,6 +144,78 @@ def _atomic_write_text(target_path: Path, content: str) -> None:
 def _is_placeholder_name(name: str) -> bool:
     s = name.strip()
     return bool(re.match(r"^speaker\s*\d+$", s, re.I) or re.match(r"^s\d+$", s, re.I))
+
+
+# Rapid-enroll samples are adopted one at a time through _adopt_voiceprint_sample,
+# which only accepts clips inside [MIN_CONFIRM_DURATION_SEC, MAX_CONFIRM_DURATION_SEC].
+RAPID_ENROLL_MAX_SAMPLES = 5
+RAPID_ENROLL_MIN_SEPARATION_MS = 20_000
+
+
+def _score_candidate_segment(segment: TranscriptSegment) -> float:
+    """Rank how useful a segment is as a voiceprint enrollment sample (0..1).
+
+    Favours the 3-15s adoption window (peak ~8s), enough spoken words to be
+    phonetically varied, and high ASR word confidence when available.
+    """
+    duration_sec = max(0.0, (segment.endMs - segment.startMs) / 1000.0)
+    if duration_sec < 3.0:
+        duration_score = 0.4 * (duration_sec / 3.0)
+    elif duration_sec <= 12.0:
+        duration_score = 1.0 - abs(duration_sec - 8.0) * 0.03
+    elif duration_sec <= 15.0:
+        duration_score = 0.88 - (duration_sec - 12.0) * 0.03
+    else:
+        duration_score = max(0.3, 0.79 - (duration_sec - 15.0) * 0.02)
+
+    word_count = len((segment.text or "").split())
+    text_score = min(word_count / 12.0, 1.0)
+
+    confidences = [w.confidence for w in (segment.words or []) if w.confidence is not None]
+    confidence_score = sum(confidences) / len(confidences) if confidences else 0.75
+
+    return round(0.65 * duration_score + 0.20 * text_score + 0.15 * confidence_score, 3)
+
+
+def _select_candidate_samples(
+    indexed_segments: list[tuple[int, TranscriptSegment]], limit: int
+) -> list[RapidEnrollCandidateSample]:
+    """Pick the top `limit` samples, preferring ones spread across the meeting."""
+    ranked = sorted(
+        indexed_segments,
+        key=lambda item: _score_candidate_segment(item[1]),
+        reverse=True,
+    )
+    picked: list[tuple[int, TranscriptSegment]] = []
+    for item in ranked:
+        if len(picked) >= limit:
+            break
+        if all(
+            abs(item[1].startMs - chosen.startMs) >= RAPID_ENROLL_MIN_SEPARATION_MS for _, chosen in picked
+        ):
+            picked.append(item)
+    if len(picked) < limit:  # short meetings: fill from the ranked remainder
+        picked_ids = {idx for idx, _ in picked}
+        for item in ranked:
+            if len(picked) >= limit:
+                break
+            if item[0] not in picked_ids:
+                picked.append(item)
+
+    return [
+        RapidEnrollCandidateSample(
+            segmentIndex=idx,
+            startMs=seg.startMs,
+            endMs=seg.endMs,
+            durationMs=max(0, seg.endMs - seg.startMs),
+            text=(seg.text or "").strip()[:300],
+            score=_score_candidate_segment(seg),
+            enrollEligible=MIN_CONFIRM_DURATION_SEC
+            <= (seg.endMs - seg.startMs) / 1000.0
+            <= MAX_CONFIRM_DURATION_SEC,
+        )
+        for idx, seg in picked
+    ]
 
 
 class SpeakerService:
@@ -776,6 +853,272 @@ class SpeakerService:
         txt_rel = re.sub(r"\.json$", ".txt", transcript_art_path)
         txt_path = folder / txt_rel
         _atomic_write_text(txt_path, f"{transcript_to_text(updated_transcript)}\n")
+
+    def get_rapid_enroll_candidates(
+        self, meeting_id: str, limit: int = RAPID_ENROLL_MAX_SAMPLES
+    ) -> dict[str, Any]:
+        """Speaker groups in a meeting that would benefit from rapid enrollment.
+
+        A group is included when its label is unmatched (placeholder label, no
+        speaker row, or a row with no voiceprint) or when it was auto-matched
+        to an enrolled speaker but no turn in this meeting has been verified.
+        Match confidence is not persisted at transcription time, so "unverified"
+        is the honest proxy for a low-confidence auto-match. Each group carries
+        its best few enrollment samples (see _select_candidate_samples).
+        """
+        limit = max(1, min(int(limit or RAPID_ENROLL_MAX_SAMPLES), RAPID_ENROLL_MAX_SAMPLES))
+        _meeting, _art, _folder, _json_path, parsed_data = self._load_meeting_transcript_artifact(
+            meeting_id, "find rapid-enroll candidates"
+        )
+        segments: list[TranscriptSegment] = _extract_transcript_segments(parsed_data)["segments"]
+
+        with self.db.connect() as conn:
+            speaker_rows = conn.execute(text("SELECT * FROM speakers")).mappings().all()
+        speakers_by_name = {(row["name"] or "").strip().lower(): row for row in speaker_rows}
+
+        grouped: dict[str, list[tuple[int, TranscriptSegment]]] = {}
+        label_by_key: dict[str, str] = {}
+        for idx, seg in enumerate(segments):
+            label = (seg.speaker or "").strip()
+            if not label:
+                continue
+            key = label.lower()
+            label_by_key.setdefault(key, label)
+            grouped.setdefault(key, []).append((idx, seg))
+
+        groups: list[RapidEnrollCandidateGroup] = []
+        for key, indexed in grouped.items():
+            label = label_by_key[key]
+            row = speakers_by_name.get(key)
+            provider_ids = _parse_json_field(row.get("provider_ids"), {}) if row else {}
+            enrolled = bool(row and (row.get("enrolled_at") is not None or (provider_ids.get("local") or [])))
+            verified_count = sum(1 for _, seg in indexed if seg.verified)
+
+            if _is_placeholder_name(label) or label.lower() == "unknown":
+                status, reason = "unmatched", "Placeholder label with no enrolled voiceprint"
+            elif row is None:
+                status, reason = "unmatched", "No matching person in the speaker registry"
+            elif not enrolled:
+                status, reason = "unmatched", "Known name but no enrolled voiceprint"
+            elif verified_count == 0:
+                status = "unverified"
+                reason = "Auto-matched to an enrolled voiceprint; no turn verified in this meeting"
+            else:
+                continue
+
+            groups.append(
+                RapidEnrollCandidateGroup(
+                    label=label,
+                    status=status,  # type: ignore[arg-type]
+                    reason=reason,
+                    speakerId=row["id"] if row else None,
+                    speakerName=row["name"] if row else None,
+                    enrolled=enrolled,
+                    segmentCount=len(indexed),
+                    totalDurationMs=sum(max(0, s.endMs - s.startMs) for _, s in indexed),
+                    verifiedSegmentCount=verified_count,
+                    samples=_select_candidate_samples(indexed, limit),
+                )
+            )
+
+        # Unmatched voices need enrollment most; larger voices first within a status.
+        groups.sort(key=lambda g: (0 if g.status == "unmatched" else 1, -g.totalDurationMs))
+        return RapidEnrollCandidatesResponse(meetingId=meeting_id, groups=groups).model_dump()
+
+    async def rapid_enroll_assign(self, options: dict[str, Any]) -> dict[str, Any]:
+        """Assign a whole speaker label to a person and enroll selected samples.
+
+        Unlike reassign (which concatenates every turn into one usually-oversized
+        clip), each selected sample is adopted individually through
+        _adopt_voiceprint_sample, so samples inside the 3-15s window actually
+        enroll, and later samples are outlier-checked against earlier ones.
+        """
+        meeting_id = str(options.get("meetingId") or options.get("meeting_id") or "")
+        from_label = str(options.get("fromLabel") or options.get("from_label") or "")
+        if not from_label.strip():
+            raise ValueError("fromLabel is required")
+        raw_indices = options.get("segmentIndices") or options.get("segment_indices") or []
+        selected_indices: list[int] = []
+        for raw in raw_indices if isinstance(raw_indices, list) else []:
+            if isinstance(raw, int) and not isinstance(raw, bool) and raw not in selected_indices:
+                selected_indices.append(raw)
+        selected_indices = selected_indices[:RAPID_ENROLL_MAX_SAMPLES]
+        current_time = self.now()
+
+        meeting, transcript_art, folder, json_path, parsed_data = self._load_meeting_transcript_artifact(
+            meeting_id, "rapid-enroll meeting transcript"
+        )
+        _ = meeting
+        target_speaker_row = self._resolve_or_create_speaker(
+            speaker_id=options.get("toSpeakerId") or options.get("to_speaker_id"),
+            speaker_name=options.get("toSpeakerName") or options.get("to_speaker_name"),
+            current_time=current_time,
+        )
+
+        extracted = _extract_transcript_segments(parsed_data)
+        segments: list[TranscriptSegment] = extracted["segments"]
+        is_array_format: bool = extracted["isArrayFormat"]
+        normalized_from = from_label.strip().lower()
+        matching_indices = {
+            idx for idx, seg in enumerate(segments) if (seg.speaker or "").strip().lower() == normalized_from
+        }
+        if not matching_indices:
+            raise ValueError(f"No segments found for speaker label: {from_label}")
+        # Only samples that actually belong to this label may be enrolled.
+        selected_indices = [idx for idx in selected_indices if idx in matching_indices]
+
+        sample_results: list[RapidEnrollSampleResult] = []
+        if selected_indices:
+            with self.db.connect() as conn:
+                recording = (
+                    conn.execute(
+                        text(
+                            "SELECT * FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"
+                        ),
+                        {"mid": meeting_id},
+                    )
+                    .mappings()
+                    .first()
+                )
+            audio_full = folder / recording["path"] if recording else None
+            if audio_full is not None and audio_full.exists():
+                try:
+                    decoded = await load_audio_samples(
+                        {
+                            "audioPath": str(audio_full),
+                            "audioBytes": audio_full.read_bytes(),
+                            "enhance": False,
+                        },
+                        16000,
+                    )
+                    full_samples = decoded.samples
+                    for idx in selected_indices:
+                        seg = segments[idx]
+                        s_start = int((seg.startMs / 1000.0) * 16000)
+                        s_end = min(len(full_samples), int((seg.endMs / 1000.0) * 16000))
+                        if s_end <= s_start:
+                            continue
+                        adopt_res = await self._adopt_voiceprint_sample(
+                            speaker_row=target_speaker_row,
+                            samples=full_samples[s_start:s_end],
+                            sample_rate=16000,
+                            clip_filename=f"clip_rapid_meeting_{meeting_id}_{idx}_{current_time}.wav",
+                            is_anchor=False,
+                            meeting_id=meeting_id,
+                            segment_index=idx,
+                        )
+                        sample_results.append(
+                            RapidEnrollSampleResult(
+                                segmentIndex=idx,
+                                status=adopt_res["status"],
+                                voiceprintEnrolled=bool(adopt_res["voiceprintEnrolled"]),
+                                similarity=adopt_res.get("similarity"),
+                                statusReason=adopt_res.get("statusReason"),
+                            )
+                        )
+                        if adopt_res["voiceprintEnrolled"]:
+                            target_speaker_row = adopt_res["updatedSpeakerRow"]
+                except Exception as exc:
+                    self.logger.warn(
+                        "Could not extract audio during rapid enrollment",
+                        {"meetingId": meeting_id, "error": str(exc)},
+                    )
+            if not sample_results:
+                sample_results = [
+                    RapidEnrollSampleResult(
+                        segmentIndex=idx,
+                        status="not_available",
+                        statusReason="Meeting recording audio is not available",
+                    )
+                    for idx in selected_indices
+                ]
+
+        updated_segments_count = 0
+        for seg in segments:
+            if (seg.speaker or "").strip().lower() == normalized_from:
+                seg.speaker = target_speaker_row["name"]
+                seg.verified = True
+                updated_segments_count += 1
+                if seg.words:
+                    for word in seg.words:
+                        word.speaker = target_speaker_row["name"]
+
+        updated_transcript = Transcript(
+            segments=coalesce_speaker_segments(segments, 15000),
+            language=extracted["language"]
+            or (parsed_data.get("language") if isinstance(parsed_data, dict) else None),
+            durationMs=extracted["durationMs"]
+            or (parsed_data.get("durationMs") if isinstance(parsed_data, dict) else None),
+            speakers=extracted["speakers"]
+            or (parsed_data.get("speakers") if isinstance(parsed_data, dict) else None),
+        )
+        self._save_updated_transcript_files(
+            folder, json_path, transcript_art["path"], updated_transcript, is_array_format
+        )
+
+        with self.db.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO meeting_speakers (meeting_id, speaker_id, evidence_artifact_id)
+                    VALUES (:mid, :sid, :aid)
+                    ON CONFLICT(meeting_id, speaker_id) DO UPDATE SET evidence_artifact_id = :aid
+                    """
+                ),
+                {"mid": meeting_id, "sid": target_speaker_row["id"], "aid": transcript_art["id"]},
+            )
+            self._prune_stale_meeting_speakers(conn, meeting_id, updated_transcript, normalized_from)
+
+        return RapidEnrollAssignResponse(
+            speaker=Speaker.model_validate(_to_speaker_dict(target_speaker_row)),
+            transcript=updated_transcript,
+            updatedSegmentsCount=updated_segments_count,
+            enrolledSamplesCount=sum(1 for r in sample_results if r.voiceprintEnrolled),
+            sampleResults=sample_results,
+        ).model_dump(exclude_none=True)
+
+    def _prune_stale_meeting_speakers(
+        self, conn: Any, meeting_id: str, updated_transcript: Transcript, normalized_from: str
+    ) -> None:
+        """Drop meeting_speakers links (and orphan placeholders) no longer in the transcript."""
+        if not updated_transcript.segments:
+            return
+        distinct_names = {
+            (s.speaker or "").strip().lower()
+            for s in updated_transcript.segments
+            if (s.speaker or "").strip()
+        }
+        cur_ms = (
+            conn.execute(
+                text(
+                    """
+                    SELECT speakers.id, speakers.name, speakers.enrolled_at,
+                           speakers.enrollment_clip_paths
+                    FROM meeting_speakers
+                    INNER JOIN speakers ON speakers.id = meeting_speakers.speaker_id
+                    WHERE meeting_speakers.meeting_id = :mid
+                    """
+                ),
+                {"mid": meeting_id},
+            )
+            .mappings()
+            .all()
+        )
+        for sp in cur_ms:
+            if sp["name"].strip().lower() in distinct_names:
+                continue
+            conn.execute(
+                text("DELETE FROM meeting_speakers WHERE meeting_id = :mid AND speaker_id = :sid"),
+                {"mid": meeting_id, "sid": sp["id"]},
+            )
+            other_links = conn.execute(
+                text("SELECT 1 FROM meeting_speakers WHERE speaker_id = :sid LIMIT 1"),
+                {"sid": sp["id"]},
+            ).first()
+            is_placeholder = _is_placeholder_name(sp["name"]) or sp["name"].strip().lower() == normalized_from
+            clips = _parse_json_field(sp.get("enrollment_clip_paths"), [])
+            if not other_links and (is_placeholder or (not clips and not sp.get("enrolled_at"))):
+                conn.execute(text("DELETE FROM speakers WHERE id = :sid"), {"sid": sp["id"]})
 
     async def reassign_meeting_speaker(self, options: dict[str, Any]) -> dict[str, Any]:
         meeting_id = str(options.get("meetingId") or options.get("meeting_id") or "")

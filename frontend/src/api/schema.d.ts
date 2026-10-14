@@ -459,6 +459,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/meetings/{meeting_id}/speakers/rapid-enroll-candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Rapid Enroll Candidates Route */
+        get: operations["get_rapid_enroll_candidates_route_api_meetings__meeting_id__speakers_rapid_enroll_candidates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/meetings/{meeting_id}/speakers/rapid-enroll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Rapid Enroll Route */
+        post: operations["post_rapid_enroll_route_api_meetings__meeting_id__speakers_rapid_enroll_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/meetings/{meeting_id}/speakers/reassign": {
         parameters: {
             query?: never;
@@ -1890,6 +1924,182 @@ export interface components {
             /** Categories */
             categories: string[];
         };
+        /** RapidEnrollCandidateGroup */
+        RapidEnrollCandidateGroup: {
+            /** Label */
+            label: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "unmatched" | "unverified";
+            /** Reason */
+            reason: string;
+            /**
+             * Speakerid
+             * @default null
+             */
+            speakerId: string | null;
+            /**
+             * Speakername
+             * @default null
+             */
+            speakerName: string | null;
+            /**
+             * Enrolled
+             * @default false
+             */
+            enrolled: boolean;
+            /** Segmentcount */
+            segmentCount: number;
+            /** Totaldurationms */
+            totalDurationMs: number;
+            /**
+             * Verifiedsegmentcount
+             * @default 0
+             */
+            verifiedSegmentCount: number;
+            /** Samples */
+            samples?: components["schemas"]["RapidEnrollCandidateSample"][];
+        };
+        /** RapidEnrollCandidateSample */
+        RapidEnrollCandidateSample: {
+            /** Segmentindex */
+            segmentIndex: number;
+            /** Startms */
+            startMs: number;
+            /** Endms */
+            endMs: number;
+            /** Durationms */
+            durationMs: number;
+            /** Text */
+            text: string;
+            /** Score */
+            score: number;
+            /** Enrolleligible */
+            enrollEligible: boolean;
+        };
+        /** RapidEnrollCandidatesResponse */
+        RapidEnrollCandidatesResponse: {
+            /** Meetingid */
+            meetingId: string;
+            /** Groups */
+            groups?: components["schemas"]["RapidEnrollCandidateGroup"][];
+        };
+        /** RapidEnrollSampleResult */
+        RapidEnrollSampleResult: {
+            /** Segmentindex */
+            segmentIndex: number;
+            /** Status */
+            status: string;
+            /**
+             * Voiceprintenrolled
+             * @default false
+             */
+            voiceprintEnrolled: boolean;
+            /**
+             * Similarity
+             * @default null
+             */
+            similarity: number | null;
+            /**
+             * Statusreason
+             * @default null
+             */
+            statusReason: string | null;
+        };
+        /** Transcript */
+        Transcript: {
+            /** Segments */
+            segments?: components["schemas"]["TranscriptSegment"][];
+            /**
+             * Language
+             * @default null
+             */
+            language: string | null;
+            /**
+             * Durationms
+             * @default null
+             */
+            durationMs: number | null;
+            /**
+             * Speakers
+             * @default null
+             */
+            speakers: components["schemas"]["TranscriptSpeakerInfo"][] | null;
+        };
+        /** TranscriptSegment */
+        TranscriptSegment: {
+            /** Startms */
+            startMs: number;
+            /** Endms */
+            endMs: number;
+            /** Speaker */
+            speaker: string;
+            /** Text */
+            text: string;
+            /**
+             * Verified
+             * @default null
+             */
+            verified: boolean | null;
+            /**
+             * Words
+             * @default null
+             */
+            words: components["schemas"]["TranscriptWord"][] | null;
+        };
+        /** TranscriptSpeakerInfo */
+        TranscriptSpeakerInfo: {
+            /**
+             * Label
+             * @default null
+             */
+            label: string | null;
+            /**
+             * Speaker
+             * @default null
+             */
+            speaker: string | null;
+            /**
+             * Speaker Identifiers
+             * @default null
+             */
+            speaker_identifiers: string[] | null;
+        };
+        /** TranscriptWord */
+        TranscriptWord: {
+            /** Startms */
+            startMs: number;
+            /** Endms */
+            endMs: number;
+            /** Word */
+            word: string;
+            /**
+             * Confidence
+             * @default null
+             */
+            confidence: number | null;
+            /**
+             * Speaker
+             * @default null
+             */
+            speaker: string | null;
+        };
+        /** RapidEnrollAssignResponse */
+        RapidEnrollAssignResponse: {
+            speaker: components["schemas"]["Speaker"];
+            transcript: components["schemas"]["Transcript"];
+            /** Updatedsegmentscount */
+            updatedSegmentsCount: number;
+            /**
+             * Enrolledsamplescount
+             * @default 0
+             */
+            enrolledSamplesCount: number;
+            /** Sampleresults */
+            sampleResults?: components["schemas"]["RapidEnrollSampleResult"][];
+        };
     };
     responses: never;
     parameters: never;
@@ -2739,6 +2949,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_rapid_enroll_candidates_route_api_meetings__meeting_id__speakers_rapid_enroll_candidates_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                meeting_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_rapid_enroll_route_api_meetings__meeting_id__speakers_rapid_enroll_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                meeting_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

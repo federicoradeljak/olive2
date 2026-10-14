@@ -31,6 +31,8 @@ import type {
   StageRunRow,
   SummaryGenerationStatus,
   MeetingUsageResponse,
+  RapidEnrollAssignResponse,
+  RapidEnrollCandidateGroup,
   Template,
   TranscriptionProgressUpdate,
   UsageSummary
@@ -1523,6 +1525,7 @@ function MeetingDetailView({
   const [enhancedAudio, setEnhancedAudio] = useState(true);
   const [reassigningSpeaker, setReassigningSpeaker] = useState<{ speaker: string; segmentIndex?: number } | null>(null);
   const [reidentifyingSpeakers, setReidentifyingSpeakers] = useState(false);
+  const [showRapidEnroll, setShowRapidEnroll] = useState(false);
   const [splittingSegment, setSplittingSegment] = useState<{ segmentIndex: number; speaker: string; text: string; startMs: number; endMs: number } | null>(null);
   const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [showChatPanel, setShowChatPanel] = useState(false);
@@ -2738,8 +2741,19 @@ function MeetingDetailView({
 
           {/* Transcript Viewer */}
           <section className={`space-y-4 w-full max-w-full min-w-0 ${activeSection !== "transcript" ? "hidden lg:block" : ""}`}>
-            <div className="flex items-center justify-between gap-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <h2 className="text-xl font-semibold tracking-tight">Transcript</h2>
+              {parsedTranscriptSegments.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowRapidEnroll(true)}
+                  className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-lime-400/40 bg-lime-400/10 px-3 py-2 text-sm font-semibold text-lime-300 transition hover:bg-lime-400/20"
+                  title="Enroll voiceprints for unmatched or unverified speakers in this meeting"
+                >
+                  <span>⚡</span>
+                  <span>Rapid enroll</span>
+                </button>
+              )}
               {confirmationNotice && (
                 <div className="rounded-lg border border-lime-500/40 bg-lime-500/10 px-3 py-1 text-xs font-medium text-lime-300 animate-fade-in">
                   {confirmationNotice}
@@ -2847,6 +2861,21 @@ function MeetingDetailView({
               onSuccess={async () => {
                 setSplittingSegment(null);
                 await fetchDetail();
+                onSpeakerUpdated();
+              }}
+            />
+          )}
+
+          {/* Rapid Enroll Modal */}
+          {showRapidEnroll && (
+            <RapidEnrollModal
+              meetingId={meetingId}
+              knownSpeakers={knownSpeakers}
+              playingSegmentIndex={playingSegmentIndex}
+              onPlaySample={(sample) => handlePlaySegment(sample, sample.segmentIndex)}
+              onClose={() => setShowRapidEnroll(false)}
+              onAssigned={() => {
+                void fetchDetail();
                 onSpeakerUpdated();
               }}
             />
@@ -3131,6 +3160,262 @@ function GenerateSummaryModal({
           </div>
         </form>
       )}
+    </Modal>
+  );
+}
+
+interface RapidEnrollCompletion {
+  label: string;
+  targetName: string;
+  updatedSegmentsCount: number;
+  enrolledSamplesCount: number;
+  sampleCount: number;
+  notes: string[];
+}
+
+function RapidEnrollModal({
+  meetingId,
+  knownSpeakers,
+  playingSegmentIndex,
+  onPlaySample,
+  onClose,
+  onAssigned
+}: {
+  meetingId: string;
+  knownSpeakers: SpeakerWithStats[];
+  playingSegmentIndex: number | null;
+  onPlaySample: (sample: { startMs: number; endMs: number; segmentIndex: number }) => void;
+  onClose: () => void;
+  onAssigned: () => void;
+}): ReactElement {
+  const [groups, setGroups] = useState<RapidEnrollCandidateGroup[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedSamples, setSelectedSamples] = useState<Record<string, number[]>>({});
+  const [targets, setTargets] = useState<Record<string, { speakerId: string; customName: string }>>({});
+  const [busyLabel, setBusyLabel] = useState<string | null>(null);
+  const [completions, setCompletions] = useState<RapidEnrollCompletion[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/meetings/${meetingId}/speakers/rapid-enroll-candidates?limit=5`);
+        const data = (await res.json().catch(() => ({}))) as { groups?: RapidEnrollCandidateGroup[]; error?: string };
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        if (cancelled) return;
+        const loaded = data.groups ?? [];
+        setGroups(loaded);
+        // Pre-check the top 3 enrollment-eligible samples per group.
+        setSelectedSamples((prev) => {
+          const next = { ...prev };
+          for (const g of loaded) {
+            if (!(g.label in next)) {
+              const eligible = (g.samples ?? []).filter((s) => s.enrollEligible);
+              const chosen = (eligible.length > 0 ? eligible : (g.samples ?? []).slice(0, 1)).slice(0, 3);
+              next[g.label] = chosen.map((s) => s.segmentIndex);
+            }
+          }
+          return next;
+        });
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load enrollment candidates");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [meetingId]);
+
+  const toggleSample = (label: string, segmentIndex: number) => {
+    setSelectedSamples((prev) => {
+      const current = prev[label] ?? [];
+      return {
+        ...prev,
+        [label]: current.includes(segmentIndex)
+          ? current.filter((i) => i !== segmentIndex)
+          : [...current, segmentIndex]
+      };
+    });
+  };
+
+  const handleAssign = async (group: RapidEnrollCandidateGroup) => {
+    const target = targets[group.label] ?? { speakerId: "", customName: "" };
+    let toSpeakerId: string | undefined;
+    let toSpeakerName: string | undefined;
+    if (target.speakerId && target.speakerId !== "new") {
+      toSpeakerId = target.speakerId;
+      toSpeakerName = knownSpeakers.find((s) => s.id === target.speakerId)?.name;
+    } else {
+      toSpeakerName = target.customName.trim();
+    }
+    if (!toSpeakerName && !toSpeakerId) {
+      alert("Pick an existing person or enter a name first");
+      return;
+    }
+    // Send samples in ranked order so the best clips enroll first.
+    const segmentIndices = (group.samples ?? [])
+      .map((s) => s.segmentIndex)
+      .filter((idx) => (selectedSamples[group.label] ?? []).includes(idx));
+
+    setBusyLabel(group.label);
+    try {
+      const res = await fetch(`/api/meetings/${meetingId}/speakers/rapid-enroll`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ fromLabel: group.label, toSpeakerId, toSpeakerName, segmentIndices })
+      });
+      const data = (await res.json().catch(() => ({}))) as RapidEnrollAssignResponse & { error?: string };
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setGroups((prev) => (prev ?? []).filter((g) => g.label !== group.label));
+      setCompletions((prev) => [
+        {
+          label: group.label,
+          targetName: data.speaker?.name ?? toSpeakerName ?? "speaker",
+          updatedSegmentsCount: data.updatedSegmentsCount ?? 0,
+          enrolledSamplesCount: data.enrolledSamplesCount ?? 0,
+          sampleCount: segmentIndices.length,
+          notes: (data.sampleResults ?? [])
+            .filter((r) => !r.voiceprintEnrolled && r.statusReason)
+            .map((r) => r.statusReason as string)
+        },
+        ...prev
+      ]);
+      onAssigned();
+    } catch (err) {
+      alert(`Failed to assign ${group.label}: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBusyLabel(null);
+    }
+  };
+
+  return (
+    <Modal onClose={onClose} title={<>⚡ Rapid enroll</>} ariaLabel="Rapid enroll speakers" maxWidth="max-w-3xl">
+      <p className="text-sm text-stone-400">
+        Speakers in this meeting that are unmatched or auto-matched but unverified, with their best voiceprint samples.
+        Listen, check the good ones, then say who it is — every turn for that voice gets renamed and the checked samples
+        train their voiceprint.
+      </p>
+
+      {error && <div className="rounded-xl border border-red-900 bg-red-950/40 p-4 text-sm text-red-200">{error}</div>}
+      {groups === null && !error && <p className="text-sm text-stone-400">Finding candidate speakers…</p>}
+      {groups !== null && groups.length === 0 && completions.length === 0 && (
+        <p className="rounded-xl border border-stone-800 bg-stone-950/50 p-4 text-sm text-stone-300">
+          🎉 Nothing to enroll — every speaker in this meeting is matched and verified.
+        </p>
+      )}
+
+      {completions.map((c) => (
+        <div key={`${c.label}-${c.targetName}`} className="rounded-xl border border-lime-500/40 bg-lime-500/10 p-4 text-sm text-lime-200">
+          <p className="font-semibold">
+            ✓ “{c.label}” is {c.targetName} — renamed {c.updatedSegmentsCount} turn{c.updatedSegmentsCount === 1 ? "" : "s"},
+            enrolled {c.enrolledSamplesCount}/{c.sampleCount} sample{c.sampleCount === 1 ? "" : "s"}
+          </p>
+          {c.notes.map((note, i) => (
+            <p key={i} className="mt-1 text-xs text-lime-300/80">{note}</p>
+          ))}
+        </div>
+      ))}
+
+      {(groups ?? []).map((group) => {
+        const target = targets[group.label] ?? { speakerId: "", customName: "" };
+        const targetName =
+          target.speakerId && target.speakerId !== "new"
+            ? knownSpeakers.find((s) => s.id === target.speakerId)?.name
+            : target.customName.trim();
+        return (
+          <section key={group.label} className="space-y-3 rounded-xl border border-stone-800 bg-stone-950/50 p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-base font-semibold text-stone-100">“{group.label}”</h3>
+              <span
+                className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${
+                  group.status === "unmatched"
+                    ? "border-amber-400/40 bg-amber-400/10 text-amber-300"
+                    : "border-cyan-400/40 bg-cyan-400/10 text-cyan-300"
+                }`}
+              >
+                {group.status === "unmatched" ? "Unmatched" : "Unverified match"}
+              </span>
+              <span className="text-xs text-stone-500">
+                {group.segmentCount} turn{group.segmentCount === 1 ? "" : "s"} • {formatDuration(group.totalDurationMs ?? 0)} of speech
+              </span>
+            </div>
+            <p className="text-xs text-stone-500">{group.reason}</p>
+
+            <div className="space-y-2">
+              {(group.samples ?? []).map((sample) => (
+                <div key={sample.segmentIndex} className="flex items-start gap-2.5 rounded-lg border border-stone-800 bg-stone-900/70 p-2.5">
+                  <input
+                    type="checkbox"
+                    checked={(selectedSamples[group.label] ?? []).includes(sample.segmentIndex)}
+                    onChange={() => toggleSample(group.label, sample.segmentIndex)}
+                    className="mt-1.5 h-4 w-4 shrink-0 rounded border-stone-700 bg-stone-900 text-lime-400 focus:ring-lime-400"
+                    aria-label={`Enroll sample at ${formatTimeOffset(sample.startMs)}`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => onPlaySample(sample)}
+                    title={playingSegmentIndex === sample.segmentIndex ? "Pause playback" : "Play this sample"}
+                    className={`inline-flex min-h-[36px] shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-mono transition ${
+                      playingSegmentIndex === sample.segmentIndex
+                        ? "border border-lime-400/40 bg-lime-400/20 font-bold text-lime-300"
+                        : "border border-stone-700/70 bg-stone-800/90 text-stone-400 hover:text-lime-300"
+                    }`}
+                  >
+                    <span className="text-[10px]">{playingSegmentIndex === sample.segmentIndex ? "⏸" : "▶"}</span>
+                    <span>{formatTimeOffset(sample.startMs)}</span>
+                  </button>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs leading-relaxed text-stone-300 line-clamp-2">{sample.text}</p>
+                    <p className="mt-0.5 text-[10px] text-stone-500">
+                      {(sample.durationMs / 1000).toFixed(1)}s
+                      {!sample.enrollEligible && <span className="text-amber-400"> • outside 3–15s enroll window (rename only)</span>}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <select
+                value={target.speakerId}
+                onChange={(e) =>
+                  setTargets((prev) => ({ ...prev, [group.label]: { ...target, speakerId: e.target.value } }))
+                }
+                className="w-full rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-base text-stone-100 focus:border-lime-400 focus:outline-none sm:text-sm"
+                aria-label={`Who is ${group.label}?`}
+              >
+                <option value="">-- Who is this? --</option>
+                <option value="new">+ Create new person</option>
+                {knownSpeakers.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({s.providerIds.speechmatics?.length || s.providerIds.local?.length ? "Voiceprint enrolled" : "Discovered"})
+                  </option>
+                ))}
+              </select>
+              {(target.speakerId === "new" || !target.speakerId) && (
+                <input
+                  type="text"
+                  placeholder="e.g. Asad"
+                  value={target.customName}
+                  onChange={(e) =>
+                    setTargets((prev) => ({ ...prev, [group.label]: { ...target, customName: e.target.value } }))
+                  }
+                  className="w-full rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-base text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none sm:text-sm"
+                  aria-label="New person name"
+                />
+              )}
+              <button
+                type="button"
+                disabled={busyLabel === group.label}
+                onClick={() => void handleAssign(group)}
+                className="inline-flex min-h-[44px] shrink-0 items-center justify-center rounded-lg bg-lime-400 px-4 py-2 text-sm font-semibold text-stone-950 shadow-md transition hover:bg-lime-300 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {busyLabel === group.label ? "Enrolling…" : targetName ? `This is ${targetName}` : "Assign & enroll"}
+              </button>
+            </div>
+          </section>
+        );
+      })}
     </Modal>
   );
 }

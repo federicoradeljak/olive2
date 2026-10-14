@@ -936,6 +936,90 @@
         }
       }
     },
+    "/api/meetings/{meeting_id}/speakers/rapid-enroll-candidates": {
+      "get": {
+        "summary": "Get Rapid Enroll Candidates Route",
+        "operationId": "get_rapid_enroll_candidates_route_api_meetings__meeting_id__speakers_rapid_enroll_candidates_get",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 5,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/meetings/{meeting_id}/speakers/rapid-enroll": {
+      "post": {
+        "summary": "Post Rapid Enroll Route",
+        "operationId": "post_rapid_enroll_route_api_meetings__meeting_id__speakers_rapid_enroll_post",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/meetings/{meeting_id}/speakers/reassign": {
       "post": {
         "summary": "Post Meeting Speaker Reassign Route",
@@ -3854,6 +3938,426 @@
           "pagination"
         ],
         "title": "LogListResponse",
+        "type": "object"
+      },
+      "RapidEnrollCandidateGroup": {
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "unmatched",
+              "unverified"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "speakerId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Speakerid"
+          },
+          "speakerName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Speakername"
+          },
+          "enrolled": {
+            "default": false,
+            "title": "Enrolled",
+            "type": "boolean"
+          },
+          "segmentCount": {
+            "title": "Segmentcount",
+            "type": "integer"
+          },
+          "totalDurationMs": {
+            "title": "Totaldurationms",
+            "type": "integer"
+          },
+          "verifiedSegmentCount": {
+            "default": 0,
+            "title": "Verifiedsegmentcount",
+            "type": "integer"
+          },
+          "samples": {
+            "items": {
+              "$ref": "#/components/schemas/RapidEnrollCandidateSample"
+            },
+            "title": "Samples",
+            "type": "array"
+          }
+        },
+        "required": [
+          "label",
+          "status",
+          "reason",
+          "segmentCount",
+          "totalDurationMs"
+        ],
+        "title": "RapidEnrollCandidateGroup",
+        "type": "object"
+      },
+      "RapidEnrollCandidateSample": {
+        "properties": {
+          "segmentIndex": {
+            "title": "Segmentindex",
+            "type": "integer"
+          },
+          "startMs": {
+            "title": "Startms",
+            "type": "integer"
+          },
+          "endMs": {
+            "title": "Endms",
+            "type": "integer"
+          },
+          "durationMs": {
+            "title": "Durationms",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "enrollEligible": {
+            "title": "Enrolleligible",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "segmentIndex",
+          "startMs",
+          "endMs",
+          "durationMs",
+          "text",
+          "score",
+          "enrollEligible"
+        ],
+        "title": "RapidEnrollCandidateSample",
+        "type": "object"
+      },
+      "RapidEnrollCandidatesResponse": {
+        "properties": {
+          "meetingId": {
+            "title": "Meetingid",
+            "type": "string"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/RapidEnrollCandidateGroup"
+            },
+            "title": "Groups",
+            "type": "array"
+          }
+        },
+        "required": [
+          "meetingId"
+        ],
+        "title": "RapidEnrollCandidatesResponse",
+        "type": "object"
+      },
+      "RapidEnrollSampleResult": {
+        "properties": {
+          "segmentIndex": {
+            "title": "Segmentindex",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "voiceprintEnrolled": {
+            "default": false,
+            "title": "Voiceprintenrolled",
+            "type": "boolean"
+          },
+          "similarity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Similarity"
+          },
+          "statusReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Statusreason"
+          }
+        },
+        "required": [
+          "segmentIndex",
+          "status"
+        ],
+        "title": "RapidEnrollSampleResult",
+        "type": "object"
+      },
+      "Transcript": {
+        "properties": {
+          "segments": {
+            "items": {
+              "$ref": "#/components/schemas/TranscriptSegment"
+            },
+            "title": "Segments",
+            "type": "array"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Language"
+          },
+          "durationMs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Durationms"
+          },
+          "speakers": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/TranscriptSpeakerInfo"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Speakers"
+          }
+        },
+        "title": "Transcript",
+        "type": "object"
+      },
+      "TranscriptSegment": {
+        "properties": {
+          "startMs": {
+            "title": "Startms",
+            "type": "integer"
+          },
+          "endMs": {
+            "title": "Endms",
+            "type": "integer"
+          },
+          "speaker": {
+            "title": "Speaker",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "verified": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Verified"
+          },
+          "words": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/TranscriptWord"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Words"
+          }
+        },
+        "required": [
+          "startMs",
+          "endMs",
+          "speaker",
+          "text"
+        ],
+        "title": "TranscriptSegment",
+        "type": "object"
+      },
+      "TranscriptSpeakerInfo": {
+        "properties": {
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Label"
+          },
+          "speaker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Speaker"
+          },
+          "speaker_identifiers": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Speaker Identifiers"
+          }
+        },
+        "title": "TranscriptSpeakerInfo",
+        "type": "object"
+      },
+      "TranscriptWord": {
+        "properties": {
+          "startMs": {
+            "title": "Startms",
+            "type": "integer"
+          },
+          "endMs": {
+            "title": "Endms",
+            "type": "integer"
+          },
+          "word": {
+            "title": "Word",
+            "type": "string"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Confidence"
+          },
+          "speaker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Speaker"
+          }
+        },
+        "required": [
+          "startMs",
+          "endMs",
+          "word"
+        ],
+        "title": "TranscriptWord",
+        "type": "object"
+      },
+      "RapidEnrollAssignResponse": {
+        "properties": {
+          "speaker": {
+            "$ref": "#/components/schemas/Speaker"
+          },
+          "transcript": {
+            "$ref": "#/components/schemas/Transcript"
+          },
+          "updatedSegmentsCount": {
+            "title": "Updatedsegmentscount",
+            "type": "integer"
+          },
+          "enrolledSamplesCount": {
+            "default": 0,
+            "title": "Enrolledsamplescount",
+            "type": "integer"
+          },
+          "sampleResults": {
+            "items": {
+              "$ref": "#/components/schemas/RapidEnrollSampleResult"
+            },
+            "title": "Sampleresults",
+            "type": "array"
+          }
+        },
+        "required": [
+          "speaker",
+          "transcript",
+          "updatedSegmentsCount"
+        ],
+        "title": "RapidEnrollAssignResponse",
         "type": "object"
       }
     }
