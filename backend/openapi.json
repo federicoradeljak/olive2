@@ -1121,6 +1121,43 @@
         }
       }
     },
+    "/api/meetings/{meeting_id}/speakers/reidentify": {
+      "post": {
+        "summary": "Post Meeting Speakers Reidentify Route",
+        "operationId": "post_meeting_speakers_reidentify_route_api_meetings__meeting_id__speakers_reidentify_post",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/meetings/{meeting_id}/speakers/link": {
       "post": {
         "summary": "Post Link Speaker Route",

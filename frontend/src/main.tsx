@@ -1522,6 +1522,7 @@ function MeetingDetailView({
   const [customSimilarityThreshold, setCustomSimilarityThreshold] = useState(0.45);
   const [enhancedAudio, setEnhancedAudio] = useState(true);
   const [reassigningSpeaker, setReassigningSpeaker] = useState<{ speaker: string; segmentIndex?: number } | null>(null);
+  const [reidentifyingSpeakers, setReidentifyingSpeakers] = useState(false);
   const [splittingSegment, setSplittingSegment] = useState<{ segmentIndex: number; speaker: string; text: string; startMs: number; endMs: number } | null>(null);
   const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [showChatPanel, setShowChatPanel] = useState(false);
@@ -1870,6 +1871,38 @@ function MeetingDetailView({
       await fetchDetail();
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleReidentifySpeakers = async () => {
+    if (!detail || reidentifyingSpeakers) return;
+    setReidentifyingSpeakers(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/meetings/${meetingId}/speakers/reidentify`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      // The background job bumps meeting.updatedAt when it finishes (even
+      // when labels are unchanged), so poll until it moves then refresh.
+      const baseline = detail.meeting.updatedAt;
+      const deadline = Date.now() + 5 * 60 * 1000;
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 3000));
+        try {
+          const poll = await fetch(`/api/meetings/${meetingId}`);
+          if (poll.ok) {
+            const fresh = (await poll.json()) as MeetingDetailResponse;
+            if (fresh.meeting.updatedAt !== baseline) break;
+          }
+        } catch {}
+        if (Date.now() > deadline) break;
+      }
+      await fetchDetail();
+      onSpeakerUpdated();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to re-identify speakers");
+    } finally {
+      setReidentifyingSpeakers(false);
     }
   };
 
@@ -2405,7 +2438,7 @@ function MeetingDetailView({
                 ? detail.speakers.filter((s) => activeSpeakerNames.has(s.name.trim().toLowerCase()))
                 : detail.speakers;
 
-            return visibleSpeakers.length > 0 ? (
+            return visibleSpeakers.length > 0 || parsedTranscriptSegments.length > 0 ? (
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs font-semibold uppercase tracking-wider text-stone-400">Speakers:</span>
                 {visibleSpeakers.map((s) => (
@@ -2416,6 +2449,15 @@ function MeetingDetailView({
                     {s.name}
                   </span>
                 ))}
+                <button
+                  type="button"
+                  onClick={() => void handleReidentifySpeakers()}
+                  disabled={reidentifyingSpeakers}
+                  className="rounded-full border border-stone-700 bg-stone-800/80 px-3 py-1 text-xs font-medium text-stone-300 transition hover:border-lime-500/40 hover:text-lime-300 disabled:cursor-wait disabled:opacity-50"
+                  title="Re-match every speaker label against your current enrolled voiceprints"
+                >
+                  {reidentifyingSpeakers ? "⟳ Re-identifying…" : "⟳ Re-identify"}
+                </button>
               </div>
             ) : null;
           })()}

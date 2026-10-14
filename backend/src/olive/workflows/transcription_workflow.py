@@ -1860,6 +1860,12 @@ async def cancel_dbos_workflows_for_meeting(
                     # this prefix matcher in sync with that format.
                     or wid.startswith(f"transcribe:{meeting_id}:")
                     or pid.startswith(f"transcribe:{meeting_id}:")
+                    # Speaker re-identification jobs enqueued via
+                    # TranscriptionService.request_speaker_reidentification use
+                    # ``reidentify-speakers:{meeting_id}:{hex8}`` workflow ids — keep
+                    # this prefix matcher in sync with that format.
+                    or wid.startswith(f"reidentify-speakers:{meeting_id}:")
+                    or pid.startswith(f"reidentify-speakers:{meeting_id}:")
                     or any(wid.startswith(f"{p}-") for p in parent_ids)
                 ):
                     wf_ids_to_cancel.add(wid)

@@ -244,6 +244,10 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                 transcription_service=get_transcription_service(),
                 config_dir=config_dir,
             )
+            tsvc = get_transcription_service()
+            setter = getattr(tsvc, "set_plaud_poller", None) or getattr(tsvc, "setPlaudPoller", None)
+            if callable(setter):
+                setter(plaud_poller)
         return plaud_poller
 
     def get_oauth_manager() -> Any:
@@ -1444,6 +1448,22 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                 {"meetingId": meeting_id, "segmentIndex": seg_idx},
             )
             return JSONResponse(res)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @app.post("/api/meetings/{meeting_id}/speakers/reidentify")
+    async def post_meeting_speakers_reidentify_route(meeting_id: str) -> JSONResponse:
+        try:
+            res = await _call_maybe_async(
+                get_transcription_service(),
+                ("request_speaker_reidentification", "requestSpeakerReidentification"),
+                meeting_id,
+            )
+            return JSONResponse(res, status_code=202)
+        except ValueError as exc:
+            msg = str(exc)
+            status = 404 if "not found" in msg.lower() else 409
+            return JSONResponse({"error": msg}, status_code=status)
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
 

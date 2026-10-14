@@ -544,6 +544,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/meetings/{meeting_id}/speakers/reidentify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Meeting Speakers Reidentify Route */
+        post: operations["post_meeting_speakers_reidentify_route_api_meetings__meeting_id__speakers_reidentify_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/meetings/{meeting_id}/speakers/link": {
         parameters: {
             query?: never;
@@ -2851,6 +2868,37 @@ export interface operations {
         };
     };
     post_merge_segments_route_api_meetings__meeting_id__speakers_merge_segments_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                meeting_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_meeting_speakers_reidentify_route_api_meetings__meeting_id__speakers_reidentify_post: {
         parameters: {
             query?: never;
             header?: never;

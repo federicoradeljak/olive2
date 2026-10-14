@@ -1347,6 +1347,52 @@ class PlaudPoller:
             )
             return False
 
+    async def request_speaker_reidentification(self, meeting_id: str) -> dict[str, Any]:
+        """Validate and enqueue a forced Plaud speaker re-identification.
+
+        Unlike the ingest hook and boot backfill (which skip meetings whose
+        labels already look resolved), a manual re-run always queues the
+        durable ``plaud-identify`` job so improved voiceprints can re-match
+        every label. Raises ValueError when there is nothing to match with.
+        """
+        with self.db.connect() as conn:
+            meeting = (
+                conn.execute(text("SELECT * FROM meetings WHERE id = :id"), {"id": meeting_id})
+                .mappings()
+                .first()
+            )
+        if not meeting:
+            raise ValueError(f"Meeting not found: {meeting_id}")
+        folder = meeting_paths(
+            self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]
+        ).folder
+        if not (Path(folder) / "transcripts/plaud.json").exists():
+            raise ValueError(f"No Plaud transcript found for meeting {meeting_id}")
+        with self.db.connect() as conn:
+            recording = (
+                conn.execute(
+                    text("SELECT * FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"),
+                    {"mid": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
+        audio_path = str(Path(folder) / recording["path"]) if recording and recording.get("path") else None
+        if not audio_path or not Path(audio_path).exists():
+            raise ValueError(f"No audio recording available for meeting {meeting_id}")
+        enrolled = await self._get_enrolled_speakers_with_voiceprints()
+        if not enrolled:
+            raise ValueError("No enrolled speakers with voiceprints yet — enroll a speaker first")
+        queued = await self._enqueue_plaud_speaker_identification(meeting_id)
+        if not queued:
+            raise ValueError(f"Speaker re-identification for meeting {meeting_id} could not be queued")
+        return {
+            "status": "queued",
+            "jobId": f"plaud-identify:{meeting_id}",
+            "meetingId": meeting_id,
+            "alreadyRunning": False,
+        }
+
     async def run_plaud_speaker_identification(self, meeting_id: str) -> dict[str, Any]:
         """DBOS ``plaud_sync`` job: match Plaud transcript turns to local voiceprints.
 

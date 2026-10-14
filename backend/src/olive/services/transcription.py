@@ -38,6 +38,7 @@ from ..schemas import EnrolledSpeaker, Transcript, TranscriptionProgressUpdate
 from ..workflows import (
     QUEUE_ASSEMBLYAI,
     QUEUE_PIPELINE,
+    QUEUE_SPEAKER_EMBED,
     QUEUE_SPEECHMATICS,
     QUEUE_SUMMARIZE,
     cancel_dbos_workflows_for_meeting,
@@ -108,6 +109,23 @@ def _signal_aborted(signal: Any) -> bool:
     return bool(callable(is_set) and is_set())
 
 
+def _speaker_has_local_voiceprint_vectors(speaker: EnrolledSpeaker) -> bool:
+    """Whether an enrolled speaker carries usable local voiceprint vectors."""
+    items = (speaker.providerIds or {}).get("local") or []
+    for item in items:
+        try:
+            parsed = json.loads(item) if isinstance(item, str) else item
+        except Exception:
+            continue
+        if isinstance(parsed, list) and parsed:
+            if isinstance(parsed[0], list):
+                if any(isinstance(sub, list) and sub for sub in parsed):
+                    return True
+            else:
+                return True
+    return False
+
+
 def _is_placeholder_speaker_name(name: str) -> bool:
     s = name.strip()
     return bool(re.match(r"^speaker\s*\d+$", s, re.I) or re.match(r"^s\d+$", s, re.I))
@@ -137,6 +155,7 @@ class TranscriptionService:
         webhook_secret: str | None = None,
         now: Callable[[], int] | None = None,
         summary_service: Any = None,
+        plaud_poller: Any = None,
         config_dir: str | None = None,
     ) -> None:
         opts = options or {}
@@ -184,6 +203,7 @@ class TranscriptionService:
         )
         self.now: Callable[[], int] = now or opts.get("now") or (lambda: int(time.time() * 1000))
         self.summary_service = summary_service or opts.get("summaryService") or opts.get("summary_service")
+        self.plaud_poller = plaud_poller or opts.get("plaudPoller") or opts.get("plaud_poller")
         self._active_jobs: dict[str, _ActiveTranscriptionJob] = {}
         self._active_progress: dict[str, TranscriptionProgressUpdate] = {}
         self._progress_listeners: dict[str, set[Callable[[TranscriptionProgressUpdate], Any]]] = {}
@@ -290,6 +310,11 @@ class TranscriptionService:
         self.summary_service = service
 
     setSummaryService = set_summary_service
+
+    def set_plaud_poller(self, poller: Any) -> None:
+        self.plaud_poller = poller
+
+    setPlaudPoller = set_plaud_poller
 
     def set_default_provider(self, provider: TranscriptionProviderName) -> None:
         self.default_provider = provider
@@ -512,6 +537,292 @@ class TranscriptionService:
         }
 
     startTranscription = start_transcription
+
+    # --- Post-facto speaker re-identification ------------------------------
+    # Re-match a persisted transcript's speaker labels against the current
+    # enrolled voiceprints (e.g. after enrolling new speakers or improving
+    # voiceprints). Leaf work: everything runs inline in one
+    # ``speaker_embed`` stage job (see AGENTS.md rule 5).
+
+    @staticmethod
+    def _current_transcript_artifact(conn: Any, meeting_id: str) -> Any | None:
+        """Primary transcript JSON artifact, falling back to the latest one."""
+        meeting = (
+            conn.execute(
+                text("SELECT primary_transcript_artifact_id FROM meetings WHERE id = :id"),
+                {"id": meeting_id},
+            )
+            .mappings()
+            .first()
+        )
+        primary_id = meeting["primary_transcript_artifact_id"] if meeting else None
+        if primary_id:
+            art = (
+                conn.execute(
+                    text(
+                        "SELECT * FROM artifacts WHERE id = :id AND kind = 'transcript' AND format = 'json'"
+                    ),
+                    {"id": primary_id},
+                )
+                .mappings()
+                .first()
+            )
+            if art:
+                return art
+        return (
+            conn.execute(
+                text(
+                    "SELECT * FROM artifacts WHERE meeting_id = :mid AND kind = 'transcript' "
+                    "AND format = 'json' ORDER BY created_at DESC LIMIT 1"
+                ),
+                {"mid": meeting_id},
+            )
+            .mappings()
+            .first()
+        )
+
+    def _reidentify_targets(self, meeting_id: str) -> dict[str, Any]:
+        """Resolve meeting + transcript + audio for re-identification.
+
+        Raises ValueError with a user-facing message when anything is missing.
+        """
+        with self.db.connect() as conn:
+            meeting = (
+                conn.execute(text("SELECT * FROM meetings WHERE id = :id"), {"id": meeting_id})
+                .mappings()
+                .first()
+            )
+            if not meeting:
+                raise ValueError(f"Meeting not found: {meeting_id}")
+            artifact = self._current_transcript_artifact(conn, meeting_id)
+            if artifact is None:
+                raise ValueError(f"No transcript found for meeting {meeting_id}")
+            recording = (
+                conn.execute(
+                    text("SELECT * FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"),
+                    {"mid": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
+        folder = meeting_paths(
+            self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]
+        ).folder
+        audio_path = str(Path(folder) / recording["path"]) if recording and recording.get("path") else None
+        if not audio_path or not Path(audio_path).exists():
+            raise ValueError(f"No audio recording available for meeting {meeting_id}")
+        transcript_file = Path(folder) / str(artifact["path"])
+        if not transcript_file.exists():
+            raise ValueError(f"Transcript file is missing for meeting {meeting_id}")
+        try:
+            transcript = Transcript.model_validate(json.loads(transcript_file.read_text(encoding="utf-8")))
+        except Exception:
+            raise ValueError(f"Stored transcript for meeting {meeting_id} could not be parsed") from None
+        if not transcript.segments:
+            raise ValueError(f"Transcript for meeting {meeting_id} has no segments")
+        return {
+            "meeting": meeting,
+            "artifact": artifact,
+            "recording": recording,
+            "audio_path": audio_path,
+            "transcript": transcript,
+        }
+
+    async def request_speaker_reidentification(self, meeting_id: str) -> dict[str, Any]:
+        """Validate and enqueue a forced speaker re-identification.
+
+        Plaud transcripts delegate to the Plaud poller's durable identify
+        job; every other provider re-runs the shared ASR-first matcher
+        against the primary persisted transcript. Unlike the ingest-time
+        hooks, a manual re-run always re-matches *all* labels so improved
+        voiceprints can fix previously assigned names too.
+        """
+        with self.db.connect() as conn:
+            meeting = (
+                conn.execute(text("SELECT id FROM meetings WHERE id = :id"), {"id": meeting_id})
+                .mappings()
+                .first()
+            )
+            if not meeting:
+                raise ValueError(f"Meeting not found: {meeting_id}")
+            provider = self._current_transcript_provider(conn, meeting_id)
+        if (provider or "").lower() == "plaud":
+            poller = self.plaud_poller
+            if poller is None:
+                raise ValueError("Plaud sync is not configured; cannot re-identify this meeting")
+            request_fn = getattr(poller, "request_speaker_reidentification", None)
+            if not callable(request_fn):
+                raise ValueError("Plaud speaker re-identification is unavailable")
+            res: Any = request_fn(meeting_id)
+            if inspect.isawaitable(res):
+                res = await res
+            return dict(res)
+        targets = self._reidentify_targets(meeting_id)
+        enrolled = [
+            s for s in await self._get_enrolled_speakers() if _speaker_has_local_voiceprint_vectors(s)
+        ]
+        if not enrolled:
+            raise ValueError("No enrolled speakers with voiceprints yet — enroll a speaker first")
+        job_id = f"reidentify-speakers:{meeting_id}:{uuid.uuid4().hex[:8]}"
+        await ensure_dbos_launched_async(
+            config_dir=self.config_dir,
+            meetings_dir=self.meetings_dir,
+        )
+        await enqueue_stage_job(
+            QUEUE_SPEAKER_EMBED,
+            lambda: self.run_speaker_reidentification(meeting_id),
+            deduplication_id=f"reidentify-speakers:{meeting_id}",
+            workflow_id=job_id,
+            label="reidentify-speakers",
+            meeting_id=meeting_id,
+        )
+        return {
+            "status": "queued",
+            "jobId": job_id,
+            "meetingId": meeting_id,
+            "provider": targets["artifact"]["provider"],
+            "alreadyRunning": False,
+        }
+
+    requestSpeakerReidentification = request_speaker_reidentification
+
+    def _touch_meeting_updated_at(self, meeting_id: str) -> None:
+        with self.db.begin() as conn:
+            conn.execute(
+                text("UPDATE meetings SET updated_at = :now WHERE id = :id"),
+                {"now": self.now(), "id": meeting_id},
+            )
+
+    async def _prune_stale_transcript_speaker_links(
+        self, meeting_id: str, evidence_artifact_id: str, transcript: Transcript
+    ) -> None:
+        """Drop links evidencing an artifact whose speaker label is gone.
+
+        After a re-match renames labels away, name-only links pointing at
+        the rewritten artifact would otherwise linger (e.g. an unverified
+        name replaced by an enrolled speaker). Labels still present —
+        matched or not — keep their links.
+        """
+        final_names = {seg.speaker.strip() for seg in transcript.segments if seg.speaker.strip()}
+        with self.db.begin() as conn:
+            linked = (
+                conn.execute(
+                    text(
+                        "SELECT ms.speaker_id AS sid, s.name AS name FROM meeting_speakers ms "
+                        "JOIN speakers s ON s.id = ms.speaker_id "
+                        "WHERE ms.meeting_id = :mid AND ms.evidence_artifact_id = :aid"
+                    ),
+                    {"mid": meeting_id, "aid": evidence_artifact_id},
+                )
+                .mappings()
+                .all()
+            )
+            stale = [row["sid"] for row in linked if str(row["name"] or "").strip() not in final_names]
+            if stale:
+                placeholders = ", ".join(f":s{i}" for i in range(len(stale)))
+                conn.execute(
+                    text(
+                        "DELETE FROM meeting_speakers WHERE meeting_id = :mid "
+                        f"AND evidence_artifact_id = :aid AND speaker_id IN ({placeholders})"
+                    ),
+                    {
+                        "mid": meeting_id,
+                        "aid": evidence_artifact_id,
+                        **{f"s{i}": sid for i, sid in enumerate(stale)},
+                    },
+                )
+
+    async def run_speaker_reidentification(self, meeting_id: str) -> dict[str, Any]:
+        """DBOS ``speaker_embed`` job: re-match transcript labels to voiceprints.
+
+        Loads the primary persisted transcript, re-embeds every speaker
+        cluster from the meeting audio, and rewrites the transcript
+        artifacts with current enrolled names. Never raises: any failure
+        just keeps the existing labels.
+        """
+        targets = self._reidentify_targets(meeting_id)
+        meeting, artifact = targets["meeting"], targets["artifact"]
+        transcript: Transcript = targets["transcript"]
+        recording = targets["recording"]
+        rec_id = recording["id"] if recording else None
+        provider = str(artifact["provider"] or "")
+
+        enrolled = [
+            s for s in await self._get_enrolled_speakers() if _speaker_has_local_voiceprint_vectors(s)
+        ]
+        if not enrolled:
+            return {"meetingId": meeting_id, "status": "skipped", "reason": "no-enrolled-speakers"}
+        try:
+            if self.cloud_speaker_identifier is not None:
+                res = self.cloud_speaker_identifier(targets["audio_path"], transcript, enrolled)
+                if inspect.isawaitable(res):
+                    res = await res
+                result = res
+            else:
+                threshold = self._configured_similarity_threshold()
+                result = await identify_cloud_transcript_speakers(
+                    targets["audio_path"],
+                    transcript,
+                    enrolled,
+                    similarity_threshold=float(threshold) if threshold is not None else 0.45,
+                    meeting_id=meeting_id,
+                )
+        except Exception as exc:
+            self.logger.warn(
+                "Speaker re-identification failed; keeping existing labels",
+                {"category": "transcription", "meetingId": meeting_id, "error": str(exc)},
+            )
+            self._touch_meeting_updated_at(meeting_id)
+            return {"meetingId": meeting_id, "status": "kept-labels"}
+        if result is None:
+            self._touch_meeting_updated_at(meeting_id)
+            return {"meetingId": meeting_id, "status": "kept-labels"}
+        renamed, discovered = result
+        rename_map: dict[str, str] = {}
+        for old_seg, new_seg in zip(transcript.segments, renamed.segments, strict=False):
+            if new_seg.speaker != old_seg.speaker:
+                rename_map[old_seg.speaker] = new_seg.speaker
+        if not rename_map:
+            self._touch_meeting_updated_at(meeting_id)
+            return {"meetingId": meeting_id, "status": "kept-labels"}
+
+        rel_path = str(artifact["path"])
+        t_json = f"{json.dumps(renamed.model_dump(exclude_none=True), indent=2)}\n"
+        t_text = f"{transcript_to_text(renamed)}\n"
+        paths = ensure_meeting_folder(
+            meeting_paths(self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"])
+        )
+        json_art_id = await self._ensure_artifact(
+            meeting["id"], rec_id, "transcript", "json", rel_path, t_json, paths.transcripts_dir, provider
+        )
+        base, slash, filename = rel_path.rpartition("/")
+        stem = filename.rsplit(".", 1)[0] if "." in filename else filename
+        txt_rel = f"{base}{slash}{stem}.txt"
+        await self._ensure_artifact(
+            meeting["id"], rec_id, "transcript", "txt", txt_rel, t_text, paths.transcripts_dir, provider
+        )
+
+        await self._persist_local_discovered_speakers(meeting["id"], json_art_id, discovered)
+        await self._link_transcript_speakers(meeting["id"], json_art_id, renamed)
+        await self._prune_stale_transcript_speaker_links(meeting["id"], json_art_id, renamed)
+        self._touch_meeting_updated_at(meeting["id"])
+
+        matched = sorted({d.name for d in discovered if d.isEnrolled})
+        self.logger.info(
+            "Speaker re-identification renamed speakers",
+            {
+                "category": "transcription",
+                "meetingId": meeting_id,
+                "matched": matched,
+                "renamed": rename_map,
+            },
+        )
+        return {
+            "meetingId": meeting_id,
+            "status": "renamed",
+            "matched": matched,
+            "renamed": rename_map,
+        }
 
     async def _run_queued_transcription(
         self,
