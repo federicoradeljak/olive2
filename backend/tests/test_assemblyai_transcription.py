@@ -126,6 +126,7 @@ async def test_assemblyai_polling_flow_persists_artifacts_and_cloud_labels(tmp_p
     assert stages[0] == "uploading"
     assert "transcribing" in stages
     assert any("poll #" in m for _s, _p, m in progress_updates)
+    assert all(p == round(p) for _s, p, _m in progress_updates)
     assert stages[-1] == "done"
     assert result["jobId"] == "aai-job-123"
     with handle.engine.connect() as conn:

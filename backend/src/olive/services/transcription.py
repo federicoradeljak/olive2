@@ -1756,7 +1756,11 @@ class TranscriptionService:
         async def _emit_aai(stage: str, percent: float, message: str) -> None:
             if callable(on_progress):
                 r = on_progress(
-                    TranscriptionProgressUpdate(stage=stage, percent=percent, message=message)  # type: ignore[arg-type]
+                    TranscriptionProgressUpdate(
+                        stage=stage,  # type: ignore[arg-type]
+                        percent=float(round(percent)),
+                        message=message,
+                    )
                 )
                 if inspect.isawaitable(r):
                     await r

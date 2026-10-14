@@ -973,7 +973,7 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
                   {activeProgressMap[meeting.id] ? (
                     <div className="flex items-center gap-2 rounded-full border border-amber-500/40 bg-amber-950/40 px-3 py-1 text-xs text-amber-200">
                       <span className="h-2 w-2 rounded-full bg-amber-400 animate-ping" />
-                      <span className="font-semibold">{activeProgressMap[meeting.id].stage} ({activeProgressMap[meeting.id].percent}%)</span>
+                      <span className="font-semibold">{activeProgressMap[meeting.id].stage} ({Math.round(activeProgressMap[meeting.id].percent)}%)</span>
                     </div>
                   ) : (
                     <span
@@ -1014,7 +1014,7 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
                 <div className="pt-1 space-y-1">
                   <div className="flex justify-between text-[11px] text-stone-400">
                     <span className="truncate max-w-[80%]">{activeProgressMap[meeting.id].message}</span>
-                    <span className="font-mono text-amber-300 font-bold">{activeProgressMap[meeting.id].percent}%</span>
+                    <span className="font-mono text-amber-300 font-bold">{Math.round(activeProgressMap[meeting.id].percent)}%</span>
                   </div>
                   <div className="h-1.5 w-full overflow-hidden rounded-full bg-stone-800">
                     <div
@@ -1757,12 +1757,12 @@ function MeetingDetailView({
                   {transcribing
                     ? transcriptionProgress
                       ? transcriptionProgress.stage === "diarizing"
-                        ? `Diarizing (${transcriptionProgress.percent || 15}%)…`
+                        ? `Diarizing (${Math.round(transcriptionProgress.percent || 15)}%)…`
                         : transcriptionProgress.stage === "uploading"
-                        ? `Uploading (${transcriptionProgress.percent || 15}%)…`
+                        ? `Uploading (${Math.round(transcriptionProgress.percent || 15)}%)…`
                         : transcriptionProgress.stage === "decoding"
                         ? "Enhancing Audio…"
-                        : `Transcribing (${transcriptionProgress.percent || 25}%)…`
+                        : `Transcribing (${Math.round(transcriptionProgress.percent || 25)}%)…`
                       : "Transcribing…"
                     : "Transcribe"}
                 </span>
@@ -1832,7 +1832,7 @@ function MeetingDetailView({
                     </span>
                   )}
                   <span className="font-bold text-lime-400 text-sm">
-                    {transcriptionProgress.percent}%
+                    {Math.round(transcriptionProgress.percent)}%
                   </span>
 
                   {transcribing && (
@@ -5429,7 +5429,7 @@ function DebugQueuesPage() {
                       <div className="text-stone-400">{prog.message}</div>
                     </div>
                     <div className="font-mono text-sm font-bold text-amber-300">
-                      {prog.percent ?? 0}%
+                      {Math.round(prog.percent ?? 0)}%
                     </div>
                   </div>
                 ))}
@@ -5542,7 +5542,7 @@ function DebugQueuesPage() {
                               return (
                                 <div className="space-y-0.5 pt-0.5">
                                   <div className="text-amber-300">
-                                    Stage: <span className="text-stone-100">{prog.stage}</span> · {prog.percent ?? 0}%
+                                    Stage: <span className="text-stone-100">{prog.stage}</span> · {Math.round(prog.percent ?? 0)}%
                                     {prog.current != null && prog.total != null
                                       ? ` · batch ${prog.current}/${prog.total}`
                                       : ""}
