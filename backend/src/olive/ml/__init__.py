@@ -23,6 +23,13 @@ from .embed import (
     SherpaSpeakerEmbeddingExtractor,
     WeSpeakerEmbeddingExtractor,
 )
+from .identify import (
+    identify_cloud_transcript_speakers,
+    identify_speakers_from_turns,
+    match_cluster_centroids,
+    rename_transcript_speakers,
+    turns_from_transcript,
+)
 from .pipeline import LocalTranscriptionPipeline
 from .protocols import (
     Aligner,
@@ -65,6 +72,11 @@ coalesceSpeakerSegments = coalesce_speaker_segments
 
 __all__ = [
     "AbortController",
+    "identify_cloud_transcript_speakers",
+    "identify_speakers_from_turns",
+    "match_cluster_centroids",
+    "rename_transcript_speakers",
+    "turns_from_transcript",
     "AbortSignal",
     "AcousticFeatureEmbeddingExtractor",
     "Aligner",

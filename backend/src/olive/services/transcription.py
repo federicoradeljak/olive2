@@ -27,6 +27,8 @@ from ..ml import (
     DiscoveredSpeakerVoiceprint,
     LocalTranscriptionWorkerRunner,
 )
+from ..ml.identify import identify_cloud_transcript_speakers
+from ..providers.assemblyai import AssemblyAIClient, parse_assemblyai_transcript
 from ..providers.speechmatics import (
     SpeechmaticsClient,
     parse_speechmatics_json_v2,
@@ -41,11 +43,13 @@ from ..workflows import (
 )
 
 STAGE_SPEECHMATICS_TRANSCRIBE = "speechmatics_transcribe"
+STAGE_ASSEMBLYAI_TRANSCRIBE = "assemblyai_transcribe"
 STAGE_LOCAL_TRANSCRIBE = "local_transcribe"
 PROVIDER_SPEECHMATICS = "speechmatics"
+PROVIDER_ASSEMBLYAI = "assemblyai"
 PROVIDER_LOCAL = "local"
 
-TranscriptionProviderName = Literal["speechmatics", "local"]
+TranscriptionProviderName = Literal["speechmatics", "assemblyai", "local"]
 
 
 def _parse_json_field(value: str | None, fallback: Any) -> Any:
@@ -55,6 +59,15 @@ def _parse_json_field(value: str | None, fallback: Any) -> Any:
         return json.loads(value)
     except Exception:
         return fallback
+
+
+def _signal_aborted(signal: Any) -> bool:
+    if signal is None:
+        return False
+    if getattr(signal, "aborted", False):
+        return True
+    is_set = getattr(signal, "is_set", None)
+    return bool(callable(is_set) and is_set())
 
 
 def _is_placeholder_speaker_name(name: str) -> bool:
@@ -78,6 +91,7 @@ class TranscriptionService:
         db: Engine | DbHandle | None = None,
         meetings_dir: str | None = None,
         speechmatics_client: SpeechmaticsClient | None = None,
+        assemblyai_client: AssemblyAIClient | None = None,
         local_pipeline: Any = None,
         default_provider: TranscriptionProviderName | None = None,
         logger: Logger | None = None,
@@ -100,6 +114,13 @@ class TranscriptionService:
         self.config_dir = config_dir or opts.get("configDir") or opts.get("config_dir")
         passed_sm = speechmatics_client or opts.get("speechmaticsClient") or opts.get("speechmatics_client")
         self.client: SpeechmaticsClient = passed_sm or SpeechmaticsClient()
+        passed_aai = assemblyai_client or opts.get("assemblyaiClient") or opts.get("assemblyai_client")
+        self.assemblyai_client: AssemblyAIClient = passed_aai or AssemblyAIClient()
+        # Injectable for tests: async (audio_path, transcript, enrolled) ->
+        # (renamed_transcript, discovered) | None. None = use local ML default.
+        self.cloud_speaker_identifier = opts.get("cloudSpeakerIdentifier") or opts.get(
+            "cloud_speaker_identifier"
+        )
         self.local_pipeline = (
             local_pipeline
             or opts.get("localPipeline")
@@ -110,7 +131,13 @@ class TranscriptionService:
             default_provider
             or opts.get("defaultProvider")
             or opts.get("default_provider")
-            or ("speechmatics" if (passed_sm or os.environ.get("SPEECHMATICS_API_KEY")) else "local")
+            or (
+                "speechmatics"
+                if (passed_sm or os.environ.get("SPEECHMATICS_API_KEY"))
+                else "assemblyai"
+                if (passed_aai or os.environ.get("ASSEMBLY_API_KEY") or os.environ.get("ASSEMBLYAI_API_KEY"))
+                else "local"
+            )
         )
         self.logger: Logger = logger or opts.get("logger") or default_logger
         self.webhook_url: str | None = webhook_url or opts.get("webhookUrl") or opts.get("webhook_url")
@@ -127,6 +154,10 @@ class TranscriptionService:
     @property
     def speechmatics(self) -> SpeechmaticsClient:
         return self.client
+
+    @property
+    def assemblyai(self) -> AssemblyAIClient:
+        return self.assemblyai_client
 
     @property
     def local(self) -> Any:
@@ -468,9 +499,12 @@ class TranscriptionService:
         try:
             if provider == "local":
                 return await self.transcribe_meeting_local(meeting_id, merged_opts)
+            if provider == "assemblyai":
+                return await self.transcribe_meeting_assemblyai(meeting_id, merged_opts)
             return await self.transcribe_meeting_speechmatics(meeting_id, merged_opts)
         finally:
-            self._active_jobs.pop(meeting_id, None)
+            if self._active_jobs.get(meeting_id) is active_job:
+                self._active_jobs.pop(meeting_id, None)
 
     transcribeMeeting = transcribe_meeting
 
@@ -968,16 +1002,9 @@ class TranscriptionService:
         stage_run_id = stage_run["id"] if stage_run else str(uuid.uuid4())
         current_time = self.now()
 
-        speakers = await self._get_enrolled_speakers()
-        speaker_configs = [
-            {
-                "label": s.name,
-                "speaker_identifiers": s.providerIds[PROVIDER_SPEECHMATICS],
-            }
-            for s in speakers
-            if s.providerIds.get(PROVIDER_SPEECHMATICS)
-        ]
-
+        # Speaker identity is resolved locally from voiceprints after ASR
+        # (see _maybe_identify_cloud_speakers); Speechmatics is only asked
+        # for diarized labels, not its native speaker_identifiers.
         webhook_url = (
             f"{self.webhook_url}?meetingId={urllib.parse.quote(meeting_id)}"
             f"&stageRunId={urllib.parse.quote(stage_run_id)}"
@@ -1003,7 +1030,6 @@ class TranscriptionService:
                     "filename": Path(recording["path"]).name,
                     "mime": recording["mime"],
                     "language": opts.get("language") or "en",
-                    "speakers": speaker_configs if speaker_configs else None,
                     "getSpeakers": True,
                     "webhookUrl": webhook_url,
                     "webhookSecret": self.webhook_secret,
@@ -1294,13 +1320,109 @@ class TranscriptionService:
 
     pollUntilComplete = poll_until_complete
 
-    async def complete_transcription(
+    def _configured_similarity_threshold(self) -> float | None:
+        if not self.config_dir:
+            return None
+        try:
+            raw = json.loads((Path(self.config_dir) / "settings.json").read_text(encoding="utf-8"))
+            value = raw.get("localSimilarityThreshold")
+            return float(value) if value is not None else None
+        except Exception:
+            return None
+
+    async def _link_transcript_speakers(
+        self,
+        meeting_id: str,
+        evidence_artifact_id: str,
+        transcript: Transcript,
+    ) -> None:
+        """Ensure every speaker named in the transcript is linked to the meeting.
+
+        Used after local-voiceprint persistence so speakers whose turns were
+        too short to embed still appear on the meeting.
+        """
+        unique = {seg.speaker.strip() for seg in transcript.segments if seg.speaker.strip()}
+        current_time = self.now()
+        with self.db.begin() as conn:
+            for name in unique:
+                all_speakers = conn.execute(text("SELECT * FROM speakers")).mappings().all()
+                existing = next(
+                    (s for s in all_speakers if s["name"].strip().lower() == name.lower()),
+                    None,
+                )
+                speaker_id = existing["id"] if existing else str(uuid.uuid4())
+                if not existing:
+                    conn.execute(
+                        text(
+                            """
+                            INSERT INTO speakers (
+                              id, name, provider_ids, enrolled_at, enrollment_clip_paths, created_at
+                            ) VALUES (:id, :name, '{}', NULL, '[]', :now)
+                            """
+                        ),
+                        {"id": speaker_id, "name": name, "now": current_time},
+                    )
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO meeting_speakers (meeting_id, speaker_id, evidence_artifact_id)
+                        VALUES (:mid, :sid, :aid)
+                        ON CONFLICT(meeting_id, speaker_id) DO UPDATE SET evidence_artifact_id = :aid
+                        """
+                    ),
+                    {"mid": meeting_id, "sid": speaker_id, "aid": evidence_artifact_id},
+                )
+
+    async def _maybe_identify_cloud_speakers(
+        self,
+        meeting_id: str,
+        audio_path: str | None,
+        transcript: Transcript,
+        options: dict[str, Any] | None = None,
+    ) -> tuple[Transcript, list[DiscoveredSpeakerVoiceprint]] | None:
+        """ASR-first speaker ID: match cloud speaker turns to local voiceprints.
+
+        Returns ``(renamed_transcript, discovered)`` or ``None`` when local
+        identification is unavailable — callers then keep cloud labels.
+        """
+        if not audio_path:
+            return None
+        opts = options or {}
+        try:
+            enrolled = await self._get_enrolled_speakers()
+            if self.cloud_speaker_identifier is not None:
+                res = self.cloud_speaker_identifier(audio_path, transcript, enrolled)
+                if inspect.isawaitable(res):
+                    res = await res
+                return res
+            threshold = opts.get("similarityThreshold")
+            if threshold is None:
+                threshold = self._configured_similarity_threshold()
+            return await identify_cloud_transcript_speakers(
+                audio_path,
+                transcript,
+                enrolled,
+                similarity_threshold=float(threshold) if threshold is not None else 0.45,
+                meeting_id=meeting_id,
+            )
+        except Exception as exc:
+            self.logger.warn(
+                "Cloud speaker identification failed; keeping cloud speaker labels",
+                {"category": "transcription", "meetingId": meeting_id, "error": str(exc)},
+            )
+            return None
+
+    async def _complete_cloud_transcription(
         self,
         meeting_id: str,
         stage_run_id: str,
         job_id: str,
-        json_v2: dict[str, Any],
+        canonical: Transcript,
+        provider: str,
+        raw_payload: dict[str, Any] | None = None,
+        options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """Persist a normalized cloud transcript + identified speakers."""
         with self.db.connect() as conn:
             meeting = (
                 conn.execute(
@@ -1315,20 +1437,50 @@ class TranscriptionService:
 
             recording = (
                 conn.execute(
-                    text("SELECT id FROM recordings WHERE meeting_id = :mid LIMIT 1"),
+                    text(
+                        "SELECT id, path FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"
+                    ),
                     {"mid": meeting_id},
                 )
                 .mappings()
                 .first()
             )
 
-        canonical = parse_speechmatics_json_v2(json_v2)
-        t_text = transcript_to_text(canonical)
-        t_json = f"{json.dumps(canonical.model_dump(exclude_none=True), indent=2)}\n"
-
         paths = ensure_meeting_folder(
             meeting_paths(self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"])
         )
+        audio_path = (
+            str(Path(paths.folder) / recording["path"]) if recording and recording.get("path") else None
+        )
+
+        identified = await self._maybe_identify_cloud_speakers(meeting_id, audio_path, canonical, options)
+        discovered: list[DiscoveredSpeakerVoiceprint] | None = None
+        if identified is not None:
+            canonical, discovered = identified
+
+        if _signal_aborted((options or {}).get("signal")):
+            cancelled_at = self.now()
+            with self.db.begin() as conn:
+                conn.execute(
+                    text(
+                        """
+                        UPDATE stage_runs
+                        SET status = 'cancelled', last_error = 'Cancelled by user',
+                            finished_at = :t, updated_at = :t
+                        WHERE id = :id
+                        """
+                    ),
+                    {"t": cancelled_at, "id": stage_run_id},
+                )
+            return {
+                "stageRunId": stage_run_id,
+                "jobId": job_id,
+                "status": "cancelled",
+                "error": "Cancelled by user",
+            }
+
+        t_text = transcript_to_text(canonical)
+        t_json = f"{json.dumps(canonical.model_dump(exclude_none=True), indent=2)}\n"
 
         rec_id = recording["id"] if recording else None
         json_art_id = await self._ensure_artifact(
@@ -1336,23 +1488,29 @@ class TranscriptionService:
             rec_id,
             "transcript",
             "json",
-            "transcripts/speechmatics.json",
+            f"transcripts/{provider}.json",
             t_json,
             paths.transcripts_dir,
-            PROVIDER_SPEECHMATICS,
+            provider,
         )
         txt_art_id = await self._ensure_artifact(
             meeting["id"],
             rec_id,
             "transcript",
             "txt",
-            "transcripts/speechmatics.txt",
+            f"transcripts/{provider}.txt",
             f"{t_text}\n",
             paths.transcripts_dir,
-            PROVIDER_SPEECHMATICS,
+            provider,
         )
 
-        await self._persist_discovered_speakers(meeting["id"], json_art_id, canonical, json_v2)
+        if discovered is not None:
+            await self._persist_local_discovered_speakers(meeting["id"], json_art_id, discovered)
+            await self._link_transcript_speakers(meeting["id"], json_art_id, canonical)
+        elif provider == PROVIDER_SPEECHMATICS and raw_payload is not None:
+            await self._persist_discovered_speakers(meeting["id"], json_art_id, canonical, raw_payload)
+        else:
+            await self._persist_discovered_speakers(meeting["id"], json_art_id, canonical, {})
 
         completed_at = self.now()
         with self.db.begin() as conn:
@@ -1381,6 +1539,33 @@ class TranscriptionService:
 
         asyncio.create_task(self._enqueue_auto_summarize(meeting["id"]))
 
+        return {
+            "stageRunId": stage_run_id,
+            "jobId": job_id,
+            "status": "done",
+            "transcriptArtifactId": json_art_id,
+            "transcriptTextArtifactId": txt_art_id,
+        }
+
+    async def complete_transcription(
+        self,
+        meeting_id: str,
+        stage_run_id: str,
+        job_id: str,
+        json_v2: dict[str, Any],
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        canonical = parse_speechmatics_json_v2(json_v2)
+        res = await self._complete_cloud_transcription(
+            meeting_id,
+            stage_run_id,
+            job_id,
+            canonical,
+            PROVIDER_SPEECHMATICS,
+            raw_payload=json_v2,
+            options=options,
+        )
+
         try:
             if job_id:
                 await self.client.delete_job(job_id)
@@ -1390,15 +1575,269 @@ class TranscriptionService:
                 {"jobId": job_id, "error": str(cleanup_err)},
             )
 
+        return res
+
+    completeTranscription = complete_transcription
+
+    async def transcribe_meeting_assemblyai(
+        self,
+        meeting_id: str,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        opts = options or {}
+        on_progress = opts.get("onProgress")
+
+        with self.db.connect() as conn:
+            meeting = (
+                conn.execute(
+                    text("SELECT * FROM meetings WHERE id = :id"),
+                    {"id": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
+            if not meeting:
+                raise ValueError(f"Meeting not found: {meeting_id}")
+
+            recording = (
+                conn.execute(
+                    text("SELECT * FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"),
+                    {"mid": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
+            if not recording:
+                raise ValueError(f"No recording found for meeting {meeting_id}")
+
+            stage_run = (
+                conn.execute(
+                    text("SELECT * FROM stage_runs WHERE meeting_id = :mid AND stage = :stage LIMIT 1"),
+                    {"mid": meeting_id, "stage": STAGE_ASSEMBLYAI_TRANSCRIBE},
+                )
+                .mappings()
+                .first()
+            )
+
+        folder = meeting_paths(
+            self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]
+        ).folder
+        audio_full_path = str(Path(folder) / recording["path"])
+        if not Path(audio_full_path).exists():
+            raise FileNotFoundError(f"Audio file not found on disk at {audio_full_path}")
+
+        if stage_run and stage_run["status"] == "done" and not opts.get("force"):
+            with self.db.connect() as conn:
+                existing_art = (
+                    conn.execute(
+                        text(
+                            """
+                        SELECT id FROM artifacts
+                        WHERE meeting_id = :mid AND provider = :prov AND kind = 'transcript' AND format = 'json'
+                        LIMIT 1
+                        """
+                        ),
+                        {"mid": meeting_id, "prov": PROVIDER_ASSEMBLYAI},
+                    )
+                    .mappings()
+                    .first()
+                )
+            return {
+                "stageRunId": stage_run["id"],
+                "jobId": stage_run.get("provider_job_id") or "",
+                "status": "done",
+                "transcriptArtifactId": existing_art["id"] if existing_art else None,
+            }
+
+        stage_run_id = stage_run["id"] if stage_run else str(uuid.uuid4())
+        current_time = self.now()
+
+        if callable(on_progress):
+            r = on_progress(
+                TranscriptionProgressUpdate(
+                    stage="uploading",
+                    percent=15,
+                    message="Uploading audio to AssemblyAI (Universal-3.5 Pro)...",
+                )
+            )
+            if inspect.isawaitable(r):
+                await r
+
+        with self.db.begin() as conn:
+            if stage_run:
+                conn.execute(
+                    text(
+                        """
+                        UPDATE stage_runs
+                        SET status = 'running', attempts = :attempts, last_error = NULL,
+                            started_at = :now, updated_at = :now
+                        WHERE id = :id
+                        """
+                    ),
+                    {
+                        "attempts": int(stage_run["attempts"]) + 1,
+                        "now": current_time,
+                        "id": stage_run["id"],
+                    },
+                )
+            else:
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO stage_runs (
+                          id, meeting_id, stage, status, provider_job_id, attempts,
+                          last_error, started_at, finished_at, created_at, updated_at
+                        ) VALUES (
+                          :id, :mid, :stage, 'running', NULL, 1,
+                          NULL, :now, NULL, :now, :now
+                        )
+                        """
+                    ),
+                    {
+                        "id": stage_run_id,
+                        "mid": meeting_id,
+                        "stage": STAGE_ASSEMBLYAI_TRANSCRIBE,
+                        "now": current_time,
+                    },
+                )
+
+        sig = opts.get("signal")
+        if _signal_aborted(sig):
+            return await self._fail_assemblyai(
+                meeting_id,
+                stage_run_id,
+                "",
+                "Transcription was cancelled.",
+                cancelled=True,
+                on_progress=on_progress,
+            )
+
+        try:
+            # The AssemblyAI SDK submits + polls internally (polling chosen
+            # over webhooks); this call returns the completed transcript.
+            raw = await self.assemblyai_client.submit_and_transcribe(
+                {
+                    "audio": {"path": audio_full_path},
+                    "filename": Path(recording["path"]).name,
+                    "language": opts.get("language"),
+                    "additionalVocab": opts.get("additionalVocab") or opts.get("additional_vocab"),
+                }
+            )
+        except Exception as exc:
+            return await self._fail_assemblyai(
+                meeting_id, stage_run_id, "", str(exc), on_progress=on_progress
+            )
+
+        if _signal_aborted(sig):
+            return await self._fail_assemblyai(
+                meeting_id,
+                stage_run_id,
+                "",
+                "Transcription was cancelled.",
+                cancelled=True,
+                on_progress=on_progress,
+            )
+
+        job_id = str(raw.get("id") or "") if isinstance(raw, dict) else ""
+        with self.db.begin() as conn:
+            conn.execute(
+                text("UPDATE stage_runs SET provider_job_id = :jid, updated_at = :now WHERE id = :id"),
+                {"jid": job_id or None, "now": self.now(), "id": stage_run_id},
+            )
+
+        if callable(on_progress):
+            r = on_progress(
+                TranscriptionProgressUpdate(
+                    stage="finalizing",
+                    percent=96,
+                    message="AssemblyAI transcription complete. Identifying speakers...",
+                )
+            )
+            if inspect.isawaitable(r):
+                await r
+
+        canonical = parse_assemblyai_transcript(raw)
+        res = await self._complete_cloud_transcription(
+            meeting_id,
+            stage_run_id,
+            job_id,
+            canonical,
+            PROVIDER_ASSEMBLYAI,
+            raw_payload=None,
+            options=opts,
+        )
+        if res.get("status") == "cancelled":
+            return await self._fail_assemblyai(
+                meeting_id,
+                stage_run_id,
+                job_id,
+                "Transcription was cancelled.",
+                cancelled=True,
+                on_progress=on_progress,
+            )
+        if callable(on_progress):
+            r = on_progress(
+                TranscriptionProgressUpdate(
+                    stage="done",
+                    percent=100,
+                    message="AssemblyAI transcription complete!",
+                )
+            )
+            if inspect.isawaitable(r):
+                await r
+        return res
+
+    transcribeMeetingAssemblyai = transcribe_meeting_assemblyai
+
+    async def _fail_assemblyai(
+        self,
+        meeting_id: str,
+        stage_run_id: str,
+        job_id: str,
+        err_msg: str,
+        cancelled: bool = False,
+        on_progress: Callable[[TranscriptionProgressUpdate], Any] | None = None,
+    ) -> dict[str, Any]:
+        err_time = self.now()
+        with self.db.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    UPDATE stage_runs
+                    SET status = :st, last_error = :err, finished_at = :t, updated_at = :t
+                    WHERE id = :id
+                    """
+                ),
+                {
+                    "st": "cancelled" if cancelled else "error",
+                    "err": "Cancelled by user" if cancelled else err_msg,
+                    "t": err_time,
+                    "id": stage_run_id,
+                },
+            )
+            if not cancelled:
+                conn.execute(
+                    text("UPDATE meetings SET last_error = :err, updated_at = :t WHERE id = :id"),
+                    {"err": err_msg, "t": err_time, "id": meeting_id},
+                )
+        self.logger.error("AssemblyAI transcription failed", {"meetingId": meeting_id, "error": err_msg})
+        if callable(on_progress):
+            r = on_progress(
+                TranscriptionProgressUpdate(
+                    stage="cancelled" if cancelled else "error",
+                    percent=0,
+                    message="Transcription was cancelled." if cancelled else err_msg,
+                    error=None if cancelled else err_msg,
+                )
+            )
+            if inspect.isawaitable(r):
+                await r
         return {
             "stageRunId": stage_run_id,
             "jobId": job_id,
-            "status": "done",
-            "transcriptArtifactId": json_art_id,
-            "transcriptTextArtifactId": txt_art_id,
+            "status": "cancelled" if cancelled else "error",
+            "error": "Cancelled by user" if cancelled else err_msg,
         }
-
-    completeTranscription = complete_transcription
 
     async def _ensure_artifact(
         self,

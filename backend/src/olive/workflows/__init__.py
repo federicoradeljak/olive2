@@ -3,6 +3,7 @@
 from .queues import (
     QUEUE_ALIGN,
     QUEUE_ASR,
+    QUEUE_ASSEMBLYAI,
     QUEUE_DIARIZE,
     QUEUE_FFMPEG,
     QUEUE_PIPELINE,
@@ -52,6 +53,7 @@ from .transcription_workflow import (
 
 __all__ = [
     "QUEUE_ALIGN",
+    "QUEUE_ASSEMBLYAI",
     "QUEUE_ASR",
     "QUEUE_DIARIZE",
     "QUEUE_FFMPEG",

@@ -84,12 +84,8 @@ def resolve_paths(
     meetings_dir = str(
         Path(effective_env.get("OLIVE_MEETINGS_DIR") or Path(config_dir) / "meetings").resolve()
     )
-    backups_dir = str(
-        Path(effective_env.get("OLIVE_BACKUPS_DIR") or Path(config_dir) / "backups").resolve()
-    )
-    models_dir = str(
-        Path(effective_env.get("OLIVE_MODELS_DIR") or Path(config_dir) / "models").resolve()
-    )
+    backups_dir = str(Path(effective_env.get("OLIVE_BACKUPS_DIR") or Path(config_dir) / "backups").resolve())
+    models_dir = str(Path(effective_env.get("OLIVE_MODELS_DIR") or Path(config_dir) / "models").resolve())
     plaud_tokens_path = str(
         Path(effective_env.get("PLAUD_TOKEN_PATH") or Path(config_dir) / "plaud-tokens.json").resolve()
     )
@@ -110,7 +106,7 @@ class AppConfig(BaseModel):
 
     pollIntervalMinutes: int = Field(default=15, gt=0)
     retranscribePlaudWhenUnnamed: bool = Field(default=False)
-    transcriptionProvider: Literal["speechmatics", "local"] = Field(default="local")
+    transcriptionProvider: Literal["speechmatics", "assemblyai", "local"] = Field(default="local")
     localAsrModel: str = Field(default=DEFAULT_LOCAL_ASR_MODEL)
     localClusteringThreshold: float = Field(default=0.50, ge=0.1, le=0.99)
     localSimilarityThreshold: float = Field(default=0.45, ge=0.1, le=0.99)
@@ -172,9 +168,7 @@ def _parse_port(value: str | None) -> int:
 def load_runtime_config(env: Mapping[str, str] | None = None) -> RuntimeConfig:
     effective_env = env if env is not None else os.environ
     port_val = (
-        effective_env.get("OLIVE_BIND_PORT")
-        or effective_env.get("PORT")
-        or effective_env.get("PASEO_PORT")
+        effective_env.get("OLIVE_BIND_PORT") or effective_env.get("PORT") or effective_env.get("PASEO_PORT")
     )
     return RuntimeConfig(
         paths=resolve_paths(effective_env),
@@ -270,11 +264,7 @@ def _read_hf_token_from_mise_local() -> str | None:
                 data = tomllib.loads(candidate.read_text(encoding="utf-8"))
                 env_sec = data.get("env")
                 if isinstance(env_sec, dict):
-                    tok = str(
-                        env_sec.get("HF_TOKEN")
-                        or env_sec.get("HUGGING_FACE_HUB_TOKEN")
-                        or ""
-                    ).strip()
+                    tok = str(env_sec.get("HF_TOKEN") or env_sec.get("HUGGING_FACE_HUB_TOKEN") or "").strip()
                     if tok:
                         return tok
             except Exception:

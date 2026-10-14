@@ -1185,8 +1185,8 @@ function MeetingDetailView({
         const cfg = await cfgRes.json();
         if (cfg.localClusteringThreshold !== undefined) setCustomClusteringThreshold(cfg.localClusteringThreshold);
         if (cfg.localSimilarityThreshold !== undefined) setCustomSimilarityThreshold(cfg.localSimilarityThreshold);
-        if (cfg.transcriptionProvider === "speechmatics") {
-          setSelectedEngine("speechmatics");
+        if (cfg.transcriptionProvider === "speechmatics" || cfg.transcriptionProvider === "assemblyai") {
+          setSelectedEngine(cfg.transcriptionProvider);
         } else {
           setSelectedEngine("local:cohere");
         }
@@ -1367,7 +1367,7 @@ function MeetingDetailView({
         },
         body: JSON.stringify({
           background: true,
-          provider: isLocal ? "local" : "speechmatics",
+          provider: isLocal ? "local" : selectedEngine,
           modelId: isLocal ? modelId : undefined,
           poll: true,
           force: true,
@@ -1709,6 +1709,7 @@ function MeetingDetailView({
               >
                 <option value="local:cohere">Local (Cohere + Diarization) (Default)</option>
                 <option value="speechmatics">Speechmatics (Cloud)</option>
+                <option value="assemblyai">AssemblyAI (Cloud)</option>
               </select>
 
               {selectedEngine.startsWith("local") && (
@@ -1797,7 +1798,7 @@ function MeetingDetailView({
                   <span className="font-semibold text-stone-200 uppercase tracking-wide">
                     {selectedEngine.startsWith("local")
                       ? "Local Pipeline (Cohere Transcribe + Diarization)"
-                      : "Speechmatics Cloud"}
+                      : selectedEngine === "assemblyai" ? "AssemblyAI Cloud" : "Speechmatics Cloud"}
                   </span>
                   <span className="text-stone-500">•</span>
                   <span className="text-lime-300 font-medium capitalize">
@@ -3087,8 +3088,8 @@ function UploadAudioModal({
     void fetch("/api/config")
       .then((res) => (res.ok ? res.json() : null))
       .then((config) => {
-        if (config?.transcriptionProvider === "speechmatics") {
-          setSelectedEngine("speechmatics");
+        if (config?.transcriptionProvider === "speechmatics" || config?.transcriptionProvider === "assemblyai") {
+          setSelectedEngine(config.transcriptionProvider);
         } else {
           setSelectedEngine("local:cohere");
         }
@@ -3123,7 +3124,7 @@ function UploadAudioModal({
       formData.append("title", title.trim());
     }
     formData.append("autoTranscribe", String(autoTranscribe));
-    formData.append("provider", isLocal ? "local" : "speechmatics");
+    formData.append("provider", isLocal ? "local" : selectedEngine);
     if (isLocal) {
       formData.append("modelId", "onnx-community/cohere-transcribe-03-2026-ONNX");
     }
@@ -3216,6 +3217,7 @@ function UploadAudioModal({
                 >
                   <option value="local:cohere">Local (Cohere + Diarization) (Default)</option>
                   <option value="speechmatics">Speechmatics (Cloud API)</option>
+                  <option value="assemblyai">AssemblyAI (Cloud API)</option>
                 </select>
               </div>
             )}
@@ -3984,7 +3986,7 @@ function LlmSettingsModal({
   const [localClusteringThreshold, setLocalClusteringThreshold] = useState<number>(0.50);
   const [localSimilarityThreshold, setLocalSimilarityThreshold] = useState<number>(0.45);
   const [localAsrModel, setLocalAsrModel] = useState<string>("onnx-community/cohere-transcribe-03-2026-ONNX");
-  const [transcriptionProvider, setTranscriptionProvider] = useState<"speechmatics" | "local">("local");
+  const [transcriptionProvider, setTranscriptionProvider] = useState<"speechmatics" | "local" | "assemblyai">("local");
   const [hfToken, setHfToken] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -4028,7 +4030,7 @@ function LlmSettingsModal({
         if (appCfg.localAsrModel !== undefined) {
           setLocalAsrModel(appCfg.localAsrModel);
         }
-        if (appCfg.transcriptionProvider === "speechmatics" || appCfg.transcriptionProvider === "local") {
+        if (appCfg.transcriptionProvider === "speechmatics" || appCfg.transcriptionProvider === "local" || appCfg.transcriptionProvider === "assemblyai") {
           setTranscriptionProvider(appCfg.transcriptionProvider);
         }
         if (typeof appCfg.hfToken === "string") {
@@ -4416,14 +4418,15 @@ function LlmSettingsModal({
               </label>
               <select
                 value={transcriptionProvider}
-                onChange={(e) => setTranscriptionProvider(e.target.value as "speechmatics" | "local")}
+                onChange={(e) => setTranscriptionProvider(e.target.value as "speechmatics" | "local" | "assemblyai")}
                 className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-stone-100 focus:border-lime-400 focus:outline-none"
               >
                 <option value="local">Local (Cohere + diarization)</option>
                 <option value="speechmatics">Speechmatics Cloud</option>
+                <option value="assemblyai">AssemblyAI Cloud (Universal-3.5 Pro)</option>
               </select>
               <p className="text-[11px] text-stone-500">
-                Controls the default for new uploads and manual transcription. Speechmatics requires SPEECHMATICS_API_KEY.
+                Controls the default for new uploads and manual transcription. AssemblyAI requires ASSEMBLY_API_KEY; Speechmatics requires SPEECHMATICS_API_KEY.
               </p>
             </div>
 

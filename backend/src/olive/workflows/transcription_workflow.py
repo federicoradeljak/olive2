@@ -43,6 +43,7 @@ from ..schemas import (
 from .queues import (
     QUEUE_ALIGN,
     QUEUE_ASR,
+    QUEUE_ASSEMBLYAI,
     QUEUE_DIARIZE,
     QUEUE_FFMPEG,
     QUEUE_PIPELINE,
@@ -1819,6 +1820,7 @@ async def cancel_dbos_workflows_for_meeting(
 
 __all__ = [
     "QUEUE_ALIGN",
+    "QUEUE_ASSEMBLYAI",
     "QUEUE_ASR",
     "QUEUE_DIARIZE",
     "QUEUE_FFMPEG",

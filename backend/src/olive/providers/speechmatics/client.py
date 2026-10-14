@@ -4,75 +4,107 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import io
 import os
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-import httpx
+from speechmatics.batch import (
+    AsyncClient,
+    FetchData,
+    FormatType,
+    JobConfig,
+    JobType,
+    Model,
+    NotificationConfig,
+    NotificationContents,
+    Transcript,
+    TranscriptionConfig,
+)
+
+_FORMAT_BY_ARG: dict[str, FormatType] = {
+    "json-v2": FormatType.JSON,
+    "text": FormatType.TXT,
+    "srt": FormatType.SRT,
+}
 
 
-class _DefaultBatchHttpClient:
-    """Thin async HTTP client for Speechmatics v2 batch endpoints."""
+def _to_job_config(job_config: dict[str, Any], fetch_data: FetchData | None) -> JobConfig:
+    tc = job_config.get("transcription_config") or {}
+    notifications = [
+        NotificationConfig(
+            url=n["url"],
+            contents=[NotificationContents(c) for c in n.get("contents") or []],
+            auth_headers=n.get("auth_headers"),
+        )
+        for n in job_config.get("notification_config") or []
+    ]
+    return JobConfig(
+        type=JobType.TRANSCRIPTION,
+        fetch_data=fetch_data,
+        transcription_config=TranscriptionConfig(
+            # Pin standard explicitly: the SDK otherwise defaults to the
+            # pricier enhanced model, unlike the pre-SDK raw API behaviour.
+            model=Model.STANDARD,
+            language=tc.get("language", "en"),
+            diarization=tc.get("diarization"),
+            additional_vocab=tc.get("additional_vocab"),
+            speaker_diarization_config=tc.get("speaker_diarization_config"),
+        ),
+        notification_config=notifications or None,
+    )
 
-    def __init__(self, api_key: str, api_url: str | None = None, app_id: str = "olive-meeting-pipeline") -> None:
+
+class _SdkBatchClient:
+    """Adapts speechmatics.batch.AsyncClient to the internal camelCase batch interface."""
+
+    def __init__(self, api_key: str, api_url: str | None = None) -> None:
         self.api_key = api_key
-        base = (api_url or "https://asr.api.speechmatics.com/v2").rstrip("/")
-        self.base_url = base
-        self.app_id = app_id
+        self.api_url = api_url
 
-    def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self.api_key}"}
+    def _client(self) -> AsyncClient:
+        return AsyncClient(api_key=self.api_key, url=self.api_url)
 
-    async def createTranscriptionJob(self, input_data: dict[str, Any], job_config: dict[str, Any]) -> dict[str, Any]:
-        import json
+    async def createTranscriptionJob(self, input_data: dict[str, Any], job_config: dict[str, Any]) -> Any:
+        if "url" in input_data:
+            config = _to_job_config(job_config, FetchData(url=input_data["url"]))
+            async with self._client() as client:
+                return await client.submit_job(None, config=config)
 
-        config_payload = {"type": "transcription", **job_config}
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            if "url" in input_data:
-                config_payload["fetch_data"] = {"url": input_data["url"]}
-                res = await client.post(
-                    f"{self.base_url}/jobs",
-                    headers=self._headers(),
-                    files={"config": (None, json.dumps(config_payload), "application/json")},
-                )
-            else:
-                file_bytes = bytes(input_data.get("data") or b"")
-                file_name = str(input_data.get("fileName") or "audio.m4a")
-                mime = str(input_data.get("mime") or "audio/mp4")
-                res = await client.post(
-                    f"{self.base_url}/jobs",
-                    headers=self._headers(),
-                    files={
-                        "data_file": (file_name, file_bytes, mime),
-                        "config": (None, json.dumps(config_payload), "application/json"),
-                    },
-                )
-            res.raise_for_status()
-            return res.json()
+        config = _to_job_config(job_config, None)
+        data_file = io.BytesIO(bytes(input_data.get("data") or b""))
+        data_file.name = str(input_data.get("fileName") or "audio.m4a")
+        async with self._client() as client:
+            return await client.submit_job(data_file, config=config)
 
     async def getJob(self, job_id: str) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            res = await client.get(f"{self.base_url}/jobs/{job_id}", headers=self._headers())
-            res.raise_for_status()
-            return res.json()
+        async with self._client() as client:
+            details = await client.get_job_info(job_id)
+        return {
+            "job": {
+                "id": details.id,
+                "status": details.status.value,
+                "created_at": details.created_at,
+                "data_name": details.data_name,
+                "duration": details.duration,
+                "errors": [{"timestamp": e.timestamp, "message": e.message} for e in details.errors]
+                if details.errors
+                else None,
+            }
+        }
 
     async def getJobResult(self, job_id: str, fmt: str = "json-v2") -> Any:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            res = await client.get(
-                f"{self.base_url}/jobs/{job_id}/transcript",
-                params={"format": fmt},
-                headers=self._headers(),
-            )
-            res.raise_for_status()
-            if fmt == "json-v2":
-                return res.json()
-            return res.text
+        format_type = _FORMAT_BY_ARG[fmt]
+        async with self._client() as client:
+            result = await client.get_transcript(job_id, format_type=format_type)
+        if isinstance(result, Transcript):
+            return asdict(result)
+        return result
 
-    async def deleteJob(self, job_id: str) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            res = await client.delete(f"{self.base_url}/jobs/{job_id}", headers=self._headers())
-            res.raise_for_status()
-            return res.json()
+    async def deleteJob(self, job_id: str) -> None:
+        async with self._client() as client:
+            await client.delete_job(job_id)
 
 
 class SpeechmaticsClient:
@@ -91,13 +123,9 @@ class SpeechmaticsClient:
         st_opt = opts.get("submitTimeoutMs")
         if st_opt is None:
             st_opt = opts.get("submit_timeout_ms")
-        self.submit_timeout_ms: int = int(
-            st_opt if st_opt is not None else self.DEFAULT_SUBMIT_TIMEOUT_MS
-        )
+        self.submit_timeout_ms: int = int(st_opt if st_opt is not None else self.DEFAULT_SUBMIT_TIMEOUT_MS)
         self._client = (
-            opts.get("batchClient")
-            or opts.get("batch_client")
-            or _DefaultBatchHttpClient(self.api_key, self.api_url, self.app_id)
+            opts.get("batchClient") or opts.get("batch_client") or _SdkBatchClient(self.api_key, self.api_url)
         )
 
     @property
@@ -190,15 +218,11 @@ class SpeechmaticsClient:
         try:
             coro = create_fn(input_payload, job_config)
             if inspect.isawaitable(coro):
-                response = await asyncio.wait_for(
-                    coro, timeout=self.submit_timeout_ms / 1000.0
-                )
+                response = await asyncio.wait_for(coro, timeout=self.submit_timeout_ms / 1000.0)
             else:
                 response = coro
         except TimeoutError as exc:
-            raise RuntimeError(
-                f"Speechmatics upload timed out after {self.submit_timeout_ms}ms"
-            ) from exc
+            raise RuntimeError(f"Speechmatics upload timed out after {self.submit_timeout_ms}ms") from exc
 
         job_id = response["id"] if isinstance(response, dict) else getattr(response, "id", "")
         return {"id": job_id}
@@ -244,9 +268,7 @@ class SpeechmaticsClient:
     getJob = get_job
 
     async def get_transcript(self, job_id: str, fmt: str = "json-v2") -> Any:
-        fn = getattr(self._client, "getJobResult", None) or getattr(
-            self._client, "get_job_result", None
-        )
+        fn = getattr(self._client, "getJobResult", None) or getattr(self._client, "get_job_result", None)
         if not callable(fn):
             raise AttributeError("batchClient missing getJobResult")
         arg_fmt = "json-v2" if fmt == "json-v2" else ("text" if fmt == "txt" else "srt")

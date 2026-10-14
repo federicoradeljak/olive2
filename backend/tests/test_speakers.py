@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pytest
@@ -15,7 +14,6 @@ from olive.app import create_app
 from olive.db import create_db
 from olive.layout import meeting_paths
 from olive.ml import cosine_similarity, encode_wav, load_audio_samples
-from olive.providers.speechmatics import SpeechmaticsClient
 from olive.services.speakers import SpeakerService
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "audio"
@@ -24,76 +22,26 @@ FIXTURE_SPEECHMATICS_PATH = FIXTURES_DIR / "speechmatics-sample.wav"
 
 AUDIO_BYTES = encode_wav(np.zeros(16000 * 4, dtype=np.float32), 16000)
 
-ENROLL_JSON_V2: dict[str, Any] = {
-    "format": "2.0",
-    "job": {"id": "sm-enroll-1", "duration": 3.0, "lang": "en"},
-    "results": [
-        {
-            "type": "word",
-            "start_time": 0.1,
-            "end_time": 2.0,
-            "alternatives": [{"content": "Hello", "confidence": 0.99, "speaker": "S1"}],
-        }
-    ],
-    "speakers": [{"label": "S1", "speaker_identifiers": ["voice-id-alpha", "voice-id-beta"]}],
-}
-
-
 def _create_single_voice_wav(
     freq_hz: float = 220.0, duration_sec: float = 4.0, sample_rate: int = 16000
 ) -> bytes:
     num_samples = int(sample_rate * duration_sec)
     t = np.arange(num_samples, dtype=np.float32) / float(sample_rate)
-    samples = 0.5 * np.sin(2.0 * np.pi * freq_hz * t) + 0.2 * np.sin(
-        2.0 * np.pi * (freq_hz * 2.0) * t
-    )
+    samples = 0.5 * np.sin(2.0 * np.pi * freq_hz * t) + 0.2 * np.sin(2.0 * np.pi * (freq_hz * 2.0) * t)
     return encode_wav(samples, sample_rate)
 
 
-def _create_mock_speechmatics_client(json_v2: dict[str, Any] = ENROLL_JSON_V2):
-    deleted_ids: list[str] = []
-
-    class _MockBatch:
-        async def createTranscriptionJob(self, *_args: Any) -> dict[str, str]:
-            return {"id": "sm-enroll-1"}
-
-        async def getJob(self, jid: str) -> dict[str, Any]:
-            return {
-                "job": {
-                    "id": jid,
-                    "status": "done",
-                    "created_at": "2026-08-16T12:00:00Z",
-                    "data_name": "clip.wav",
-                    "duration": 3.0,
-                }
-            }
-
-        async def getJobResult(self, _jid: str, fmt: str = "json-v2") -> Any:
-            if fmt == "json-v2":
-                return json_v2
-            return "Hello"
-
-        async def deleteJob(self, jid: str) -> dict[str, Any]:
-            deleted_ids.append(jid)
-            return {"job": {"id": jid, "status": "deleted", "created_at": "", "data_name": ""}}
-
-    client = SpeechmaticsClient({"apiKey": "test-key", "batchClient": _MockBatch()})
-    return client, deleted_ids
-
-
-async def test_enrolls_speaker_extracts_speechmatics_identifiers_and_saves_clip(
+async def test_enrolls_speaker_stores_local_voiceprint_and_saves_clip(
     tmp_path: Path,
 ) -> None:
     handle = create_db(":memory:")
     config_dir = str(tmp_path / "config")
     now = 1_700_000_000_000
 
-    sm_client, deleted_ids = _create_mock_speechmatics_client()
     service = SpeakerService(
         {
             "db": handle.engine,
             "configDir": config_dir,
-            "speechmaticsClient": sm_client,
             "now": lambda: now,
         }
     )
@@ -104,19 +52,19 @@ async def test_enrolls_speaker_extracts_speechmatics_identifiers_and_saves_clip(
             "audioBytes": AUDIO_BYTES,
             "mime": "audio/wav",
             "filename": "matt-intro.wav",
-            "pollIntervalMs": 10,
         }
     )
 
     assert speaker["name"] == "Matt"
     assert speaker["enrolledAt"] == now
-    assert speaker["providerIds"]["speechmatics"] == ["voice-id-alpha", "voice-id-beta"]
+    # Local voiceprints are the only identity store: no Speechmatics ids.
+    assert "speechmatics" not in speaker["providerIds"]
+    assert len(speaker["providerIds"]["local"]) == 1
     assert len(speaker["enrollmentClipPaths"]) == 1
 
     clip_disk_path = Path(config_dir) / speaker["enrollmentClipPaths"][0]
     assert clip_disk_path.exists()
     assert len(clip_disk_path.read_bytes()) == len(AUDIO_BYTES)
-    assert deleted_ids == ["sm-enroll-1"]
 
     listed = await service.list_speakers()
     assert len(listed) == 1
@@ -190,13 +138,11 @@ async def test_in_meeting_speaker_reassignment_and_merge_speakers(tmp_path: Path
             {"id": meeting_id},
         )
 
-    sm_client, _ = _create_mock_speechmatics_client()
     service = SpeakerService(
         {
             "db": handle.engine,
             "configDir": config_dir,
             "meetingsDir": meetings_dir,
-            "speechmaticsClient": sm_client,
             "now": lambda: now + 100,
         }
     )
@@ -229,9 +175,7 @@ async def test_in_meeting_speaker_reassignment_and_merge_speakers(tmp_path: Path
     assert "Matt Cowger: Let's ship it." in updated_txt
     assert "S2: Looks great to me." in updated_txt
 
-    second_speaker = await service.enroll_speaker(
-        {"name": "Matthew C.", "audioBytes": AUDIO_BYTES}
-    )
+    second_speaker = await service.enroll_speaker({"name": "Matthew C.", "audioBytes": AUDIO_BYTES})
     merge_res = client.post(
         "/api/speakers/merge",
         json={
@@ -372,9 +316,7 @@ async def test_coalesces_sequential_turns_and_prunes_placeholder_speakers(tmp_pa
     )
     assert res2.status_code == 200
 
-    updated_json = json.loads(
-        (Path(paths.folder) / "transcripts/local.json").read_text(encoding="utf-8")
-    )
+    updated_json = json.loads((Path(paths.folder) / "transcripts/local.json").read_text(encoding="utf-8"))
     assert len(updated_json["segments"]) == 3
     assert updated_json["segments"][0]["speaker"] == "Matt Cowger"
     assert updated_json["segments"][1]["speaker"] == "Speaker 2"
@@ -441,9 +383,7 @@ async def test_enforces_protected_anchor_and_diversity_cap_and_rebuild_profiles(
 
     # Duplicate content across speakers rejected
     with pytest.raises(ValueError, match='already enrolled under speaker "Alice"'):
-        await service.enroll_speaker(
-            {"name": "Bob", "audioBytes": anchor_wav, "provider": "local"}
-        )
+        await service.enroll_speaker({"name": "Bob", "audioBytes": anchor_wav, "provider": "local"})
 
     total_sec = 60
     t60 = np.arange(16000 * total_sec, dtype=np.float32) / 16000.0
@@ -568,9 +508,7 @@ async def test_rebuild_speaker_profiles_cleans_contaminated_clips_and_extracts_v
     config_dir = str(tmp_path / "config")
     now = 1_700_000_000_000
 
-    service = SpeakerService(
-        {"db": handle.engine, "configDir": config_dir, "now": lambda: now}
-    )
+    service = SpeakerService({"db": handle.engine, "configDir": config_dir, "now": lambda: now})
 
     spk1_id = "spk-matt"
     spk2_id = "spk-harrison"

@@ -207,6 +207,21 @@ wheels = [
 ]
 
 [[package]]
+name = "assemblyai"
+version = "1.6.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "typing-extensions" },
+    { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/73/79/fcd95a3c85af3aa66d248efc525032fa6a1d1549916423b330f671c1c7f3/assemblyai-1.6.1.tar.gz", hash = "sha256:32c9db416f26ed1e1f6943797266a5c3596c2f717a82be2aeb6a099050bde305", size = 162471, upload-time = "2026-09-24T17:38:31.886Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d9/be/b7dceb08b36bce8d5468071a9f82b3289fdb7b84bdb1b056dd20b4c0c0ce/assemblyai-1.6.1-py3-none-any.whl", hash = "sha256:ee559454e39d2c443ffce669d01712bbffb37656dbd3d911bc35082e8f49c98b", size = 159496, upload-time = "2026-09-24T17:38:30.167Z" },
+]
+
+[[package]]
 name = "asteroid-filterbanks"
 version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1557,6 +1572,7 @@ dependencies = [
     { name = "alembic" },
     { name = "any-llm-sdk" },
     { name = "apscheduler" },
+    { name = "assemblyai" },
     { name = "authlib" },
     { name = "ctc-forced-aligner" },
     { name = "dbos" },
@@ -1604,6 +1620,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.14.0" },
     { name = "any-llm-sdk", specifier = ">=1.30.0" },
     { name = "apscheduler", specifier = ">=3.11.0,<4.0.0" },
+    { name = "assemblyai", specifier = ">=1.6.1" },
     { name = "authlib", specifier = ">=1.4.0" },
     { name = "ctc-forced-aligner", specifier = ">=1.0.2" },
     { name = "dbos", specifier = ">=3.2.0" },

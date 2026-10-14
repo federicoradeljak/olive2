@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
-import os
 import re
 import time
 import uuid
@@ -30,7 +28,7 @@ from ..ml import (
     load_audio_samples,
     score_against_trusted_vectors,
 )
-from ..providers.speechmatics import SpeechmaticsClient, transcript_to_text
+from ..providers.speechmatics import transcript_to_text
 from ..schemas import (
     Speaker,
     Transcript,
@@ -38,7 +36,6 @@ from ..schemas import (
     TranscriptWord,
     coalesce_speaker_segments,
 )
-from ..workflows import QUEUE_SPEECHMATICS, enqueue_stage_job, ensure_dbos_launched_async
 
 MAX_ENROLLMENT_CLIPS = 8
 MIN_CONFIRM_DURATION_SEC = 3.0
@@ -152,7 +149,6 @@ class SpeakerService:
         db: Engine | DbHandle | None = None,
         config_dir: str | None = None,
         meetings_dir: str | None = None,
-        speechmatics_client: SpeechmaticsClient | None = None,
         embedding_extractor: SpeakerEmbedder | None = None,
         logger: Logger | None = None,
         now: Callable[[], int] | None = None,
@@ -171,12 +167,6 @@ class SpeakerService:
             str(meetings_dir or opts.get("meetingsDir") or opts.get("meetings_dir"))
             if (meetings_dir or opts.get("meetingsDir") or opts.get("meetings_dir"))
             else None
-        )
-        self.client: SpeechmaticsClient = (
-            speechmatics_client
-            or opts.get("speechmaticsClient")
-            or opts.get("speechmatics_client")
-            or SpeechmaticsClient()
         )
         self.local_embedding_extractor: SpeakerEmbedder = (
             embedding_extractor
@@ -340,25 +330,8 @@ class SpeakerService:
                 .one()
             )
 
-        if self.client and self.client.is_configured and not provider_ids.get("speechmatics"):
-
-            async def _enqueue_sm_enroll() -> None:
-                try:
-                    await ensure_dbos_launched_async(config_dir=self.config_dir)
-                    await enqueue_stage_job(
-                        QUEUE_SPEECHMATICS,
-                        lambda: self._enroll_speechmatics_clip_background(
-                            speaker_row["id"], clip_wav_bytes, clip_filename
-                        ),
-                        deduplication_id=f"sm-enroll:{speaker_row['id']}:{clip_filename}",
-                    )
-                except Exception:
-                    await self._enroll_speechmatics_clip_background(
-                        speaker_row["id"], clip_wav_bytes, clip_filename
-                    )
-
-            asyncio.create_task(_enqueue_sm_enroll())
-
+        # Local voiceprints are the single speaker-identity store: adopting a
+        # voiceprint sample no longer cross-enrolls into Speechmatics.
         return {
             "status": status,
             "voiceprintEnrolled": True,
@@ -370,69 +343,6 @@ class SpeakerService:
             ),
             "updatedSpeakerRow": updated_row,
         }
-
-    async def _enroll_speechmatics_clip_background(
-        self,
-        speaker_id: str,
-        clip_wav_bytes: bytes,
-        clip_filename: str,
-    ) -> None:
-        if not self.client or not self.client.is_configured:
-            return
-        try:
-            job = await self.client.submit_job(
-                {
-                    "audio": clip_wav_bytes,
-                    "filename": clip_filename,
-                    "mime": "audio/wav",
-                    "language": "en",
-                    "getSpeakers": True,
-                }
-            )
-            start_wait = self.now()
-            while self.now() - start_wait < 60_000:
-                st = await self.client.get_job(job["id"])
-                if st.get("status") == "done":
-                    sm_json = await self.client.get_transcript(job["id"], "json-v2")
-                    extracted_ids: list[str] = []
-                    for s in sm_json.get("speakers") or []:
-                        if isinstance(s, dict):
-                            for sid in list(s.get("speaker_identifiers") or []):
-                                if sid and sid not in extracted_ids:
-                                    extracted_ids.append(sid)
-                    if extracted_ids:
-                        with self.db.begin() as conn:
-                            s_row = (
-                                conn.execute(
-                                    text("SELECT * FROM speakers WHERE id = :id"),
-                                    {"id": speaker_id},
-                                )
-                                .mappings()
-                                .first()
-                            )
-                            if s_row:
-                                pids = _parse_json_field(s_row.get("provider_ids"), {})
-                                cur_sm = list(
-                                    dict.fromkeys([*(pids.get("speechmatics") or []), *extracted_ids])
-                                )
-                                pids["speechmatics"] = cur_sm
-                                conn.execute(
-                                    text("UPDATE speakers SET provider_ids = :pids WHERE id = :id"),
-                                    {"pids": json.dumps(pids), "id": speaker_id},
-                                )
-                    try:
-                        await self.client.delete_job(job["id"])
-                    except Exception:
-                        pass
-                    break
-                if st.get("status") in ("rejected", "deleted"):
-                    break
-                await asyncio.sleep(1.5)
-        except Exception as exc:
-            self.logger.warn(
-                "Could not enroll audio slice with Speechmatics in background",
-                {"speakerId": speaker_id, "error": str(exc)},
-            )
 
     async def list_speakers(self) -> list[dict[str, Any]]:
         with self.db.connect() as conn:
@@ -555,53 +465,6 @@ class SpeakerService:
                             )
                 if clip_vectors:
                     pids["local"] = [json.dumps(v) for v in clip_vectors]
-                    changed = True
-
-            if (
-                clips
-                and (not pids.get("speechmatics") or force)
-                and (os.environ.get("SPEECHMATICS_API_KEY") or getattr(self.client, "jobs", None) is not None)
-            ):
-                extracted_sm_ids: list[str] = []
-                for rel_path in clips:
-                    full_path = Path(self.config_dir) / rel_path
-                    if full_path.exists():
-                        try:
-                            file_bytes = full_path.read_bytes()
-                            sub = await self.client.submit_job(
-                                {
-                                    "audio": file_bytes,
-                                    "filename": full_path.name,
-                                    "mime": "audio/wav",
-                                    "language": "en",
-                                    "getSpeakers": True,
-                                }
-                            )
-                            st_start = self.now()
-                            while self.now() - st_start < 120_000:
-                                st = await self.client.get_job(sub["id"])
-                                if st.get("status") == "done":
-                                    jv2 = await self.client.get_transcript(sub["id"], "json-v2")
-                                    for s in jv2.get("speakers") or []:
-                                        if isinstance(s, dict):
-                                            for sid in list(s.get("speaker_identifiers") or []):
-                                                if sid and sid not in extracted_sm_ids:
-                                                    extracted_sm_ids.append(sid)
-                                    try:
-                                        await self.client.delete_job(sub["id"])
-                                    except Exception:
-                                        pass
-                                    break
-                                if st.get("status") in ("rejected", "deleted"):
-                                    break
-                                await asyncio.sleep(2.0)
-                        except Exception as exc:
-                            self.logger.warn(
-                                "Failed to cross-fill Speechmatics voiceprint from clip",
-                                {"path": str(full_path), "error": str(exc)},
-                            )
-                if extracted_sm_ids:
-                    pids["speechmatics"] = extracted_sm_ids
                     changed = True
 
             with self.db.begin() as conn:
@@ -1812,73 +1675,16 @@ class SpeakerService:
         if clip_rel_path not in existing_clips:
             existing_clips.append(clip_rel_path)
 
-        provider_mode = options.get("provider") or "both"
-
-        # 3. Extract Neural Speaker Embedding Vector
-        if provider_mode in ("local", "both"):
-            try:
-                local_emb = await self.local_embedding_extractor.extract(decoded.samples, 16000)
-                existing_local.append(json.dumps(local_emb))
-                existing_pids["local"] = existing_local
-            except Exception as exc:
-                self.logger.warn(
-                    "Could not compute local voiceprint from audio clip",
-                    {"error": str(exc)},
-                )
-
-        # 4. Submit enrollment job to Speechmatics if available
-        if provider_mode in ("speechmatics", "both"):
-            try:
-                submit_res = await self.client.submit_job(
-                    {
-                        "audio": audio_bytes,
-                        "filename": filename_opt or clip_filename,
-                        "mime": options.get("mime") or "audio/wav",
-                        "language": options.get("language") or "en",
-                        "getSpeakers": True,
-                    }
-                )
-                poll_interval_ms = int(options.get("pollIntervalMs") or 2000)
-                max_wait_ms = int(options.get("maxPollWaitMs") or 180_000)
-                start_time = self.now()
-                json_v2: dict[str, Any] | None = None
-
-                while self.now() - start_time < max_wait_ms:
-                    st = await self.client.get_job(submit_res["id"])
-                    if st.get("status") == "done":
-                        json_v2 = await self.client.get_transcript(submit_res["id"], "json-v2")
-                        break
-                    if st.get("status") in ("rejected", "deleted"):
-                        errs = st.get("errors") or []
-                        err_msg = (
-                            "; ".join(e.get("message", "") for e in errs)
-                            if errs
-                            else f"Enrollment job {st.get('status')}"
-                        )
-                        raise RuntimeError(f"Speechmatics enrollment failed: {err_msg}")
-                    await asyncio.sleep(poll_interval_ms / 1000.0)
-
-                if json_v2:
-                    extracted_identifiers: list[str] = []
-                    for s in json_v2.get("speakers") or []:
-                        if isinstance(s, dict):
-                            for sid in list(s.get("speaker_identifiers") or []):
-                                if sid and sid not in extracted_identifiers:
-                                    extracted_identifiers.append(sid)
-                    existing_pids["speechmatics"] = list(
-                        dict.fromkeys([*(existing_pids.get("speechmatics") or []), *extracted_identifiers])
-                    )
-                    try:
-                        await self.client.delete_job(submit_res["id"])
-                    except Exception:
-                        pass
-            except Exception as sm_err:
-                if provider_mode == "speechmatics":
-                    raise
-                self.logger.warn(
-                    "Speechmatics enrollment failed during multi-provider enroll",
-                    {"error": str(sm_err)},
-                )
+        # Local voiceprints are the only speaker-identity store.
+        try:
+            local_emb = await self.local_embedding_extractor.extract(decoded.samples, 16000)
+            existing_local.append(json.dumps(local_emb))
+            existing_pids["local"] = existing_local
+        except Exception as exc:
+            self.logger.warn(
+                "Could not compute local voiceprint from audio clip",
+                {"error": str(exc)},
+            )
 
         with self.db.begin() as conn:
             if speaker_row:

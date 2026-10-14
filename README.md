@@ -214,6 +214,7 @@ Olive stores runtime settings in `<configDir>/settings.json` and accepts environ
 | `OLIVE_MCP_TOKEN` | *(optional)* | Bearer token for `/mcp`; falls back to `OLIVE_INGEST_TOKEN` and is required for non-loopback binds |
 | `PLAUD_TOKEN_PATH` | `<configDir>/plaud-tokens.json` | OAuth token file for Plaud Cloud (migrates `~/.plaud/tokens.json` automatically if present) |
 | `SPEECHMATICS_API_KEY` | *(optional)* | API key for Speechmatics cloud batch transcription |
+| `ASSEMBLY_API_KEY` | *(optional)* | API key for AssemblyAI cloud transcription (Universal-3.5 Pro; `ASSEMBLYAI_API_KEY` also accepted) |
 | `SPEECHMATICS_WEBHOOK_SECRET` | *(optional)* | Shared secret for `POST /api/webhooks/speechmatics` |
 
 ### MCP endpoint

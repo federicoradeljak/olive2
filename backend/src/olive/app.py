@@ -116,6 +116,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         )
 
     speechmatics_client = opts.get("speechmaticsClient") or opts.get("speechmatics_client")
+    assemblyai_client = opts.get("assemblyaiClient") or opts.get("assemblyai_client")
     transcription_service = opts.get("transcriptionService") or opts.get("transcription_service")
     speaker_service = opts.get("speakerService") or opts.get("speaker_service")
     llm_service = opts.get("llmService") or opts.get("llm_service")
@@ -134,6 +135,14 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
 
             speechmatics_client = SpeechmaticsClient()
         return speechmatics_client
+
+    def get_assemblyai_client() -> Any:
+        nonlocal assemblyai_client
+        if assemblyai_client is None:
+            from .providers.assemblyai import AssemblyAIClient
+
+            assemblyai_client = AssemblyAIClient()
+        return assemblyai_client
 
     def get_llm_service() -> Any:
         nonlocal llm_service
@@ -177,6 +186,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                 db=db,
                 meetings_dir=meetings_dir,
                 speechmatics_client=get_speechmatics_client(),
+                assemblyai_client=get_assemblyai_client(),
                 default_provider=default_provider,
                 webhook_secret=speechmatics_webhook_secret,
                 config_dir=config_dir,
@@ -193,7 +203,6 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                 db=db,
                 config_dir=config_dir,
                 meetings_dir=meetings_dir,
-                speechmatics_client=get_speechmatics_client(),
             )
         return speaker_service
 
@@ -386,7 +395,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
 
         auto_transcribe = str(auto_transcribe_param) in ("true", "1")
         transcription_provider = load_app_config(app_config_paths).transcriptionProvider
-        if provider_param in ("local", "speechmatics"):
+        if provider_param in ("local", "speechmatics", "assemblyai"):
             transcription_provider = provider_param  # type: ignore[assignment]
         model_id = (
             str(model_id_param).strip()
@@ -1086,7 +1095,6 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         name = form.get("name")
         file_field = form.get("file")
         speaker_id = form.get("speakerId")
-        provider = form.get("provider")
         language = form.get("language")
 
         if not isinstance(name, str) or not name.strip():
@@ -1107,7 +1115,6 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                     "mime": mime,
                     "filename": filename,
                     "speakerId": str(speaker_id) if isinstance(speaker_id, str) else None,
-                    "provider": str(provider) if isinstance(provider, str) else None,
                     "language": str(language) if isinstance(language, str) else None,
                 },
             )
