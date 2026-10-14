@@ -41,6 +41,7 @@ from ..schemas import (
     TranscriptWord,
     coalesce_speaker_segments,
 )
+from ..speaker_labels import is_generic_speaker_label
 
 MAX_ENROLLMENT_CLIPS = 8
 MIN_CONFIRM_DURATION_SEC = 3.0
@@ -142,8 +143,7 @@ def _atomic_write_text(target_path: Path, content: str) -> None:
 
 
 def _is_placeholder_name(name: str) -> bool:
-    s = name.strip()
-    return bool(re.match(r"^speaker\s*\d+$", s, re.I) or re.match(r"^s\d+$", s, re.I))
+    return is_generic_speaker_label(name)
 
 
 # Rapid-enroll samples are adopted one at a time through _adopt_voiceprint_sample,
@@ -435,12 +435,16 @@ class SpeakerService:
                 .all()
             )
         count_map = {c["speaker_id"]: int(c["cnt"]) for c in counts}
+        # Unidentified clusters ("Speaker 1", "S1", "Unknown", ...) are not
+        # people: hide any such rows (incl. ones persisted before this rule)
+        # from the People screen, assignment modal and MCP speaker lists.
         return [
             {
                 **_to_speaker_dict(r),
                 "meetingCount": count_map.get(r["id"], 0),
             }
             for r in rows
+            if not _is_placeholder_name(str(r["name"]))
         ]
 
     listSpeakers = list_speakers
@@ -806,6 +810,10 @@ class SpeakerService:
 
             if speaker_name and speaker_name.strip():
                 trimmed = speaker_name.strip()
+                if _is_placeholder_name(trimmed):
+                    raise ValueError(
+                        f'"{trimmed}" is a generic speaker label, not a person name'
+                    )
                 all_rows = conn.execute(text("SELECT * FROM speakers")).mappings().all()
                 existing = next(
                     (s for s in all_rows if s["name"].strip().lower() == trimmed.lower()),
@@ -1400,15 +1408,23 @@ class SpeakerService:
         target_name = (
             (options.get("speakerName") or "").strip() or (segment.speaker or "").strip() or "Speaker"
         )
-        target_speaker_row = self._resolve_or_create_speaker(
-            speaker_id=options.get("speakerId"),
-            speaker_name=target_name,
-            current_time=current_time,
+        # Confirming an unidentified (generic) label without naming a person
+        # must not mint a "Speaker 1" person: just mark the turn verified.
+        has_explicit_identity = bool(options.get("speakerId") or (options.get("speakerName") or "").strip())
+        target_speaker_row = (
+            self._resolve_or_create_speaker(
+                speaker_id=options.get("speakerId"),
+                speaker_name=target_name,
+                current_time=current_time,
+            )
+            if has_explicit_identity or not _is_placeholder_name(target_name)
+            else None
         )
 
-        segment.speaker = target_speaker_row["name"]
+        if target_speaker_row is not None:
+            segment.speaker = target_speaker_row["name"]
         segment.verified = True
-        if segment.words:
+        if target_speaker_row is not None and segment.words:
             for w in segment.words:
                 w.speaker = target_speaker_row["name"]
 
@@ -1427,7 +1443,7 @@ class SpeakerService:
                 .first()
             )
 
-        if recording:
+        if recording and target_speaker_row is not None:
             audio_full = folder / recording["path"]
             if audio_full.exists():
                 try:
@@ -1484,29 +1500,31 @@ class SpeakerService:
             folder, json_path, transcript_art["path"], updated_transcript, is_array_format
         )
 
-        with self.db.begin() as conn:
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO meeting_speakers (meeting_id, speaker_id, evidence_artifact_id)
-                    VALUES (:mid, :sid, :aid)
-                    ON CONFLICT(meeting_id, speaker_id) DO UPDATE SET evidence_artifact_id = :aid
-                    """
-                ),
-                {
-                    "mid": meeting_id,
-                    "sid": target_speaker_row["id"],
-                    "aid": transcript_art["id"],
-                },
-            )
+        if target_speaker_row is not None:
+            with self.db.begin() as conn:
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO meeting_speakers (meeting_id, speaker_id, evidence_artifact_id)
+                        VALUES (:mid, :sid, :aid)
+                        ON CONFLICT(meeting_id, speaker_id) DO UPDATE SET evidence_artifact_id = :aid
+                        """
+                    ),
+                    {
+                        "mid": meeting_id,
+                        "sid": target_speaker_row["id"],
+                        "aid": transcript_art["id"],
+                    },
+                )
 
         out: dict[str, Any] = {
-            "speaker": _to_speaker_dict(target_speaker_row),
             "transcript": updated_transcript.model_dump(exclude_none=True),
             "segmentIndex": segment_index,
             "voiceprintEnrolled": voiceprint_enrolled,
             "voiceprintStatus": voiceprint_status,
         }
+        if target_speaker_row is not None:
+            out["speaker"] = _to_speaker_dict(target_speaker_row)
         if status_reason is not None:
             out["statusReason"] = status_reason
         if similarity is not None:
@@ -1931,6 +1949,8 @@ class SpeakerService:
         name = str(options.get("name") or "").strip()
         if not name:
             raise ValueError("Speaker name is required")
+        if _is_placeholder_name(name):
+            raise ValueError(f'"{name}" is a generic speaker label, not a person name')
 
         audio_bytes = bytes(options.get("audioBytes") or options.get("audio_bytes") or b"")
         speaker_id_opt = options.get("speakerId") or options.get("speaker_id")
@@ -2196,8 +2216,11 @@ class SpeakerService:
         sets: list[str] = []
         params: dict[str, Any] = {"id": speaker_id}
         if "name" in updates and updates["name"] is not None:
+            new_name = str(updates["name"]).strip()
+            if _is_placeholder_name(new_name):
+                raise ValueError(f'"{new_name}" is a generic speaker label, not a person name')
             sets.append("name = :name")
-            params["name"] = str(updates["name"]).strip()
+            params["name"] = new_name
         if "providerIds" in updates and updates["providerIds"] is not None:
             sets.append("provider_ids = :pids")
             params["pids"] = json.dumps(updates["providerIds"])

@@ -53,6 +53,15 @@ interface SpeakerWithStats extends Speaker {
   meetingCount: number;
 }
 
+// Unidentified diarization labels ("Speaker 1", "S1", "Unknown", ...) are
+// transcript labels, not people: never list them in People or as assignable
+// persons. Mirrors backend olive/speaker_labels.py (defense in depth for
+// speaker rows persisted before that rule existed).
+const GENERIC_SPEAKER_RE = /^(?:(?:speaker|speakers)(?:[\s_-]*#?(?:\d+|[a-z]{1,2}))?|(?:spk|participant|person|guest|unknown|uu)(?:[\s_-]*#?\d+)?|unknown[\s_-]+speaker(?:[\s_-]*#?\d+)?|s[\s_-]*\d+)$/i;
+function isGenericSpeakerLabel(name: string | null | undefined): boolean {
+  return !name?.trim() || GENERIC_SPEAKER_RE.test(name.trim());
+}
+
 interface PlaudStatus {
   connected: boolean;
   lastPollAt: number | null;
@@ -416,7 +425,7 @@ export function App(): ReactElement {
       const res = await fetch("/api/speakers");
       if (res.ok) {
         const data = (await res.json()) as { speakers: SpeakerWithStats[] };
-        setKnownSpeakers(data.speakers);
+        setKnownSpeakers(data.speakers.filter((s) => !isGenericSpeakerLabel(s.name)));
       }
     } catch {
       // ignore
@@ -2436,10 +2445,11 @@ function MeetingDetailView({
             const activeSpeakerNames = new Set(
               parsedTranscriptSegments.map((s) => s.speaker.trim().toLowerCase()).filter(Boolean)
             );
-            const visibleSpeakers =
+            const visibleSpeakers = (
               activeSpeakerNames.size > 0
                 ? detail.speakers.filter((s) => activeSpeakerNames.has(s.name.trim().toLowerCase()))
-                : detail.speakers;
+                : detail.speakers
+            ).filter((s) => !isGenericSpeakerLabel(s.name));
 
             return visibleSpeakers.length > 0 || parsedTranscriptSegments.length > 0 ? (
               <div className="flex flex-wrap items-center gap-2">
@@ -2804,7 +2814,7 @@ function MeetingDetailView({
 
                       {/* Turn actions menu */}
                       <SegmentActionsMenu
-                        showConfirm={!seg.verified && seg.speaker !== "Unknown"}
+                        showConfirm={!seg.verified && !isGenericSpeakerLabel(seg.speaker)}
                         showMerge={idx < parsedTranscriptSegments.length - 1}
                         showWrong={seg.speaker !== "Unknown"}
                         onConfirm={() => void handleConfirmSegment(seg.segmentIndex)}

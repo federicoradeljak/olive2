@@ -22,6 +22,7 @@ from ..schemas import (
     Speaker,
     StageRunRow,
 )
+from ..speaker_labels import is_generic_speaker_label
 
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 100
@@ -413,6 +414,12 @@ def get_meeting(
                 ]
         except Exception:
             pass
+
+    # Generic labels ("Speaker 1", ...) are transcript labels, not people:
+    # never surface them as meeting speakers (covers rows persisted earlier).
+    active_speaker_rows = [
+        s for s in active_speaker_rows if not is_generic_speaker_label(str(s["name"]))
+    ]
 
     return MeetingDetailAggregate(
         meeting=to_meeting(meeting_row),

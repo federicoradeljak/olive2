@@ -20,6 +20,7 @@ from ..layout import meeting_paths
 from ..logging_db import logger
 from ..schemas import LlmGenerateResult, SummaryGenerationStatus, Template
 from ..settings import resolve_paths
+from ..speaker_labels import is_generic_speaker_label
 from ..workflows import QUEUE_SUMMARIZE, enqueue_stage_job, ensure_dbos_launched_async
 from .llm import LlmService
 from .templates import TemplateService
@@ -259,7 +260,11 @@ class SummaryService:
                 .all()
             )
 
-        speaker_names = ", ".join(r["name"] for r in speaker_rows) or "Participants"
+        # Generic labels are not people; don't present them as participants.
+        speaker_names = (
+            ", ".join(r["name"] for r in speaker_rows if not is_generic_speaker_label(r["name"]))
+            or "Participants"
+        )
         date_formatted = datetime.fromtimestamp(int(meeting["start_time"]) / 1000.0).strftime(
             "%b %d, %Y, %I:%M %p"
         )

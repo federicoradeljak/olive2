@@ -153,8 +153,11 @@ async def test_assemblyai_polling_flow_persists_artifacts_and_cloud_labels(tmp_p
             ("assemblyai", "txt"),
         ]
         speakers = conn.execute(text("SELECT name FROM speakers ORDER BY name")).mappings().all()
-        # Fake audio cannot be decoded/embedded -> cloud labels are the fallback.
-        assert [s["name"] for s in speakers] == ["Speaker 1", "Speaker 2"]
+        # Fake audio cannot be decoded/embedded -> cloud labels are the
+        # fallback in the transcript, but unidentified "Speaker N" clusters
+        # are not people: no speaker rows / meeting links are created.
+        assert speakers == []
+        assert conn.execute(text("SELECT * FROM meeting_speakers")).mappings().all() == []
 
     saved = json.loads((Path(paths.folder) / "transcripts/assemblyai.json").read_text())
     assert saved["segments"][0]["speaker"] == "Speaker 1"
@@ -186,11 +189,11 @@ async def test_assemblyai_flow_renames_speakers_from_local_voiceprints(tmp_path:
     assert saved["segments"][0]["words"][0]["speaker"] == "Alice"
     with handle.engine.connect() as conn:
         speakers = conn.execute(text("SELECT id, name FROM speakers ORDER BY name")).mappings().all()
-        # Alice matched by voiceprint; Speaker 2 (unmatched) is still linked.
-        assert [(s["id"], s["name"]) for s in speakers] == [
-            ("spk-alice", "Alice"),
-            (speakers[1]["id"], "Speaker 2"),
-        ]
+        # Alice matched by voiceprint; Speaker 2 (unmatched) stays only as a
+        # transcript label, not a person.
+        assert [(s["id"], s["name"]) for s in speakers] == [("spk-alice", "Alice")]
+        links = conn.execute(text("SELECT speaker_id FROM meeting_speakers")).mappings().all()
+        assert [link["speaker_id"] for link in links] == ["spk-alice"]
     handle.engine.dispose()
 
 

@@ -35,6 +35,7 @@ from ..providers.speechmatics import (
     transcript_to_text,
 )
 from ..schemas import EnrolledSpeaker, Transcript, TranscriptionProgressUpdate
+from ..speaker_labels import is_generic_speaker_label
 from ..workflows import (
     QUEUE_ASSEMBLYAI,
     QUEUE_PIPELINE,
@@ -127,8 +128,7 @@ def _speaker_has_local_voiceprint_vectors(speaker: EnrolledSpeaker) -> bool:
 
 
 def _is_placeholder_speaker_name(name: str) -> bool:
-    s = name.strip()
-    return bool(re.match(r"^speaker\s*\d+$", s, re.I) or re.match(r"^s\d+$", s, re.I))
+    return is_generic_speaker_label(name)
 
 
 @dataclass
@@ -1962,12 +1962,19 @@ class TranscriptionService:
         evidence_artifact_id: str,
         transcript: Transcript,
     ) -> None:
-        """Ensure every speaker named in the transcript is linked to the meeting.
+        """Ensure every named speaker in the transcript is linked to the meeting.
 
         Used after local-voiceprint persistence so speakers whose turns were
-        too short to embed still appear on the meeting.
+        too short to embed still appear on the meeting. Generic labels
+        (``Speaker 1``, ``S1``, ``Unknown``) stay in the transcript only --
+        an unidentified cluster is not a person, so no speaker row/link is
+        created for it.
         """
-        unique = {seg.speaker.strip() for seg in transcript.segments if seg.speaker.strip()}
+        unique = {
+            seg.speaker.strip()
+            for seg in transcript.segments
+            if seg.speaker.strip() and not _is_placeholder_speaker_name(seg.speaker)
+        }
         current_time = self.now()
         with self.db.begin() as conn:
             for name in unique:
@@ -2693,6 +2700,12 @@ class TranscriptionService:
         current_time = self.now()
         with self.db.begin() as conn:
             for disc in discovered_speakers:
+                # Unmatched clusters are discovered under their generic label
+                # ("Speaker 1", cluster id, ...). They remain in the transcript
+                # for later assignment, but are not people: don't persist a
+                # speaker row or meeting link for them.
+                if _is_placeholder_speaker_name(disc.name):
+                    continue
                 all_speakers = conn.execute(text("SELECT * FROM speakers")).mappings().all()
                 norm_name = disc.name.strip().lower()
                 existing = next(
@@ -2746,6 +2759,9 @@ class TranscriptionService:
 
         with self.db.begin() as conn:
             for name in unique_speakers:
+                # Generic labels stay in the transcript only; they are not people.
+                if _is_placeholder_speaker_name(name):
+                    continue
                 all_speakers = conn.execute(text("SELECT * FROM speakers")).mappings().all()
                 norm_name = name.lower()
                 existing = next(
@@ -2765,8 +2781,7 @@ class TranscriptionService:
                     )
                 else:
                     pids = {PROVIDER_SPEECHMATICS: sm_ids} if sm_ids else {}
-                    is_placeholder = _is_placeholder_speaker_name(name)
-                    enrolled_at = current_time if (not is_placeholder and sm_ids) else None
+                    enrolled_at = current_time if sm_ids else None
                     conn.execute(
                         text(
                             """

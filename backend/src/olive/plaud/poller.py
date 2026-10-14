@@ -27,6 +27,7 @@ from ..logging_db import Logger
 from ..logging_db import logger as default_logger
 from ..ml.opus import is_raw_plaud_opus, wrap_raw_opus_bytes
 from ..schemas import EnrolledSpeaker, Transcript, TranscriptSegment
+from ..speaker_labels import is_generic_speaker_label
 from .retry import (
     compute_retry_delay_ms,
     is_rate_limit_error,
@@ -95,15 +96,7 @@ def _normalize_speaker_name(name: str) -> str:
 
 
 def is_generic_plaud_speaker(name: str | None) -> bool:
-    if not name or not name.strip():
-        return True
-    normalized = name.strip().lower()
-    return bool(
-        re.match(
-            r"^(?:speaker|speakers|spk|participant|person|unknown)(?:[\s_-]*\d+)?$",
-            normalized,
-        )
-    )
+    return is_generic_speaker_label(name)
 
 
 isGenericPlaudSpeaker = is_generic_plaud_speaker
@@ -193,8 +186,7 @@ def _content_is_ready(detail: Mapping[str, Any]) -> bool:
 
 
 def _is_placeholder_speaker_name(name: str) -> bool:
-    s = name.strip()
-    return bool(re.match(r"^speaker\s*\d+$", s, re.I) or re.match(r"^s\d+$", s, re.I))
+    return is_generic_speaker_label(name)
 
 
 #: Speaker cluster id used for Plaud segments with no usable speaker label.

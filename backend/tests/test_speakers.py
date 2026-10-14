@@ -329,10 +329,9 @@ async def test_coalesces_sequential_turns_and_prunes_placeholder_speakers(tmp_pa
 
     rem_speakers = await service.list_speakers()
     names = [s["name"] for s in rem_speakers]
-    assert "Matt Cowger" in names
-    assert "Speaker 2" in names
-    assert "Speaker 1" not in names
-    assert "Speaker 3" not in names
+    # Unidentified "Speaker 2" remains only as a transcript label; it is not
+    # a person, so it must not appear in the people list.
+    assert names == ["Matt Cowger"]
     handle.engine.dispose()
 
 

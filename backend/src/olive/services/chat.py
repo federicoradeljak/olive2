@@ -18,6 +18,7 @@ from ..db import DbHandle, get_db
 from ..layout import meeting_paths
 from ..schemas import ChatMessage, ChatUsage, LlmGenerateResult
 from ..settings import resolve_paths
+from ..speaker_labels import is_generic_speaker_label
 from .llm import LlmService
 
 
@@ -360,7 +361,11 @@ class ChatService:
         summary_text = (
             "\n\n---\n\n".join(summaries) if summaries else "No summaries are available for this meeting."
         )
-        speaker_names = ", ".join(s["name"] for s in speakers) or "Unknown participants"
+        # Generic labels are not people; don't present them as participants.
+        speaker_names = (
+            ", ".join(s["name"] for s in speakers if not is_generic_speaker_label(s["name"]))
+            or "Unknown participants"
+        )
 
         return (
             "You are Olive's meeting assistant. Answer questions using only the meeting context below. "
