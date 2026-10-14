@@ -382,72 +382,79 @@ async def step_diarize_turns(
             },
         )
 
-        raw_wav = await asyncio.to_thread(wav_path.read_bytes)
-        decoded = await asyncio.to_thread(decode_wav, raw_wav)
-        samples = decoded.samples
-
-        pipe = _get_pipeline(task_id, payload.get("pipelineOptions"))
-        clustering_threshold = payload.get("clusteringThreshold")
-        expected_speaker_count = payload.get("expectedSpeakerCount")
-
-        ctx = _TASK_CONTEXTS.get(task_id)
-        on_prog = ctx.on_progress if ctx is not None else None
-
-        diarizer = pipe.diarizer
+        model_id = payload.get("modelId")
         turns: list[dict[str, Any]] = []
         precomputed_centroids: dict[str, list[float]] | None = None
 
-        seg_turns_fn = getattr(diarizer, "segment_turns", None)
-        if callable(seg_turns_fn):
-            seg_res: Any = seg_turns_fn(
-                samples,
-                target_sr,
-                clustering_threshold,
-                expected_speaker_count,
-                on_progress=on_prog,
-                meeting_id=meeting_id,
-            )
-            turns = await seg_res if inspect.isawaitable(seg_res) else seg_res
+        if model_id in ("mock", "mock-asr"):
+            # Deterministic single-turn stand-in: skip real neural diarization.
+            mock_speaker = "SPEAKER_00"
+            turns = [{"startMs": 0, "endMs": duration_ms, "speakerId": mock_speaker}]
+            precomputed_centroids = {mock_speaker: normalize_vector([1.0] * 256)}
         else:
-            diarize_fn = diarizer.diarize
-            diarize_kwargs: dict[str, Any] = {}
-            try:
-                sig = inspect.signature(diarize_fn)
-                if "on_progress" in sig.parameters:
-                    diarize_kwargs["on_progress"] = on_prog
-                if "meeting_id" in sig.parameters:
-                    diarize_kwargs["meeting_id"] = meeting_id
-            except Exception:
-                pass
-            speaker_segments = await diarize_fn(
-                samples,
-                target_sr,
-                clustering_threshold,
-                expected_speaker_count,
-                **diarize_kwargs,
-            )
-            emb_dim = getattr(pipe.embedding_extractor, "dim", 256)
-            cluster_map: dict[str, list[Any]] = {}
-            for seg in speaker_segments:
-                cid = getattr(seg, "speakerId", None) or "Speaker 1"
-                s_ms = int(getattr(seg, "startMs", 0))
-                e_ms = int(getattr(seg, "endMs", 0))
-                turns.append({"startMs": s_ms, "endMs": e_ms, "speakerId": cid})
-                cluster_map.setdefault(cid, []).append(seg)
-            precomputed_centroids = {}
-            for cid, segs in cluster_map.items():
-                precomputed_centroids[cid] = merge_weighted_voiceprint_vectors(
-                    [
-                        {
-                            "vector": getattr(s, "embedding", None) or ([0.0] * emb_dim),
-                            "weight": max(1, int(getattr(s, "endMs", 0)) - int(getattr(s, "startMs", 0))),
-                        }
-                        for s in segs
-                    ]
-                )
+            raw_wav = await asyncio.to_thread(wav_path.read_bytes)
+            decoded = await asyncio.to_thread(decode_wav, raw_wav)
+            samples = decoded.samples
 
-        if pipe.unload_per_stage and hasattr(diarizer, "release"):
-            diarizer.release()
+            pipe = _get_pipeline(task_id, payload.get("pipelineOptions"))
+            clustering_threshold = payload.get("clusteringThreshold")
+            expected_speaker_count = payload.get("expectedSpeakerCount")
+
+            ctx = _TASK_CONTEXTS.get(task_id)
+            on_prog = ctx.on_progress if ctx is not None else None
+
+            diarizer = pipe.diarizer
+            seg_turns_fn = getattr(diarizer, "segment_turns", None)
+            if callable(seg_turns_fn):
+                seg_res: Any = seg_turns_fn(
+                    samples,
+                    target_sr,
+                    clustering_threshold,
+                    expected_speaker_count,
+                    on_progress=on_prog,
+                    meeting_id=meeting_id,
+                )
+                turns = await seg_res if inspect.isawaitable(seg_res) else seg_res
+            else:
+                diarize_fn = diarizer.diarize
+                diarize_kwargs: dict[str, Any] = {}
+                try:
+                    sig = inspect.signature(diarize_fn)
+                    if "on_progress" in sig.parameters:
+                        diarize_kwargs["on_progress"] = on_prog
+                    if "meeting_id" in sig.parameters:
+                        diarize_kwargs["meeting_id"] = meeting_id
+                except Exception:
+                    pass
+                speaker_segments = await diarize_fn(
+                    samples,
+                    target_sr,
+                    clustering_threshold,
+                    expected_speaker_count,
+                    **diarize_kwargs,
+                )
+                emb_dim = getattr(pipe.embedding_extractor, "dim", 256)
+                cluster_map: dict[str, list[Any]] = {}
+                for seg in speaker_segments:
+                    cid = getattr(seg, "speakerId", None) or "Speaker 1"
+                    s_ms = int(getattr(seg, "startMs", 0))
+                    e_ms = int(getattr(seg, "endMs", 0))
+                    turns.append({"startMs": s_ms, "endMs": e_ms, "speakerId": cid})
+                    cluster_map.setdefault(cid, []).append(seg)
+                precomputed_centroids = {}
+                for cid, segs in cluster_map.items():
+                    precomputed_centroids[cid] = merge_weighted_voiceprint_vectors(
+                        [
+                            {
+                                "vector": getattr(s, "embedding", None) or ([0.0] * emb_dim),
+                                "weight": max(1, int(getattr(s, "endMs", 0)) - int(getattr(s, "startMs", 0))),
+                            }
+                            for s in segs
+                        ]
+                    )
+
+            if pipe.unload_per_stage and hasattr(diarizer, "release"):
+                diarizer.release()
 
         _check_aborted(task_id)
 

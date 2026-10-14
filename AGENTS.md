@@ -61,6 +61,15 @@ Olive is a two-part repository:
   - `python3 scripts/dev_config.py frp_url --hostname`
   - `python3 scripts/dev_config.py frp_url --file`
 
+## Verification policy
+
+Run the cheapest check that covers the change — never all checks reflexively.
+- Test-only or single-file change → `uv run pytest tests/test_<area>.py` plus `uv run ruff check` on touched paths.
+- `src/` production change → affected test file(s) + ruff on touched paths.
+- Full `uv run pytest` (~17s) and `uv run basedpyright` (slow): pre-PR / cross-cutting changes only, not after every edit.
+- Never run `eval/run_ami_eval.py` unless explicitly asked (real corpus, real models, minutes–hours).
+- Never write ad-hoc repro scripts that import the ML stack (`torch`, `pyannote`, `onnxruntime`, DBOS runners); validate via the pytest suite instead.
+
 ## Invariants & rules
 
 1. **Never touch `~/.config/olive` in tests.** All tests must use `:memory:` SQLite databases and `tmp_path` directories for `configDir`, `meetingsDir`, and `backupsDir`.
