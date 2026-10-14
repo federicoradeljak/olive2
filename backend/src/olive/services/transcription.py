@@ -1261,7 +1261,7 @@ class TranscriptionService:
             poll_count += 1
             elapsed_ms = self.now() - start_time
             elapsed_sec = int(round(elapsed_ms / 1000.0))
-            pct = min(92, int(round(25 + min(67.0, (elapsed_sec / 45.0) * 67.0))))
+            pct = min(70, int(round(20 + min(50.0, (elapsed_sec / 45.0) * 50.0))))
 
             if callable(on_progress):
                 r = on_progress(
@@ -1281,8 +1281,8 @@ class TranscriptionService:
                     r = on_progress(
                         TranscriptionProgressUpdate(
                             stage="finalizing",
-                            percent=96,
-                            message="Downloading transcript JSON & enrolling speaker voiceprints...",
+                            percent=72,
+                            message="Downloading transcript JSON & identifying speakers...",
                         )
                     )
                     if inspect.isawaitable(r):
@@ -1437,12 +1437,12 @@ class TranscriptionService:
             current = update.get("current")
             total = update.get("total")
             if phase == "decoding":
-                percent, message = 96.0, "Identifying speakers: decoding audio..."
+                percent, message = 75.0, "Identifying speakers: decoding audio..."
             elif phase == "matching":
-                percent, message = 99.0, f"Identifying speakers: {detail}"
+                percent, message = 94.0, f"Identifying speakers: {detail}"
             elif current is not None and total:
                 frac = min(1.0, float(current) / max(1.0, float(total)))
-                percent = 96.0 + 2.5 * frac
+                percent = 78.0 + 14.0 * frac
                 message = (
                     f"Identifying speakers: {detail} ({current}/{total} speaker(s))"
                     if detail
@@ -1450,7 +1450,7 @@ class TranscriptionService:
                 )
             else:
                 percent, message = (
-                    97.0,
+                    85.0,
                     f"Identifying speakers: {detail}" if detail else "Identifying speakers...",
                 )
             self.emit_progress(
@@ -1491,7 +1491,7 @@ class TranscriptionService:
                     msg = "No enrolled speakers matched; keeping cloud speaker labels"
                 self.emit_progress(
                     meeting_id,
-                    {"stage": "finalizing", "percent": 99, "message": msg},
+                    {"stage": "finalizing", "percent": 95, "message": msg},
                 )
             return result
         except Exception as exc:
@@ -1902,9 +1902,9 @@ class TranscriptionService:
                 poll_count += 1
                 elapsed_s = int((self.now() - poll_start) / 1000)
                 if status == "queued":
-                    pct = 30.0
+                    pct = 25.0
                 else:
-                    pct = min(92.0, 30.0 + 62.0 * min(1.0, (elapsed_s / expected_s) if expected_s else 1.0))
+                    pct = min(70.0, 25.0 + 45.0 * min(1.0, (elapsed_s / expected_s) if expected_s else 1.0))
                 await _emit_aai(
                     "transcribing",
                     pct,
@@ -1924,7 +1924,7 @@ class TranscriptionService:
             r = on_progress(
                 TranscriptionProgressUpdate(
                     stage="finalizing",
-                    percent=96,
+                    percent=72,
                     message="AssemblyAI transcription complete. Identifying speakers...",
                 )
             )
