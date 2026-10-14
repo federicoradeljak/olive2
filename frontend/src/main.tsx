@@ -1,6 +1,6 @@
 import React, { Fragment, StrictMode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import {
@@ -166,10 +166,18 @@ function MeetingChatPanel({ meetingId, meetingTitle, onClose }: { meetingId: str
     };
   }, [meetingId]);
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
   return (
     <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label={`Chat with ${meetingTitle}`}>
       <button type="button" aria-label="Close chat" onClick={onClose} className="absolute inset-0 cursor-default bg-black/60" />
-      <aside className="relative flex h-full w-full max-w-xl flex-col border-l border-stone-800 bg-stone-950 shadow-2xl">
+      <aside className="relative flex h-[100dvh] w-full max-w-xl flex-col border-l border-stone-800 bg-stone-950 shadow-2xl">
         <div className="flex items-center justify-between border-b border-stone-800 bg-stone-900/95 px-4 py-3">
           <div className="min-w-0">
             <p className="text-xs font-semibold uppercase tracking-wider text-lime-400">Chat with Meeting</p>
@@ -185,11 +193,11 @@ function MeetingChatPanel({ meetingId, meetingTitle, onClose }: { meetingId: str
                   onClose();
                 }).catch((error) => alert(error instanceof Error ? error.message : String(error)));
               }}
-              className="rounded-lg px-2.5 py-1.5 text-xs text-stone-400 hover:bg-stone-800 hover:text-stone-200"
+              className="min-h-[44px] rounded-lg px-3 text-xs text-stone-400 hover:bg-stone-800 hover:text-stone-200"
             >
               Clear
             </button>
-            <button type="button" onClick={onClose} className="rounded-lg px-2.5 py-1.5 text-lg leading-none text-stone-400 hover:bg-stone-800 hover:text-white" aria-label="Close chat">×</button>
+            <button type="button" onClick={onClose} className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-lg leading-none text-stone-400 hover:bg-stone-800 hover:text-white" aria-label="Close chat">×</button>
           </div>
         </div>
 
@@ -268,12 +276,14 @@ function MeetingChatRuntime({ meetingId, initialMessages }: { meetingId: string;
             )
           }} />
         </ThreadPrimitive.Viewport>
-        <ComposerPrimitive.Root className="border-t border-stone-800 bg-stone-900/80 p-3">
-          <ComposerPrimitive.Input placeholder="Ask about this meeting…" className="min-h-20 w-full resize-none rounded-xl border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100 outline-none placeholder:text-stone-500 focus:border-lime-400" />
-          <div className="mt-2 flex justify-end">
-            <ComposerPrimitive.Send className="rounded-lg bg-lime-400 px-3 py-1.5 text-xs font-semibold text-stone-950 hover:bg-lime-300 disabled:cursor-not-allowed disabled:opacity-40">Send</ComposerPrimitive.Send>
-          </div>
-        </ComposerPrimitive.Root>
+        <div className="border-t border-stone-800 bg-stone-900/80 pb-safe">
+          <ComposerPrimitive.Root className="p-3">
+            <ComposerPrimitive.Input placeholder="Ask about this meeting…" className="min-h-20 w-full resize-none rounded-xl border border-stone-700 bg-stone-950 px-3 py-2 text-base text-stone-100 outline-none placeholder:text-stone-500 focus:border-lime-400 sm:text-sm" />
+            <div className="mt-2 flex justify-end">
+              <ComposerPrimitive.Send className="min-h-[44px] rounded-lg bg-lime-400 px-4 text-sm font-semibold text-stone-950 hover:bg-lime-300 disabled:cursor-not-allowed disabled:opacity-40">Send</ComposerPrimitive.Send>
+            </div>
+          </ComposerPrimitive.Root>
+        </div>
       </ThreadPrimitive.Root>
     </AssistantRuntimeProvider>
   );
@@ -315,6 +325,52 @@ function parseLocation(pathname: string): { tab: TabKey; meetingId: string | nul
   return { tab: "meetings", meetingId: null };
 }
 
+const NAV_TABS: { key: TabKey; path: string; label: string }[] = [
+  { key: "meetings", path: "/meetings", label: "Meetings" },
+  { key: "speakers", path: "/people", label: "People" },
+  { key: "templates", path: "/templates", label: "Templates" },
+  { key: "logs", path: "/logs", label: "Logs" },
+  { key: "backup", path: "/backup", label: "Backup" },
+  { key: "usage", path: "/usage", label: "Usage" },
+];
+
+const TAB_ICON_CONTENT: Record<TabKey, ReactNode> = {
+  meetings: (
+    <>
+      <rect x="3" y="4" width="18" height="18" rx="2" />
+      <path d="M16 2v4M8 2v4M3 10h18" />
+    </>
+  ),
+  speakers: (
+    <>
+      <circle cx="9" cy="7" r="4" />
+      <path d="M2 21v-2a5 5 0 0 1 5-5h4a5 5 0 0 1 5 5v2" />
+    </>
+  ),
+  templates: (
+    <>
+      <rect x="4" y="3" width="16" height="18" rx="2" />
+      <path d="M8 8h8M8 12h8M8 16h5" />
+    </>
+  ),
+  logs: <path d="M4 6h16M4 12h16M4 18h10" />,
+  backup: (
+    <>
+      <ellipse cx="12" cy="5" rx="8" ry="3" />
+      <path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" />
+    </>
+  ),
+  usage: <path d="M4 20V10M10 20V4M16 20v-7M2 20h20" />,
+};
+
+function TabIcon({ name }: { name: TabKey }): ReactElement {
+  return (
+    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {TAB_ICON_CONTENT[name]}
+    </svg>
+  );
+}
+
 export function App(): ReactElement {
   const initialRoute = parseLocation(typeof window !== "undefined" ? window.location.pathname : "/");
   const [activeTab, setActiveTab] = useState<TabKey>(initialRoute.tab);
@@ -330,6 +386,8 @@ export function App(): ReactElement {
   // LLM status & settings
   const [llmConfig, setLlmConfig] = useState<{ defaultProvider: string; defaultModel: string } | null>(null);
   const [showLlmModal, setShowLlmModal] = useState(false);
+
+  const isTabActive = (key: TabKey) => (key === "meetings" ? activeTab === "meetings" && !selectedMeetingId : activeTab === key);
 
   const navigate = (path: string) => {
     const route = parseLocation(path);
@@ -394,116 +452,47 @@ export function App(): ReactElement {
   }, []);
 
   return (
-    <div className="min-h-screen bg-stone-950 text-stone-100 selection:bg-lime-400 selection:text-stone-950 w-full overflow-x-hidden">
+    <div className="min-h-screen bg-stone-950 text-stone-100 selection:bg-lime-400 selection:text-stone-950 w-full overflow-x-clip">
       <nav className="border-b border-stone-800 bg-stone-900/80 backdrop-blur sticky top-0 z-30 px-3 sm:px-6 py-2.5 sm:py-3.5 w-full">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-2.5 sm:gap-4">
-          <div className="flex items-center gap-3 sm:gap-6 overflow-x-auto max-w-full pb-0.5">
+        <div className="mx-auto flex max-w-6xl flex-nowrap items-center justify-between gap-2 sm:gap-4">
+          <div className="flex min-w-0 items-center gap-3 sm:gap-4 lg:gap-6">
             <a
               href="/meetings"
               onClick={(e) => {
                 e.preventDefault();
                 navigate("/meetings");
               }}
-              className="flex items-center gap-2 cursor-pointer hover:opacity-90 transition shrink-0"
+              className="flex shrink-0 items-center gap-2 cursor-pointer hover:opacity-90 transition"
             >
               <span className="flex h-7 w-7 sm:h-8 sm:w-8 items-center justify-center rounded-lg bg-lime-400 font-bold text-stone-950 text-sm sm:text-base">
                 O
               </span>
               <span className="text-lg sm:text-xl font-semibold tracking-tight">Olive</span>
             </a>
-            <div className="flex items-center gap-0.5 sm:gap-1 rounded-lg bg-stone-800/80 p-0.5 sm:p-1 text-xs sm:text-sm font-medium shrink-0">
-              <a
-                href="/meetings"
-                onClick={(e) => {
-                  e.preventDefault();
-                  navigate("/meetings");
-                }}
-                className={`rounded-md px-2.5 sm:px-3 py-1 sm:py-1.5 transition ${
-                  activeTab === "meetings" && !selectedMeetingId
-                    ? "bg-stone-900 text-lime-400 shadow"
-                    : "text-stone-400 hover:text-stone-200"
-                }`}
-              >
-                Meetings
-              </a>
-              <a
-                href="/people"
-                onClick={(e) => {
-                  e.preventDefault();
-                  navigate("/people");
-                  void refreshSpeakers();
-                }}
-                className={`rounded-md px-2.5 sm:px-3 py-1 sm:py-1.5 transition ${
-                  activeTab === "speakers"
-                    ? "bg-stone-900 text-lime-400 shadow"
-                    : "text-stone-400 hover:text-stone-200"
-                }`}
-              >
-                People ({knownSpeakers.length})
-              </a>
-              <a
-                href="/templates"
-                onClick={(e) => {
-                  e.preventDefault();
-                  navigate("/templates");
-                }}
-                className={`rounded-md px-2.5 sm:px-3 py-1 sm:py-1.5 transition ${
-                  activeTab === "templates"
-                    ? "bg-stone-900 text-lime-400 shadow"
-                    : "text-stone-400 hover:text-stone-200"
-                }`}
-              >
-                Templates
-              </a>
-              <a
-                href="/logs"
-                onClick={(e) => {
-                  e.preventDefault();
-                  navigate("/logs");
-                }}
-                className={`rounded-md px-2.5 sm:px-3 py-1 sm:py-1.5 transition ${
-                  activeTab === "logs"
-                    ? "bg-stone-900 text-lime-400 shadow"
-                    : "text-stone-400 hover:text-stone-200"
-                }`}
-              >
-                Logs
-              </a>
-              <a
-                href="/backup"
-                onClick={(e) => {
-                  e.preventDefault();
-                  navigate("/backup");
-                }}
-                className={`rounded-md px-2.5 sm:px-3 py-1 sm:py-1.5 transition ${
-                  activeTab === "backup"
-                    ? "bg-stone-900 text-lime-400 shadow"
-                    : "text-stone-400 hover:text-stone-200"
-                }`}
-              >
-                Backup
-              </a>
-              <a
-                href="/usage"
-                onClick={(e) => {
-                  e.preventDefault();
-                  navigate("/usage");
-                }}
-                className={`rounded-md px-2.5 sm:px-3 py-1 sm:py-1.5 transition ${
-                  activeTab === "usage"
-                    ? "bg-stone-900 text-lime-400 shadow"
-                    : "text-stone-400 hover:text-stone-200"
-                }`}
-              >
-                Usage
-              </a>
+            <div className="hidden sm:flex min-w-0 flex-nowrap items-center gap-0.5 overflow-x-auto rounded-lg bg-stone-800/80 p-1 text-xs lg:text-sm font-medium">
+              {NAV_TABS.map((tab) => (
+                <a
+                  key={tab.key}
+                  href={tab.path}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    navigate(tab.path);
+                    if (tab.key === "speakers") void refreshSpeakers();
+                  }}
+                  className={`shrink-0 whitespace-nowrap rounded-md px-2 lg:px-3 py-1.5 transition ${
+                    isTabActive(tab.key) ? "bg-stone-900 text-lime-400 shadow" : "text-stone-400 hover:text-stone-200"
+                  }`}
+                >
+                  {tab.key === "speakers" ? `People (${knownSpeakers.length})` : tab.label}
+                </a>
+              ))}
             </div>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex shrink-0 items-center gap-2">
             <button
               type="button"
               onClick={() => setShowLlmModal(true)}
-              className="flex items-center gap-1.5 rounded-full border border-stone-700 bg-stone-800/80 px-2.5 py-1 text-[11px] sm:text-xs font-medium text-stone-300 hover:border-stone-500 hover:text-white transition truncate max-w-[150px] sm:max-w-none"
+              className="flex min-w-0 max-w-[110px] lg:max-w-[150px] xl:max-w-none items-center gap-1.5 rounded-full border border-stone-700 bg-stone-800/80 px-2.5 py-1 text-[11px] sm:text-xs font-medium text-stone-300 hover:border-stone-500 hover:text-white transition"
             >
               <span className="h-2 w-2 rounded-full bg-cyan-400 shrink-0" />
               <span className="truncate">AI: {llmConfig ? `${llmConfig.defaultProvider}/${llmConfig.defaultModel}` : "Config"}</span>
@@ -527,7 +516,41 @@ export function App(): ReactElement {
         </div>
       </nav>
 
-      <main className="mx-auto max-w-6xl px-3.5 sm:px-6 py-4 sm:py-8 w-full overflow-x-hidden min-w-0">
+      <nav
+        aria-label="Primary"
+        className="fixed inset-x-0 bottom-0 z-30 border-t border-stone-800 bg-stone-900/95 backdrop-blur pb-safe sm:hidden"
+      >
+        <div className="mx-auto grid max-w-6xl grid-cols-6">
+          {NAV_TABS.map((tab) => {
+            const active = isTabActive(tab.key);
+            return (
+              <a
+                key={tab.key}
+                href={tab.path}
+                aria-current={active ? "page" : undefined}
+                onClick={(e) => {
+                  e.preventDefault();
+                  navigate(tab.path);
+                  if (tab.key === "speakers") void refreshSpeakers();
+                }}
+                className={`relative flex min-h-[56px] min-w-0 flex-col items-center justify-center gap-1 px-0.5 transition ${
+                  active ? "text-lime-400" : "text-stone-400 active:text-stone-200"
+                }`}
+              >
+                <TabIcon name={tab.key} />
+                <span className="max-w-full truncate text-[10px] leading-none font-medium">{tab.label}</span>
+                {tab.key === "speakers" && knownSpeakers.length > 0 && (
+                  <span className="absolute right-[22%] top-1.5 rounded-full bg-stone-700 px-1 text-[9px] leading-tight text-stone-200">
+                    {knownSpeakers.length}
+                  </span>
+                )}
+              </a>
+            );
+          })}
+        </div>
+      </nav>
+
+      <main className="mx-auto max-w-6xl px-3.5 sm:px-6 pt-4 sm:pt-8 pb-[calc(6rem+env(safe-area-inset-bottom))] sm:pb-8 w-full overflow-x-clip min-w-0">
         {selectedMeetingId ? (
           <MeetingDetailView
             meetingId={selectedMeetingId}
@@ -581,6 +604,59 @@ export function App(): ReactElement {
           }}
         />
       )}
+    </div>
+  );
+}
+
+function Modal({
+  onClose,
+  title,
+  ariaLabel,
+  maxWidth = "max-w-lg",
+  children
+}: {
+  onClose: () => void;
+  title: ReactNode;
+  ariaLabel: string;
+  maxWidth?: string;
+  children: ReactNode;
+}): ReactElement {
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex max-h-[100dvh] items-center justify-center overflow-y-auto p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label={ariaLabel}
+    >
+      <button
+        type="button"
+        tabIndex={-1}
+        aria-label="Close dialog"
+        onClick={onClose}
+        className="fixed inset-0 cursor-default bg-stone-950/80 backdrop-blur-sm"
+      />
+      <div className={`relative z-10 my-auto w-full ${maxWidth} rounded-2xl border border-stone-800 bg-stone-900 shadow-2xl`}>
+        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 rounded-t-2xl border-b border-stone-800 bg-stone-900 px-6 py-4">
+          <h2 className="min-w-0 flex-1 text-lg font-semibold text-stone-100">{title}</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="-mr-2 inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg text-lg text-stone-400 transition hover:text-stone-200"
+          >
+            ✕
+          </button>
+        </div>
+        <div className="space-y-5 p-6">{children}</div>
+      </div>
     </div>
   );
 }
@@ -679,167 +755,149 @@ function PlaudModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/80 backdrop-blur-sm p-4">
-      <div className="w-full max-w-lg rounded-2xl border border-stone-800 bg-stone-900 p-6 shadow-2xl space-y-6">
-        <div className="flex items-center justify-between border-b border-stone-800 pb-3">
-          <div className="flex items-center gap-2">
-            <span className="text-lg font-bold">Plaud Integration</span>
-            <span
-              className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
-                status?.connected ? "bg-lime-400/10 text-lime-300" : "bg-amber-400/10 text-amber-300"
-              }`}
-            >
-              {status?.connected ? "Connected" : "Disconnected"}
-            </span>
-          </div>
-          <button type="button" onClick={onClose} className="text-stone-400 hover:text-stone-200 text-lg">
-            ✕
-          </button>
+    <Modal onClose={onClose} title={<span className="flex flex-wrap items-center gap-2"><span>Plaud Integration</span><span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${status?.connected ? "bg-lime-400/10 text-lime-300" : "bg-amber-400/10 text-amber-300"}`}>{status?.connected ? "Connected" : "Disconnected"}</span></span>} ariaLabel="Plaud integration" maxWidth="max-w-lg">
+      {errorMessage && (
+        <div className="rounded-xl border border-red-900 bg-red-950/40 p-4 text-xs text-red-200">
+          {errorMessage}
         </div>
+      )}
 
-        {errorMessage && (
-          <div className="rounded-xl border border-red-900 bg-red-950/40 p-4 text-xs text-red-200">
-            {errorMessage}
-          </div>
-        )}
+      {syncMessage && (
+        <div className="rounded-xl border border-lime-900 bg-lime-950/40 p-4 text-xs text-lime-200">
+          {syncMessage}
+        </div>
+      )}
 
-        {syncMessage && (
-          <div className="rounded-xl border border-lime-900 bg-lime-950/40 p-4 text-xs text-lime-200">
-            {syncMessage}
-          </div>
-        )}
-
-        {status?.connected && authStep === "idle" ? (
-          <div className="space-y-4">
-            <div className="rounded-xl border border-stone-800 bg-stone-950/60 p-4 space-y-2 text-xs text-stone-300">
-              <div className="flex justify-between">
-                <span className="text-stone-400">Connection Status:</span>
-                <span className="font-semibold text-lime-300">Active (OAuth tokens valid)</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-stone-400">Last Synced:</span>
-                <span>{status.lastPollAt ? formatDate(status.lastPollAt) : "Never"}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-stone-400">Pending PCS Items:</span>
-                <span>{status.pcsPending}</span>
-              </div>
+      {status?.connected && authStep === "idle" ? (
+        <div className="space-y-4">
+          <div className="rounded-xl border border-stone-800 bg-stone-950/60 p-4 space-y-2 text-xs text-stone-300">
+            <div className="flex justify-between">
+              <span className="text-stone-400">Connection Status:</span>
+              <span className="font-semibold text-lime-300">Active (OAuth tokens valid)</span>
             </div>
+            <div className="flex justify-between">
+              <span className="text-stone-400">Last Synced:</span>
+              <span>{status.lastPollAt ? formatDate(status.lastPollAt) : "Never"}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-stone-400">Pending PCS Items:</span>
+              <span>{status.pcsPending}</span>
+            </div>
+          </div>
 
-            <div className="flex gap-3">
+          <div className="flex gap-3">
+            <button
+              type="button"
+              disabled={syncing}
+              onClick={() => void handleTriggerSync()}
+              className="flex-1 rounded-lg bg-lime-400 py-2 text-sm font-semibold text-stone-950 hover:bg-lime-300 disabled:opacity-50 transition"
+            >
+              {syncing ? "Syncing with Plaud…" : "Sync Now"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleStartAuth()}
+              className="rounded-lg border border-stone-700 bg-stone-800 px-4 py-2 text-sm font-medium text-stone-300 hover:bg-stone-700 transition"
+            >
+              Re-authenticate
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-5">
+          {authStep === "idle" && (
+            <div className="space-y-4 text-sm text-stone-300">
+              <p>
+                Connect your Plaud account using OAuth 2.0 PKCE to automatically ingest recordings, transcripts, and summaries into Olive.
+              </p>
               <button
                 type="button"
-                disabled={syncing}
-                onClick={() => void handleTriggerSync()}
-                className="flex-1 rounded-lg bg-lime-400 py-2 text-sm font-semibold text-stone-950 hover:bg-lime-300 disabled:opacity-50 transition"
-              >
-                {syncing ? "Syncing with Plaud…" : "Sync Now"}
-              </button>
-              <button
-                type="button"
+                disabled={loading}
                 onClick={() => void handleStartAuth()}
-                className="rounded-lg border border-stone-700 bg-stone-800 px-4 py-2 text-sm font-medium text-stone-300 hover:bg-stone-700 transition"
+                className="w-full rounded-lg bg-lime-400 py-2.5 text-sm font-semibold text-stone-950 hover:bg-lime-300 disabled:opacity-50 transition"
               >
-                Re-authenticate
+                {loading ? "Generating login link…" : "Start Plaud OAuth Login"}
               </button>
             </div>
-          </div>
-        ) : (
-          <div className="space-y-5">
-            {authStep === "idle" && (
-              <div className="space-y-4 text-sm text-stone-300">
-                <p>
-                  Connect your Plaud account using OAuth 2.0 PKCE to automatically ingest recordings, transcripts, and summaries into Olive.
+          )}
+
+          {authStep === "authorizing" && authUrl && (
+            <form onSubmit={handleCompleteAuth} className="space-y-4 text-sm">
+              <div className="rounded-xl border border-stone-800 bg-stone-950/80 p-4 space-y-3">
+                <p className="font-semibold text-stone-200">Step 1: Authorize with Plaud</p>
+                <p className="text-xs text-stone-400 leading-relaxed">
+                  Click the button below to open the official Plaud login in a new tab. Log in and grant permission.
                 </p>
+                <a
+                  href={authUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 rounded-lg bg-lime-400 px-4 py-2 text-xs font-bold text-stone-950 hover:bg-lime-300 transition"
+                >
+                  Open Plaud Login Page ↗
+                </a>
+              </div>
+
+              <div className="rounded-xl border border-stone-800 bg-stone-950/80 p-4 space-y-3">
+                <p className="font-semibold text-stone-200">Step 2: Paste the Callback URL</p>
+                <p className="text-xs text-stone-400 leading-relaxed">
+                  After authorizing, Plaud will redirect your browser to a callback address starting with{" "}
+                  <code className="rounded bg-stone-900 px-1 py-0.5 text-lime-400">http://localhost:8199/auth/callback?code=...</code>{" "}
+                  (your browser might show "Site can't be reached"—this is normal). Copy the <strong>entire URL</strong> from your address bar and paste it below:
+                </p>
+                <input
+                  type="text"
+                  required
+                  placeholder="http://localhost:8199/auth/callback?code=...&state=..."
+                  value={callbackInput}
+                  onChange={(e) => setCallbackInput(e.target.value)}
+                  className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-base sm:text-sm text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none"
+                />
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2">
                 <button
                   type="button"
-                  disabled={loading}
-                  onClick={() => void handleStartAuth()}
-                  className="w-full rounded-lg bg-lime-400 py-2.5 text-sm font-semibold text-stone-950 hover:bg-lime-300 disabled:opacity-50 transition"
+                  onClick={() => setAuthStep("idle")}
+                  className="rounded-lg px-4 py-2 text-sm text-stone-400 hover:text-stone-200"
                 >
-                  {loading ? "Generating login link…" : "Start Plaud OAuth Login"}
+                  Back
                 </button>
-              </div>
-            )}
-
-            {authStep === "authorizing" && authUrl && (
-              <form onSubmit={handleCompleteAuth} className="space-y-4 text-sm">
-                <div className="rounded-xl border border-stone-800 bg-stone-950/80 p-4 space-y-3">
-                  <p className="font-semibold text-stone-200">Step 1: Authorize with Plaud</p>
-                  <p className="text-xs text-stone-400 leading-relaxed">
-                    Click the button below to open the official Plaud login in a new tab. Log in and grant permission.
-                  </p>
-                  <a
-                    href={authUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-2 rounded-lg bg-lime-400 px-4 py-2 text-xs font-bold text-stone-950 hover:bg-lime-300 transition"
-                  >
-                    Open Plaud Login Page ↗
-                  </a>
-                </div>
-
-                <div className="rounded-xl border border-stone-800 bg-stone-950/80 p-4 space-y-3">
-                  <p className="font-semibold text-stone-200">Step 2: Paste the Callback URL</p>
-                  <p className="text-xs text-stone-400 leading-relaxed">
-                    After authorizing, Plaud will redirect your browser to a callback address starting with{" "}
-                    <code className="rounded bg-stone-900 px-1 py-0.5 text-lime-400">http://localhost:8199/auth/callback?code=...</code>{" "}
-                    (your browser might show "Site can't be reached"—this is normal). Copy the <strong>entire URL</strong> from your address bar and paste it below:
-                  </p>
-                  <input
-                    type="text"
-                    required
-                    placeholder="http://localhost:8199/auth/callback?code=...&state=..."
-                    value={callbackInput}
-                    onChange={(e) => setCallbackInput(e.target.value)}
-                    className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-xs text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none"
-                  />
-                </div>
-
-                <div className="flex justify-end gap-3 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setAuthStep("idle")}
-                    className="rounded-lg px-4 py-2 text-sm text-stone-400 hover:text-stone-200"
-                  >
-                    Back
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={loading || !callbackInput.trim()}
-                    className="rounded-lg bg-lime-400 px-5 py-2 text-sm font-semibold text-stone-950 hover:bg-lime-300 disabled:opacity-50 transition"
-                  >
-                    {loading ? "Verifying…" : "Complete Connection"}
-                  </button>
-                </div>
-              </form>
-            )}
-
-            {authStep === "success" && (
-              <div className="space-y-4 py-4 text-center">
-                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-lime-400/20 text-2xl text-lime-300">
-                  ✓
-                </div>
-                <h4 className="text-lg font-bold text-stone-100">Plaud Connected Successfully!</h4>
-                <p className="text-xs text-stone-400">
-                  Olive is now authenticated with your Plaud account. Tokens will refresh automatically.
-                </p>
                 <button
-                  type="button"
-                  onClick={() => {
-                    setAuthStep("idle");
-                    onClose();
-                  }}
-                  className="rounded-lg bg-lime-400 px-6 py-2 text-sm font-semibold text-stone-950 hover:bg-lime-300 transition"
+                  type="submit"
+                  disabled={loading || !callbackInput.trim()}
+                  className="rounded-lg bg-lime-400 px-5 py-2 text-sm font-semibold text-stone-950 hover:bg-lime-300 disabled:opacity-50 transition"
                 >
-                  Done
+                  {loading ? "Verifying…" : "Complete Connection"}
                 </button>
               </div>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
+            </form>
+          )}
+
+          {authStep === "success" && (
+            <div className="space-y-4 py-4 text-center">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-lime-400/20 text-2xl text-lime-300">
+                ✓
+              </div>
+              <h4 className="text-lg font-bold text-stone-100">Plaud Connected Successfully!</h4>
+              <p className="text-xs text-stone-400">
+                Olive is now authenticated with your Plaud account. Tokens will refresh automatically.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthStep("idle");
+                  onClose();
+                }}
+                className="rounded-lg bg-lime-400 px-6 py-2 text-sm font-semibold text-stone-950 hover:bg-lime-300 transition"
+              >
+                Done
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </Modal>
   );
 }
 
@@ -853,6 +911,7 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [showBulkModal, setShowBulkModal] = useState(false);
   const [bulkNotice, setBulkNotice] = useState<string | null>(null);
+  const [selectMode, setSelectMode] = useState(false);
 
   const fetchMeetings = async (opts?: { silent?: boolean }) => {
     if (!opts?.silent && meetings.length === 0) {
@@ -885,6 +944,11 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
 
   const toggleSelectMeeting = (id: string) => {
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((m) => m !== id) : [...prev, id]));
+  };
+
+  const exitSelectMode = () => {
+    setSelectMode(false);
+    setSelectedIds([]);
   };
 
   const handleSelectVisible = () => {
@@ -940,35 +1004,57 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
   }, [meetings, activeProgressMap]);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5 sm:space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Meetings</h1>
           <p className="mt-1 text-sm text-stone-400">Recorded and ingested audio archive</p>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:gap-3">
           <input
-            type="text"
+            type="search"
             placeholder="Search meetings…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="rounded-lg border border-stone-800 bg-stone-900 px-4 py-2 text-sm text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none"
+            className="min-h-[44px] w-full rounded-lg border border-stone-800 bg-stone-900 px-4 py-2 text-base sm:text-sm text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none sm:w-64"
           />
+          <button
+            type="button"
+            onClick={() => {
+              if (selectMode) {
+                exitSelectMode();
+              } else {
+                setSelectMode(true);
+              }
+            }}
+            aria-pressed={selectMode}
+            className={`flex min-h-[44px] items-center justify-center rounded-lg border px-4 py-2 text-sm font-semibold transition shrink-0 ${
+              selectMode
+                ? "border-lime-400 bg-lime-400/10 text-lime-300"
+                : "border-stone-700 text-stone-300 hover:border-stone-500 hover:text-white"
+            }`}
+          >
+            {selectMode ? "Done" : "Select"}
+          </button>
           <button
             type="button"
             onClick={() => {
               setBulkNotice(null);
               setShowBulkModal(true);
             }}
-            className="flex items-center gap-2 rounded-lg border border-lime-400/40 bg-lime-400/10 px-4 py-2 text-sm font-semibold text-lime-300 transition hover:bg-lime-400/20 shrink-0"
+            className={`flex min-h-[44px] flex-1 sm:flex-none items-center justify-center gap-2 rounded-lg border px-4 py-2 text-sm font-semibold transition shrink-0 ${
+              selectMode && selectedIds.length > 0
+                ? "border-lime-400 bg-lime-400 text-stone-950 hover:bg-lime-300"
+                : "border-lime-400/40 bg-lime-400/10 text-lime-300 hover:bg-lime-400/20"
+            }`}
             title="Re-transcribe many meetings with one engine"
           >
-            <span>⟳</span> Bulk re-transcribe
+            <span>⟳</span> {selectMode && selectedIds.length > 0 ? `Re-transcribe ${selectedIds.length}` : "Bulk re-transcribe"}
           </button>
           <button
             type="button"
             onClick={() => setShowUploadModal(true)}
-            className="flex items-center gap-2 rounded-lg bg-lime-400 px-4 py-2 text-sm font-semibold text-stone-950 transition hover:bg-lime-300 shrink-0"
+            className="flex min-h-[44px] flex-1 sm:flex-none items-center justify-center gap-2 rounded-lg bg-lime-400 px-4 py-2 text-sm font-semibold text-stone-950 transition hover:bg-lime-300 shrink-0"
           >
             <span>+</span> Upload Audio
           </button>
@@ -979,20 +1065,19 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
         <div className="rounded-xl border border-lime-900 bg-lime-950/40 p-4 text-sm text-lime-200">{bulkNotice}</div>
       )}
 
-      {!loading && !error && meetings.length > 0 && (
-        <div className="flex flex-wrap items-center gap-3 text-xs text-stone-400">
-          <span className={selectedIds.length > 0 ? "font-semibold text-lime-300" : ""}>
-            {selectedIds.length > 0 ? `${selectedIds.length} selected` : "No meetings selected"}
+      {selectMode && !loading && !error && meetings.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-stone-800 bg-stone-900/60 px-3 py-2 text-xs text-stone-400 sm:gap-3">
+          <span className={`mr-auto ${selectedIds.length > 0 ? "font-semibold text-lime-300" : ""}`}>
+            {selectedIds.length > 0 ? `${selectedIds.length} selected` : "Tap meetings to select"}
           </span>
-          <button type="button" onClick={handleSelectVisible} className="rounded-md border border-stone-700 px-2.5 py-1 hover:border-lime-400/60 hover:text-lime-300 transition">
+          <button type="button" onClick={handleSelectVisible} className="min-h-[36px] rounded-md border border-stone-700 px-3 py-1.5 hover:border-lime-400/60 hover:text-lime-300 transition">
             Select visible ({meetings.length})
           </button>
           {selectedIds.length > 0 && (
-            <button type="button" onClick={handleClearSelection} className="rounded-md border border-stone-700 px-2.5 py-1 hover:border-rose-500/60 hover:text-rose-300 transition">
-              Clear selection
+            <button type="button" onClick={handleClearSelection} className="min-h-[36px] rounded-md border border-stone-700 px-3 py-1.5 hover:border-rose-500/60 hover:text-rose-300 transition">
+              Clear
             </button>
           )}
-          <span className="text-stone-500">Tick meetings, then use “Bulk re-transcribe” — or run it filter-based for the whole library.</span>
         </div>
       )}
 
@@ -1006,54 +1091,68 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
       )}
 
       {!loading && !error && meetings.length > 0 && (
-        <div className="grid gap-3 sm:grid-cols-1">
-          {meetings.map((meeting) => (
-            <div
-              key={meeting.id}
-              onClick={() => onSelectMeeting(meeting.id)}
-              className="group cursor-pointer rounded-xl border border-stone-800 bg-stone-900/90 p-5 transition hover:border-lime-400/60 hover:bg-stone-900 shadow-sm space-y-2.5"
-            >
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex min-w-0 items-start gap-3">
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.includes(meeting.id)}
-                    onChange={() => toggleSelectMeeting(meeting.id)}
-                    onClick={(e) => e.stopPropagation()}
-                    className="mt-1.5 h-4 w-4 shrink-0 accent-lime-400"
-                    title={`Select "${meeting.title}" for bulk actions`}
-                    aria-label={`Select meeting ${meeting.title}`}
-                  />
-                  <div className="min-w-0">
-                  <h2 className="text-lg font-semibold text-stone-100 group-hover:text-lime-300 transition">
-                    {meeting.title}
-                  </h2>
-                  <div className="mt-1 flex items-center gap-3 text-xs text-stone-400">
-                    <span>{formatDate(meeting.startTime)}</span>
-                    <span>•</span>
-                    <span>{formatDuration(meeting.endTime - meeting.startTime)}</span>
-                    <span>•</span>
-                    <span className="capitalize">{meeting.source}</span>
-                  </div>
-                  {meeting.tags.length > 0 && (
-                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                      {meeting.tags.map((tag) => (
-                        <span
-                          key={tag}
-                          className="rounded-full border border-stone-700 bg-stone-800/80 px-2 py-0.5 text-[11px] text-stone-300"
-                        >
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {meetings.map((meeting) => {
+            const selected = selectedIds.includes(meeting.id);
+            const progress = activeProgressMap[meeting.id];
+            return (
+              <div
+                key={meeting.id}
+                onClick={() => (selectMode ? toggleSelectMeeting(meeting.id) : onSelectMeeting(meeting.id))}
+                aria-selected={selectMode ? selected : undefined}
+                className={`group flex h-full cursor-pointer flex-col gap-2.5 rounded-xl border p-4 sm:p-5 shadow-sm transition ${
+                  selectMode && selected
+                    ? "border-lime-400 bg-lime-400/5"
+                    : "border-stone-800 bg-stone-900/90 hover:border-lime-400/60 hover:bg-stone-900"
+                }`}
+              >
+                <div className="flex items-start gap-2">
+                  {selectMode && (
+                    <span className="-ml-2 -mt-1.5 flex h-11 w-11 shrink-0 items-center justify-center">
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        onChange={() => toggleSelectMeeting(meeting.id)}
+                        onClick={(e) => e.stopPropagation()}
+                        className="h-5 w-5 accent-lime-400"
+                        aria-label={`Select meeting ${meeting.title}`}
+                      />
+                    </span>
                   )}
+                  <div className="min-w-0 flex-1">
+                    <h2 className="line-clamp-2 break-words text-lg font-semibold leading-snug text-stone-100 group-hover:text-lime-300 transition">
+                      {meeting.title}
+                    </h2>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-stone-400">
+                      <span>{formatDate(meeting.startTime)}</span>
+                      <span>•</span>
+                      <span>{formatDuration(meeting.endTime - meeting.startTime)}</span>
+                      <span>•</span>
+                      <span className="capitalize">{meeting.source}</span>
+                    </div>
                   </div>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleDeleteMeeting(meeting.id, meeting.title);
+                    }}
+                    className="-mr-2 -mt-1.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-stone-500 transition hover:bg-rose-500/10 hover:text-rose-300"
+                    title="Delete meeting"
+                    aria-label={`Delete meeting ${meeting.title}`}
+                  >
+                    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <polyline points="3 6 5 6 21 6"></polyline>
+                      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                    </svg>
+                  </button>
                 </div>
-                <div className="flex items-center gap-2">
-                  {activeProgressMap[meeting.id] ? (
+
+                <div className="mt-auto flex flex-wrap items-center gap-1.5">
+                  {progress ? (
                     <div className="flex items-center gap-2 rounded-full border border-amber-500/40 bg-amber-950/40 px-3 py-1 text-xs text-amber-200">
                       <span className="h-2 w-2 rounded-full bg-amber-400 animate-ping" />
-                      <span className="font-semibold">{activeProgressMap[meeting.id].stage} ({Math.round(activeProgressMap[meeting.id].percent)}%)</span>
+                      <span className="font-semibold">{progress.stage} ({Math.round(progress.percent)}%)</span>
                     </div>
                   ) : (
                     <span
@@ -1073,39 +1172,33 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
                       Transcript
                     </span>
                   )}
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void handleDeleteMeeting(meeting.id, meeting.title);
-                    }}
-                    className="rounded-full border border-stone-700 p-1.5 text-stone-500 transition hover:border-rose-500/60 hover:text-rose-300"
-                    title="Delete meeting"
-                  >
-                    <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="3 6 5 6 21 6"></polyline>
-                      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                    </svg>
-                  </button>
+                  {meeting.tags.map((tag) => (
+                    <span
+                      key={tag}
+                      className="rounded-full border border-stone-700 bg-stone-800/80 px-2 py-0.5 text-[11px] text-stone-300"
+                    >
+                      {tag}
+                    </span>
+                  ))}
                 </div>
-              </div>
 
-              {activeProgressMap[meeting.id] && (
-                <div className="pt-1 space-y-1">
-                  <div className="flex justify-between text-[11px] text-stone-400">
-                    <span className="truncate max-w-[80%]">{activeProgressMap[meeting.id].message}</span>
-                    <span className="font-mono text-amber-300 font-bold">{Math.round(activeProgressMap[meeting.id].percent)}%</span>
+                {progress && (
+                  <div className="space-y-1">
+                    <div className="flex justify-between gap-2 text-[11px] text-stone-400">
+                      <span className="truncate max-w-[80%]">{progress.message}</span>
+                      <span className="font-mono text-amber-300 font-bold">{Math.round(progress.percent)}%</span>
+                    </div>
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-stone-800">
+                      <div
+                        className="h-full bg-gradient-to-r from-amber-500 to-lime-400 transition-all duration-300"
+                        style={{ width: `${Math.max(5, progress.percent)}%` }}
+                      />
+                    </div>
                   </div>
-                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-stone-800">
-                    <div
-                      className="h-full bg-gradient-to-r from-amber-500 to-lime-400 transition-all duration-300"
-                      style={{ width: `${Math.max(5, activeProgressMap[meeting.id].percent)}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-          ))}
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -1217,118 +1310,188 @@ function BulkTranscribeModal({
   const failures = (result?.results || []).filter((r) => r.status === "skipped").slice(0, 8);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/80 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-label="Bulk re-transcribe meetings">
-      <div className="w-full max-w-lg rounded-2xl border border-stone-800 bg-stone-900 p-6 shadow-2xl space-y-5 max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between border-b border-stone-800 pb-3">
-          <h3 className="text-lg font-bold">Bulk re-transcribe</h3>
-          <button type="button" onClick={onClose} className="text-stone-400 hover:text-stone-200 text-lg" aria-label="Close bulk re-transcribe">✕</button>
-        </div>
+    <Modal onClose={onClose} title={"Bulk re-transcribe"} ariaLabel="Bulk re-transcribe meetings" maxWidth="max-w-lg">
+      {error && <div className="rounded-xl border border-red-900 bg-red-950/40 p-3 text-xs text-red-200">{error}</div>}
 
-        {error && <div className="rounded-xl border border-red-900 bg-red-950/40 p-3 text-xs text-red-200">{error}</div>}
-
-        {result ? (
-          <div className="space-y-4 text-sm">
-            <div className="rounded-xl border border-lime-900 bg-lime-950/40 p-4 text-lime-200">
-              Queued {result.queued} of {result.total} meeting{result.total === 1 ? "" : "s"} with <strong>{result.provider}</strong>
-              {result.alreadyRunning > 0 && <span> ({result.alreadyRunning} already running)</span>}
-              {result.skipped > 0 && <span> ({result.skipped} skipped)</span>}. Watch progress on the meetings list.
-            </div>
-            {failures.length > 0 && (
-              <ul className="space-y-1 text-xs text-stone-400">
-                {failures.map((f) => (
-                  <li key={f.meetingId} className="rounded-lg border border-stone-800 bg-stone-950/60 px-3 py-2">
-                    <span className="font-mono text-stone-300">{f.meetingId.slice(0, 8)}…</span>: {f.error || "skipped"}
-                  </li>
-                ))}
-              </ul>
-            )}
-            <div className="flex justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => onQueued(
-                  `Bulk job ${result.bulkId}: queued ${result.queued}/${result.total} with ${result.provider}.`,
-                  (result.results || []).filter((r) => r.status === "running").map((r) => r.meetingId)
-                )}
-                className="rounded-lg bg-lime-400 px-5 py-2 text-sm font-semibold text-stone-950 hover:bg-lime-300 transition"
-              >
-                Done
-              </button>
-            </div>
+      {result ? (
+        <div className="space-y-4 text-sm">
+          <div className="rounded-xl border border-lime-900 bg-lime-950/40 p-4 text-lime-200">
+            Queued {result.queued} of {result.total} meeting{result.total === 1 ? "" : "s"} with <strong>{result.provider}</strong>
+            {result.alreadyRunning > 0 && <span> ({result.alreadyRunning} already running)</span>}
+            {result.skipped > 0 && <span> ({result.skipped} skipped)</span>}. Watch progress on the meetings list.
           </div>
-        ) : (
-          <form onSubmit={handleSubmit} className="space-y-4 text-sm">
-            <div className="grid gap-2">
-              <span className="text-xs font-semibold uppercase tracking-wider text-stone-400">Which meetings?</span>
-              <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-stone-800 bg-stone-950/60 px-3 py-2.5 hover:border-stone-600 transition">
-                <input type="radio" name="bulk-scope" checked={scope === "selected"} onChange={() => setScope("selected")} disabled={selectedIds.length === 0} className="accent-lime-400" />
-                <span>Selected meetings ({selectedIds.length}){selectedIds.length === 0 && " — tick meetings in the list first"}</span>
-              </label>
-              <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-stone-800 bg-stone-950/60 px-3 py-2.5 hover:border-stone-600 transition">
-                <input type="radio" name="bulk-scope" checked={scope === "filtered"} onChange={() => setScope("filtered")} className="accent-lime-400" />
-                <span>All meetings matching filters (whole library, server-side)</span>
-              </label>
-            </div>
+          {failures.length > 0 && (
+            <ul className="space-y-1 text-xs text-stone-400">
+              {failures.map((f) => (
+                <li key={f.meetingId} className="rounded-lg border border-stone-800 bg-stone-950/60 px-3 py-2">
+                  <span className="font-mono text-stone-300">{f.meetingId.slice(0, 8)}…</span>: {f.error || "skipped"}
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="flex justify-end gap-3">
+            <button
+              type="button"
+              onClick={() => onQueued(
+                `Bulk job ${result.bulkId}: queued ${result.queued}/${result.total} with ${result.provider}.`,
+                (result.results || []).filter((r) => r.status === "running").map((r) => r.meetingId)
+              )}
+              className="rounded-lg bg-lime-400 px-5 py-2 text-sm font-semibold text-stone-950 hover:bg-lime-300 transition"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      ) : (
+        <form onSubmit={handleSubmit} className="space-y-4 text-sm">
+          <div className="grid gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wider text-stone-400">Which meetings?</span>
+            <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-stone-800 bg-stone-950/60 px-3 py-2.5 hover:border-stone-600 transition">
+              <input type="radio" name="bulk-scope" checked={scope === "selected"} onChange={() => setScope("selected")} disabled={selectedIds.length === 0} className="accent-lime-400" />
+              <span>Selected meetings ({selectedIds.length}){selectedIds.length === 0 && " — tick meetings in the list first"}</span>
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-stone-800 bg-stone-950/60 px-3 py-2.5 hover:border-stone-600 transition">
+              <input type="radio" name="bulk-scope" checked={scope === "filtered"} onChange={() => setScope("filtered")} className="accent-lime-400" />
+              <span>All meetings matching filters (whole library, server-side)</span>
+            </label>
+          </div>
 
-            {scope === "filtered" && (
-              <div className="space-y-3 rounded-xl border border-stone-800 bg-stone-950/60 p-4">
-                <input
-                  type="text"
-                  placeholder="Search title, tags, transcript…"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none"
-                />
-                <div className="grid grid-cols-2 gap-3">
-                  <label className="space-y-1 text-xs text-stone-400">
-                    <span>From date</span>
-                    <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-stone-100 focus:border-lime-400 focus:outline-none" />
-                  </label>
-                  <label className="space-y-1 text-xs text-stone-400">
-                    <span>To date</span>
-                    <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-stone-100 focus:border-lime-400 focus:outline-none" />
-                  </label>
-                </div>
+          {scope === "filtered" && (
+            <div className="space-y-3 rounded-xl border border-stone-800 bg-stone-950/60 p-4">
+              <input
+                type="text"
+                placeholder="Search title, tags, transcript…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-base sm:text-sm text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none"
+              />
+              <div className="grid grid-cols-2 gap-3">
                 <label className="space-y-1 text-xs text-stone-400">
-                  <span>Current transcript provider</span>
-                  <select value={currentProvider} onChange={(e) => setCurrentProvider(e.target.value)} className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-stone-100 focus:border-lime-400 focus:outline-none">
-                    <option value="any">Any (no filter)</option>
-                    <option value="local">Local</option>
-                    <option value="speechmatics">Speechmatics</option>
-                    <option value="assemblyai">AssemblyAI</option>
-                    <option value="plaud">Plaud</option>
-                    <option value="none">No transcript yet</option>
-                  </select>
+                  <span>From date</span>
+                  <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none" />
+                </label>
+                <label className="space-y-1 text-xs text-stone-400">
+                  <span>To date</span>
+                  <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none" />
                 </label>
               </div>
-            )}
-
-            <label className="space-y-1 text-xs text-stone-400">
-              <span className="text-xs font-semibold uppercase tracking-wider">Transcribe with</span>
-              <select value={provider} onChange={(e) => setProvider(e.target.value)} className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-stone-100 focus:border-lime-400 focus:outline-none">
-                <option value="assemblyai">AssemblyAI (Cloud)</option>
-                <option value="speechmatics">Speechmatics (Cloud)</option>
-                <option value="local">Local (Cohere + Diarization)</option>
-              </select>
-            </label>
-
-            <label className="flex cursor-pointer items-center gap-2 text-xs text-stone-300">
-              <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} className="h-4 w-4 accent-lime-400" />
-              Force re-transcribe even if already done (recommended when switching engines)
-            </label>
-
-            <div className="flex justify-end gap-3 pt-1">
-              <button type="button" onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-stone-400 hover:text-stone-200">Cancel</button>
-              <button
-                type="submit"
-                disabled={submitting || (scope === "selected" && selectedIds.length === 0)}
-                className="rounded-lg bg-lime-400 px-5 py-2 text-sm font-semibold text-stone-950 hover:bg-lime-300 disabled:opacity-50 transition"
-              >
-                {submitting ? "Queueing…" : scope === "selected" ? `Queue ${selectedIds.length} meeting${selectedIds.length === 1 ? "" : "s"}` : "Queue matching meetings"}
-              </button>
+              <label className="space-y-1 text-xs text-stone-400">
+                <span>Current transcript provider</span>
+                <select value={currentProvider} onChange={(e) => setCurrentProvider(e.target.value)} className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none">
+                  <option value="any">Any (no filter)</option>
+                  <option value="local">Local</option>
+                  <option value="speechmatics">Speechmatics</option>
+                  <option value="assemblyai">AssemblyAI</option>
+                  <option value="plaud">Plaud</option>
+                  <option value="none">No transcript yet</option>
+                </select>
+              </label>
             </div>
-          </form>
-        )}
-      </div>
+          )}
+
+          <label className="space-y-1 text-xs text-stone-400">
+            <span className="text-xs font-semibold uppercase tracking-wider">Transcribe with</span>
+            <select value={provider} onChange={(e) => setProvider(e.target.value)} className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none">
+              <option value="assemblyai">AssemblyAI (Cloud)</option>
+              <option value="speechmatics">Speechmatics (Cloud)</option>
+              <option value="local">Local (Cohere + Diarization)</option>
+            </select>
+          </label>
+
+          <label className="flex cursor-pointer items-center gap-2 text-xs text-stone-300">
+            <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} className="h-4 w-4 accent-lime-400" />
+            Force re-transcribe even if already done (recommended when switching engines)
+          </label>
+
+          <div className="flex justify-end gap-3 pt-1">
+            <button type="button" onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-stone-400 hover:text-stone-200">Cancel</button>
+            <button
+              type="submit"
+              disabled={submitting || (scope === "selected" && selectedIds.length === 0)}
+              className="rounded-lg bg-lime-400 px-5 py-2 text-sm font-semibold text-stone-950 hover:bg-lime-300 disabled:opacity-50 transition"
+            >
+              {submitting ? "Queueing…" : scope === "selected" ? `Queue ${selectedIds.length} meeting${selectedIds.length === 1 ? "" : "s"}` : "Queue matching meetings"}
+            </button>
+          </div>
+        </form>
+      )}
+    </Modal>
+  );
+}
+
+function SegmentActionsMenu({
+  showConfirm,
+  showMerge,
+  showWrong,
+  onConfirm,
+  onChange,
+  onSplit,
+  onMerge,
+  onWrong
+}: {
+  showConfirm: boolean;
+  showMerge: boolean;
+  showWrong: boolean;
+  onConfirm: () => void;
+  onChange: () => void;
+  onSplit: () => void;
+  onMerge: () => void;
+  onWrong: () => void;
+}): ReactElement {
+  const [open, setOpen] = useState(false);
+  const pick = (action: () => void) => {
+    setOpen(false);
+    action();
+  };
+  const itemClass = "flex w-full min-h-[44px] items-center gap-2 px-3 text-left text-sm transition hover:bg-stone-800";
+
+  return (
+    <div className="relative shrink-0" onKeyDown={(event) => {
+      if (event.key === "Escape") setOpen(false);
+    }}>
+      <button
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Turn actions"
+        onClick={() => setOpen((prev) => !prev)}
+        className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-stone-700/80 bg-stone-800 text-lg leading-none text-stone-300 transition hover:bg-stone-700 hover:text-stone-100"
+      >
+        ⋯
+      </button>
+      {open && (
+        <>
+          <button
+            type="button"
+            aria-label="Close turn actions"
+            onClick={() => setOpen(false)}
+            className="fixed inset-0 z-40 cursor-default"
+          />
+          <div role="menu" className="absolute right-0 top-full z-50 mt-1 min-w-[190px] overflow-hidden rounded-xl border border-stone-700 bg-stone-900 py-1 shadow-2xl">
+            {showConfirm && (
+              <button type="button" role="menuitem" className={`${itemClass} font-semibold text-lime-400`} onClick={() => pick(onConfirm)} title="Confirm this speaker is correct & update voiceprint">
+                ✓ Confirm
+              </button>
+            )}
+            <button type="button" role="menuitem" className={`${itemClass} text-stone-200`} onClick={() => pick(onChange)} title="Change speaker for this turn or all turns">
+              ✎ Change
+            </button>
+            <button type="button" role="menuitem" className={`${itemClass} text-amber-400`} onClick={() => pick(onSplit)} title="Split this turn into two separate segments">
+              ✂ Split
+            </button>
+            {showMerge && (
+              <button type="button" role="menuitem" className={`${itemClass} text-stone-300`} onClick={() => pick(onMerge)} title="Merge this turn with the following turn">
+                ⛓ Merge
+              </button>
+            )}
+            {showWrong && (
+              <button type="button" role="menuitem" className={`${itemClass} text-rose-400`} onClick={() => pick(onWrong)} title="Mark as incorrect (reset to Unknown speaker)">
+                ✕ Wrong
+              </button>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1376,6 +1539,7 @@ function MeetingDetailView({
   const [savingTitle, setSavingTitle] = useState(false);
   const [newTagInput, setNewTagInput] = useState("");
   const [savingTags, setSavingTags] = useState(false);
+  const [mobileSection, setMobileSection] = useState<"summary" | "transcript" | null>(null);
 
   const startRename = () => {
     if (!detail) return;
@@ -1885,12 +2049,15 @@ function MeetingDetailView({
     summaries[0] ||
     null;
 
+  // Phone/tablet-portrait only: pick the active segment (defaults to Summary when one exists, else Transcript).
+  const activeSection = mobileSection ?? (summaries.length > 0 ? "summary" : "transcript");
+
   return (
     <div className="space-y-6">
       <button
         type="button"
         onClick={onBack}
-        className="flex items-center gap-2 text-sm text-stone-400 hover:text-lime-300 transition"
+        className="flex min-h-[44px] items-center gap-2 text-sm text-stone-400 hover:text-lime-300 transition"
       >
         ← Back to Meetings
       </button>
@@ -2003,7 +2170,7 @@ function MeetingDetailView({
               <button
                 type="button"
                 onClick={() => setShowChatPanel(true)}
-                className="inline-flex items-center gap-2 rounded-lg border border-cyan-400/40 bg-cyan-400/10 px-3.5 py-2 text-sm font-semibold text-cyan-300 transition hover:border-cyan-300/60 hover:bg-cyan-400/20 shadow-md shrink-0"
+                className="inline-flex min-h-[44px] basis-full items-center justify-center gap-2 rounded-lg border border-cyan-400/40 bg-cyan-400/10 px-3.5 py-2 text-sm font-semibold text-cyan-300 transition hover:border-cyan-300/60 hover:bg-cyan-400/20 shadow-md shrink-0 flex-1 sm:flex-none sm:basis-auto"
               >
                 <span>✦</span>
                 <span>Chat with Meeting</span>
@@ -2011,7 +2178,7 @@ function MeetingDetailView({
               <select
                 value={selectedEngine}
                 onChange={(e) => setSelectedEngine(e.target.value)}
-                className="rounded-lg border border-stone-800 bg-stone-900 px-3 py-2 text-xs text-stone-200 focus:border-lime-400 focus:outline-none max-w-full"
+                className="min-h-[44px] rounded-lg border border-stone-800 bg-stone-900 px-3 py-2 text-xs text-stone-200 focus:border-lime-400 focus:outline-none max-w-full"
               >
                 <option value="local:cohere">Local (Cohere + Diarization) (Default)</option>
                 <option value="speechmatics">Speechmatics (Cloud)</option>
@@ -2022,7 +2189,7 @@ function MeetingDetailView({
                 <button
                   type="button"
                   onClick={() => setShowDiarizationSettings(!showDiarizationSettings)}
-                  className={`rounded-lg border px-2.5 py-2 text-xs font-mono transition shrink-0 ${
+                  className={`min-h-[44px] rounded-lg border px-2.5 py-2 text-xs font-mono transition shrink-0 ${
                     showDiarizationSettings
                       ? "border-lime-400 bg-lime-400/20 text-lime-300"
                       : "border-stone-800 bg-stone-900 text-stone-400 hover:text-stone-200"
@@ -2037,7 +2204,7 @@ function MeetingDetailView({
                 type="button"
                 disabled={transcribing}
                 onClick={() => void handleTriggerTranscription()}
-                className="inline-flex items-center gap-2 rounded-lg bg-lime-400 px-4 py-2 text-sm font-semibold text-stone-950 transition hover:bg-lime-300 disabled:opacity-75 disabled:cursor-not-allowed shadow-md shrink-0"
+                className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-lime-400 px-4 py-2 text-sm font-semibold text-stone-950 transition hover:bg-lime-300 disabled:opacity-75 disabled:cursor-not-allowed shadow-md shrink-0"
               >
                 {transcribing && (
                   <svg className="h-4 w-4 animate-spin text-stone-950" viewBox="0 0 24 24" fill="none">
@@ -2065,7 +2232,7 @@ function MeetingDetailView({
                   type="button"
                   disabled={cancellingTranscription}
                   onClick={() => void handleCancelTranscription()}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm font-semibold text-rose-300 transition hover:bg-rose-500/20 hover:border-rose-500/60 disabled:opacity-50 shadow-md shrink-0"
+                  className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm font-semibold text-rose-300 transition hover:bg-rose-500/20 hover:border-rose-500/60 disabled:opacity-50 shadow-md shrink-0"
                   title="Cancel inflight transcription"
                 >
                   <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -2079,7 +2246,7 @@ function MeetingDetailView({
               <button
                 type="button"
                 onClick={() => void handleDeleteMeeting()}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm font-semibold text-rose-300 transition hover:bg-rose-500/20 hover:border-rose-500/60 shadow-md shrink-0"
+                className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm font-semibold text-rose-300 transition hover:bg-rose-500/20 hover:border-rose-500/60 shadow-md shrink-0"
                 title="Delete this meeting and all its artifacts"
               >
                 <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -2291,11 +2458,12 @@ function MeetingDetailView({
                   <span>{enhancedAudio ? "✨ Voice Enhanced (Active)" : "🔉 Original Raw Audio"}</span>
                 </button>
               </div>
+              <div className="rounded-xl bg-stone-800 p-1.5">
               <audio
                 ref={audioRef}
                 controls
                 src={`/api/meetings/${meetingId}/audio?enhanced=${enhancedAudio}`}
-                className="w-full max-w-full h-10 rounded"
+                className="block w-full max-w-full h-10 sm:h-11 rounded-full [color-scheme:dark]"
                 onTimeUpdate={() => {
                   if (audioRef.current && playbackStopMsRef.current !== null) {
                     if (audioRef.current.currentTime >= playbackStopMsRef.current / 1000) {
@@ -2314,11 +2482,34 @@ function MeetingDetailView({
                   playbackStopMsRef.current = null;
                 }}
               />
+              </div>
             </section>
           )}
 
+          {/* Phone/tablet-portrait section switcher (hidden at lg+, where all sections stack) */}
+          <div className="lg:hidden sticky top-14 sm:top-16 z-20 bg-stone-950 py-2">
+            <div role="tablist" aria-label="Meeting sections" className="grid grid-cols-2 gap-1 rounded-xl border border-stone-800 bg-stone-900 p-1">
+              {(["summary", "transcript"] as const).map((key) => (
+                <button
+                  key={key}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeSection === key}
+                  onClick={() => setMobileSection(key)}
+                  className={`min-h-[44px] rounded-lg border text-sm font-semibold transition ${
+                    activeSection === key
+                      ? "border-lime-400/40 bg-lime-400/20 text-lime-300"
+                      : "border-transparent text-stone-400 hover:text-stone-200"
+                  }`}
+                >
+                  {key === "summary" ? "Summary" : "Transcript"}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* AI Summaries Section */}
-          <section className="space-y-4">
+          <section className={`space-y-4 ${activeSection !== "summary" ? "hidden lg:block" : ""}`}>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <h2 className="text-xl font-semibold tracking-tight">AI Summaries</h2>
@@ -2504,7 +2695,7 @@ function MeetingDetailView({
           </section>
 
           {/* Transcript Viewer */}
-          <section className="space-y-4 w-full max-w-full min-w-0">
+          <section className={`space-y-4 w-full max-w-full min-w-0 ${activeSection !== "transcript" ? "hidden lg:block" : ""}`}>
             <div className="flex items-center justify-between gap-4">
               <h2 className="text-xl font-semibold tracking-tight">Transcript</h2>
               {confirmationNotice && (
@@ -2529,7 +2720,7 @@ function MeetingDetailView({
                           type="button"
                           onClick={() => handlePlaySegment(seg, idx)}
                           title={playingSegmentIndex === idx ? "Pause playback" : "Play only this turn"}
-                          className={`inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-mono transition cursor-pointer shrink-0 ${
+                          className={`inline-flex min-h-[40px] items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-mono transition cursor-pointer shrink-0 ${
                             playingSegmentIndex === idx
                               ? "bg-lime-400/20 text-lime-300 font-bold border border-lime-400/40 shadow-sm"
                               : "bg-stone-800/90 text-stone-400 hover:text-lime-300 hover:bg-stone-800 border border-stone-700/70"
@@ -2555,59 +2746,17 @@ function MeetingDetailView({
                         )}
                       </div>
 
-                      {/* Turn Action Buttons */}
-                      <div className="flex flex-wrap items-center gap-1">
-                        {!seg.verified && seg.speaker !== "Unknown" && (
-                          <button
-                            type="button"
-                            onClick={() => void handleConfirmSegment(seg.segmentIndex)}
-                            title={`Confirm "${seg.speaker}" is correct & update voiceprint`}
-                            className="rounded bg-lime-500/10 px-2 py-0.5 text-[11px] font-semibold text-lime-400 border border-lime-500/30 hover:bg-lime-500 hover:text-stone-950 transition"
-                          >
-                            ✓ Confirm
-                          </button>
-                        )}
-
-                        <button
-                          type="button"
-                          onClick={() => setReassigningSpeaker({ speaker: seg.speaker, segmentIndex: seg.segmentIndex })}
-                          title="Change speaker for this turn or all turns"
-                          className="rounded bg-stone-800 px-2 py-0.5 text-[11px] font-medium text-stone-300 border border-stone-700/80 hover:bg-stone-700 hover:text-stone-100 transition"
-                        >
-                          ✎ Change
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => setSplittingSegment(seg)}
-                          title="Split this turn into two separate segments"
-                          className="rounded bg-stone-800 px-2 py-0.5 text-[11px] font-medium text-amber-400 border border-stone-700/80 hover:bg-amber-400 hover:text-stone-950 transition"
-                        >
-                          ✂ Split
-                        </button>
-
-                        {idx < parsedTranscriptSegments.length - 1 && (
-                          <button
-                            type="button"
-                            onClick={() => void handleMergeWithNext(seg.segmentIndex)}
-                            title="Merge this turn with the following turn"
-                            className="rounded bg-stone-800 px-2 py-0.5 text-[11px] font-medium text-stone-400 border border-stone-700/80 hover:bg-stone-700 hover:text-stone-200 transition"
-                          >
-                            ⛓ Merge
-                          </button>
-                        )}
-
-                        {seg.speaker !== "Unknown" && (
-                          <button
-                            type="button"
-                            onClick={() => void handleUnassignSegment(seg.segmentIndex)}
-                            title="Mark as incorrect (reset to Unknown speaker)"
-                            className="rounded bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-400 border border-rose-500/30 hover:bg-rose-500 hover:text-stone-950 transition"
-                          >
-                            ✕ Wrong
-                          </button>
-                        )}
-                      </div>
+                      {/* Turn actions menu */}
+                      <SegmentActionsMenu
+                        showConfirm={!seg.verified && seg.speaker !== "Unknown"}
+                        showMerge={idx < parsedTranscriptSegments.length - 1}
+                        showWrong={seg.speaker !== "Unknown"}
+                        onConfirm={() => void handleConfirmSegment(seg.segmentIndex)}
+                        onChange={() => setReassigningSpeaker({ speaker: seg.speaker, segmentIndex: seg.segmentIndex })}
+                        onSplit={() => setSplittingSegment(seg)}
+                        onMerge={() => void handleMergeWithNext(seg.segmentIndex)}
+                        onWrong={() => void handleUnassignSegment(seg.segmentIndex)}
+                      />
                     </div>
 
                     {/* Turn Content */}
@@ -2825,135 +2974,122 @@ function GenerateSummaryModal({
   const selectedModelObj = models.find((m) => m.provider === selectedProvider && m.id === selectedModel);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm overflow-y-auto">
-      <div className="relative w-full max-w-lg rounded-xl border border-stone-800 bg-stone-900 p-6 shadow-2xl space-y-5 my-8">
-        <div className="flex items-center justify-between border-b border-stone-800 pb-3">
-          <h3 className="text-lg font-semibold text-stone-100">Generate AI Summary</h3>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-stone-400 hover:text-stone-200 transition"
-          >
-            ✕
-          </button>
+    <Modal onClose={onClose} title={"Generate AI Summary"} ariaLabel="Generate AI summary" maxWidth="max-w-lg">
+      {error && (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300">
+          {error}
         </div>
+      )}
 
-        {error && (
-          <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300">
-            {error}
+      {loading ? (
+        <div className="p-8 text-center text-sm text-stone-400">Loading templates & models…</div>
+      ) : (
+        <form onSubmit={handleGenerate} className="space-y-4">
+          <div className="space-y-1">
+            <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
+              Summary Template
+            </label>
+            <select
+              value={selectedTemplateId}
+              onChange={(e) => setSelectedTemplateId(e.target.value)}
+              className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none"
+            >
+              {templates.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name} {t.isDefault ? "(Default)" : ""} {t.isBuiltin ? "" : "★ Custom"}
+                </option>
+              ))}
+            </select>
           </div>
-        )}
 
-        {loading ? (
-          <div className="p-8 text-center text-sm text-stone-400">Loading templates & models…</div>
-        ) : (
-          <form onSubmit={handleGenerate} className="space-y-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-1">
               <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
-                Summary Template
+                AI Provider
               </label>
               <select
-                value={selectedTemplateId}
-                onChange={(e) => setSelectedTemplateId(e.target.value)}
-                className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100 focus:border-lime-400 focus:outline-none"
+                value={selectedProvider}
+                onChange={(e) => handleProviderChange(e.target.value)}
+                className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none capitalize"
               >
-                {templates.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name} {t.isDefault ? "(Default)" : ""} {t.isBuiltin ? "" : "★ Custom"}
+                {providers.map((p) => (
+                  <option key={p} value={p}>
+                    {p}
                   </option>
                 ))}
               </select>
             </div>
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <div className="space-y-1">
-                <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
-                  AI Provider
-                </label>
-                <select
-                  value={selectedProvider}
-                  onChange={(e) => handleProviderChange(e.target.value)}
-                  className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100 focus:border-lime-400 focus:outline-none capitalize"
-                >
-                  {providers.map((p) => (
-                    <option key={p} value={p}>
-                      {p}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
-                  Model
-                </label>
-                <select
-                  value={selectedModel}
-                  onChange={(e) => handleModelChange(e.target.value)}
-                  className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100 focus:border-lime-400 focus:outline-none"
-                >
-                  {providerModels.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name} {m.reasoning ? "🧠" : ""}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            {selectedModelObj && selectedModelObj.reasoning && (
-              <div className="space-y-1">
-                <label className="text-xs font-medium uppercase tracking-wider text-stone-400 flex items-center gap-1.5">
-                  <span>🧠 Thinking / Reasoning Level</span>
-                </label>
-                <select
-                  value={thinkingLevel}
-                  onChange={(e) => setThinkingLevel(e.target.value)}
-                  className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100 focus:border-lime-400 focus:outline-none capitalize"
-                >
-                  {(selectedModelObj.supportedThinkingLevels || ["low", "medium", "high"]).map((lvl) => (
-                    <option key={lvl} value={lvl}>
-                      {lvl === "off" ? "Off (Standard Response)" : `${lvl.charAt(0).toUpperCase() + lvl.slice(1)} Thinking`}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            <div className="flex items-center gap-2 pt-1">
-              <input
-                type="checkbox"
-                id="setPrimarySummary"
-                checked={setPrimary}
-                onChange={(e) => setSetPrimary(e.target.checked)}
-                className="rounded border-stone-700 bg-stone-950 text-lime-400 focus:ring-lime-400"
-              />
-              <label htmlFor="setPrimarySummary" className="text-xs text-stone-300 cursor-pointer">
-                Set as primary summary for this meeting
+            <div className="space-y-1">
+              <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
+                Model
               </label>
+              <select
+                value={selectedModel}
+                onChange={(e) => handleModelChange(e.target.value)}
+                className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none"
+              >
+                {providerModels.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name} {m.reasoning ? "🧠" : ""}
+                  </option>
+                ))}
+              </select>
             </div>
+          </div>
 
-            <div className="flex justify-end gap-3 border-t border-stone-800 pt-4">
-              <button
-                type="button"
-                onClick={onClose}
-                disabled={starting}
-                className="rounded-lg border border-stone-700 px-4 py-2 text-xs font-medium text-stone-300 hover:bg-stone-800 transition"
+          {selectedModelObj && selectedModelObj.reasoning && (
+            <div className="space-y-1">
+              <label className="text-xs font-medium uppercase tracking-wider text-stone-400 flex items-center gap-1.5">
+                <span>🧠 Thinking / Reasoning Level</span>
+              </label>
+              <select
+                value={thinkingLevel}
+                onChange={(e) => setThinkingLevel(e.target.value)}
+                className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none capitalize"
               >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={starting}
-                className="inline-flex items-center gap-2 rounded-lg bg-lime-400 px-4 py-2 text-xs font-semibold text-stone-950 transition hover:bg-lime-300 disabled:opacity-50"
-              >
-                {starting ? "Starting…" : "Generate Summary"}
-              </button>
+                {(selectedModelObj.supportedThinkingLevels || ["low", "medium", "high"]).map((lvl) => (
+                  <option key={lvl} value={lvl}>
+                    {lvl === "off" ? "Off (Standard Response)" : `${lvl.charAt(0).toUpperCase() + lvl.slice(1)} Thinking`}
+                  </option>
+                ))}
+              </select>
             </div>
-          </form>
-        )}
-      </div>
-    </div>
+          )}
+
+          <div className="flex items-center gap-2 pt-1">
+            <input
+              type="checkbox"
+              id="setPrimarySummary"
+              checked={setPrimary}
+              onChange={(e) => setSetPrimary(e.target.checked)}
+              className="rounded border-stone-700 bg-stone-950 text-lime-400 focus:ring-lime-400"
+            />
+            <label htmlFor="setPrimarySummary" className="text-xs text-stone-300 cursor-pointer">
+              Set as primary summary for this meeting
+            </label>
+          </div>
+
+          <div className="flex justify-end gap-3 border-t border-stone-800 pt-4">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={starting}
+              className="rounded-lg border border-stone-700 px-4 py-2 text-xs font-medium text-stone-300 hover:bg-stone-800 transition"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={starting}
+              className="inline-flex items-center gap-2 rounded-lg bg-lime-400 px-4 py-2 text-xs font-semibold text-stone-950 transition hover:bg-lime-300 disabled:opacity-50"
+            >
+              {starting ? "Starting…" : "Generate Summary"}
+            </button>
+          </div>
+        </form>
+      )}
+    </Modal>
   );
 }
 
@@ -3034,117 +3170,108 @@ function ReassignSpeakerModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/80 backdrop-blur-sm p-4">
-      <div className="w-full max-w-md rounded-2xl border border-stone-800 bg-stone-900 p-6 shadow-2xl space-y-5">
-        <div className="flex items-center justify-between border-b border-stone-800 pb-3">
-          <h3 className="text-lg font-semibold">Assign Speaker: "{fromLabel}"</h3>
-          <button type="button" onClick={onClose} className="text-stone-400 hover:text-stone-200 text-lg">
-            ✕
-          </button>
+    <Modal onClose={onClose} title={<>Assign Speaker: "{fromLabel}"</>} ariaLabel="Assign speaker" maxWidth="max-w-md">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {segmentIndex !== undefined && (
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
+              Apply Scope
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setScope("single")}
+                className={`rounded-lg border px-3 py-2 text-xs font-semibold transition text-left ${
+                  scope === "single"
+                    ? "border-lime-400 bg-lime-400/20 text-lime-300"
+                    : "border-stone-800 bg-stone-950 text-stone-400 hover:text-stone-200"
+                }`}
+              >
+                <div className="font-bold">This turn only</div>
+                <div className="text-[10px] text-stone-400 font-normal mt-0.5">Correct single turn</div>
+              </button>
+              <button
+                type="button"
+                onClick={() => setScope("all")}
+                className={`rounded-lg border px-3 py-2 text-xs font-semibold transition text-left ${
+                  scope === "all"
+                    ? "border-lime-400 bg-lime-400/20 text-lime-300"
+                    : "border-stone-800 bg-stone-950 text-stone-400 hover:text-stone-200"
+                }`}
+              >
+                <div className="font-bold">All "{fromLabel}" turns</div>
+                <div className="text-[10px] text-stone-400 font-normal mt-0.5">Batch rename all</div>
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div>
+          <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1">
+            Select Person
+          </label>
+          <select
+            value={selectedSpeakerId}
+            onChange={(e) => setSelectedSpeakerId(e.target.value)}
+            className="w-full rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none"
+          >
+            <option value="">-- Create new or choose person --</option>
+            <option value="new">+ Create New Person</option>
+            {knownSpeakers.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name} ({s.providerIds.speechmatics?.length || s.providerIds.local?.length ? "Voiceprint enrolled" : "Discovered"})
+              </option>
+            ))}
+          </select>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {segmentIndex !== undefined && (
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
-                Apply Scope
-              </label>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setScope("single")}
-                  className={`rounded-lg border px-3 py-2 text-xs font-semibold transition text-left ${
-                    scope === "single"
-                      ? "border-lime-400 bg-lime-400/20 text-lime-300"
-                      : "border-stone-800 bg-stone-950 text-stone-400 hover:text-stone-200"
-                  }`}
-                >
-                  <div className="font-bold">This turn only</div>
-                  <div className="text-[10px] text-stone-400 font-normal mt-0.5">Correct single turn</div>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setScope("all")}
-                  className={`rounded-lg border px-3 py-2 text-xs font-semibold transition text-left ${
-                    scope === "all"
-                      ? "border-lime-400 bg-lime-400/20 text-lime-300"
-                      : "border-stone-800 bg-stone-950 text-stone-400 hover:text-stone-200"
-                  }`}
-                >
-                  <div className="font-bold">All "{fromLabel}" turns</div>
-                  <div className="text-[10px] text-stone-400 font-normal mt-0.5">Batch rename all</div>
-                </button>
-              </div>
-            </div>
-          )}
-
+        {(selectedSpeakerId === "new" || !selectedSpeakerId) && (
           <div>
             <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1">
-              Select Person
+              Person Name
             </label>
-            <select
-              value={selectedSpeakerId}
-              onChange={(e) => setSelectedSpeakerId(e.target.value)}
-              className="w-full rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-sm text-stone-100 focus:border-lime-400 focus:outline-none"
-            >
-              <option value="">-- Create new or choose person --</option>
-              <option value="new">+ Create New Person</option>
-              {knownSpeakers.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name} ({s.providerIds.speechmatics?.length || s.providerIds.local?.length ? "Voiceprint enrolled" : "Discovered"})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {(selectedSpeakerId === "new" || !selectedSpeakerId) && (
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1">
-                Person Name
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. Matt Cowger"
-                value={customName}
-                onChange={(e) => setCustomName(e.target.value)}
-                className="w-full rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-sm text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none"
-              />
-            </div>
-          )}
-
-          <div className="flex items-center gap-3 rounded-lg border border-stone-800 bg-stone-950/50 p-3">
             <input
-              type="checkbox"
-              id="voiceprint-toggle"
-              checked={adoptVoiceprint}
-              onChange={(e) => setAdoptVoiceprint(e.target.checked)}
-              className="h-4 w-4 rounded border-stone-700 bg-stone-900 text-lime-400 focus:ring-lime-400"
+              type="text"
+              placeholder="e.g. Matt Cowger"
+              value={customName}
+              onChange={(e) => setCustomName(e.target.value)}
+              className="w-full rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none"
             />
-            <label htmlFor="voiceprint-toggle" className="text-xs text-stone-300 leading-snug cursor-pointer">
-              <span className="font-semibold text-stone-100">Learn voiceprint from this audio</span>
-              <br />
-              Olive will automatically recognize and attribute this person in future meetings.
-            </label>
           </div>
+        )}
 
-          <div className="flex justify-end gap-3 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-lg px-4 py-2 text-sm font-medium text-stone-400 hover:text-stone-200"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="rounded-lg bg-lime-400 px-4 py-2 text-sm font-semibold text-stone-950 hover:bg-lime-300 transition shadow-md"
-            >
-              Apply & Save
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+        <div className="flex items-center gap-3 rounded-lg border border-stone-800 bg-stone-950/50 p-3">
+          <input
+            type="checkbox"
+            id="voiceprint-toggle"
+            checked={adoptVoiceprint}
+            onChange={(e) => setAdoptVoiceprint(e.target.checked)}
+            className="h-4 w-4 rounded border-stone-700 bg-stone-900 text-lime-400 focus:ring-lime-400"
+          />
+          <label htmlFor="voiceprint-toggle" className="text-xs text-stone-300 leading-snug cursor-pointer">
+            <span className="font-semibold text-stone-100">Learn voiceprint from this audio</span>
+            <br />
+            Olive will automatically recognize and attribute this person in future meetings.
+          </label>
+        </div>
+
+        <div className="flex justify-end gap-3 pt-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg px-4 py-2 text-sm font-medium text-stone-400 hover:text-stone-200"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className="rounded-lg bg-lime-400 px-4 py-2 text-sm font-semibold text-stone-950 hover:bg-lime-300 transition shadow-md"
+          >
+            Apply & Save
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
@@ -3232,147 +3359,131 @@ function SplitSegmentModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/80 backdrop-blur-sm p-4">
-      <div className="w-full max-w-2xl rounded-2xl border border-stone-800 bg-stone-900 p-6 shadow-2xl space-y-5">
-        <div className="flex items-center justify-between border-b border-stone-800 pb-3">
-          <div>
-            <h3 className="text-lg font-semibold flex items-center gap-2">
-              <span>✂ Split Turn:</span>
-              <span className="text-lime-400">{segment.speaker}</span>
-            </h3>
-            <p className="text-xs text-stone-400 mt-0.5">
-              Click any word to choose where to split this turn into two separate segments.
-            </p>
+    <Modal onClose={onClose} title={<><span>✂ Split Turn:</span> <span className="text-lime-400">{segment.speaker}</span></>} ariaLabel="Split turn" maxWidth="max-w-2xl">
+      <p className="text-xs text-stone-400">Click any word to choose where to split this turn into two separate segments.</p>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {/* Interactive Word Picker */}
+        <div>
+          <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-2">
+            Select Split Point (Click any word)
+          </label>
+          <div className="rounded-xl border border-stone-800 bg-stone-950 p-4 leading-loose flex flex-wrap gap-1.5 items-center max-h-56 overflow-y-auto">
+            {words.map((word, idx) => {
+              const isPart1 = idx < splitWordIndex;
+              const isSplitTarget = idx === splitWordIndex;
+              return (
+                <Fragment key={idx}>
+                  {isSplitTarget && (
+                    <span className="inline-flex items-center gap-1 rounded bg-amber-400 px-1.5 py-0.5 text-[11px] font-bold text-stone-950 shadow-md animate-pulse">
+                      ✂ Split Point
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setSplitWordIndex(idx === 0 ? 1 : idx)}
+                    className={`rounded px-1.5 py-0.5 text-xs font-medium transition cursor-pointer ${
+                      isPart1
+                        ? "bg-lime-500/20 text-lime-300 border border-lime-500/40 hover:bg-lime-500/30"
+                        : "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 hover:bg-cyan-500/30"
+                    }`}
+                    title={`Click to split before "${word}"`}
+                  >
+                    {word}
+                  </button>
+                </Fragment>
+              );
+            })}
           </div>
-          <button type="button" onClick={onClose} className="text-stone-400 hover:text-stone-200 text-lg">
-            ✕
-          </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Interactive Word Picker */}
+        {/* Split Comparison Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {/* Part 1 */}
+          <div className="rounded-xl border border-lime-500/30 bg-lime-950/10 p-3.5 space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-semibold text-lime-400 uppercase tracking-wide">
+                Part 1 ({segment.speaker})
+              </span>
+              <span className="font-mono text-stone-400 text-[11px]">
+                {formatTimeOffset(segment.startMs)} → {formatTimeOffset(splitTimestamp)}
+              </span>
+            </div>
+            <p className="text-xs text-stone-300 line-clamp-4 italic">
+              "{part1Text || "(empty)"}"
+            </p>
+          </div>
+
+          {/* Part 2 */}
+          <div className="rounded-xl border border-cyan-500/30 bg-cyan-950/10 p-3.5 space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-semibold text-cyan-400 uppercase tracking-wide">
+                Part 2 ({part2SpeakerName})
+              </span>
+              <span className="font-mono text-stone-400 text-[11px]">
+                {formatTimeOffset(splitTimestamp)} → {formatTimeOffset(segment.endMs)}
+              </span>
+            </div>
+            <p className="text-xs text-stone-300 line-clamp-4 italic">
+              "{part2Text || "(empty)"}"
+            </p>
+          </div>
+        </div>
+
+        {/* Reassign Part 2 Speaker */}
+        <div className="space-y-3 pt-1 border-t border-stone-800">
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-2">
-              Select Split Point (Click any word)
+            <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1">
+              Speaker for Part 2
             </label>
-            <div className="rounded-xl border border-stone-800 bg-stone-950 p-4 leading-loose flex flex-wrap gap-1.5 items-center max-h-56 overflow-y-auto">
-              {words.map((word, idx) => {
-                const isPart1 = idx < splitWordIndex;
-                const isSplitTarget = idx === splitWordIndex;
-                return (
-                  <Fragment key={idx}>
-                    {isSplitTarget && (
-                      <span className="inline-flex items-center gap-1 rounded bg-amber-400 px-1.5 py-0.5 text-[11px] font-bold text-stone-950 shadow-md animate-pulse">
-                        ✂ Split Point
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => setSplitWordIndex(idx === 0 ? 1 : idx)}
-                      className={`rounded px-1.5 py-0.5 text-xs font-medium transition cursor-pointer ${
-                        isPart1
-                          ? "bg-lime-500/20 text-lime-300 border border-lime-500/40 hover:bg-lime-500/30"
-                          : "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 hover:bg-cyan-500/30"
-                      }`}
-                      title={`Click to split before "${word}"`}
-                    >
-                      {word}
-                    </button>
-                  </Fragment>
-                );
-              })}
-            </div>
+            <select
+              value={selectedSpeakerId}
+              onChange={(e) => setSelectedSpeakerId(e.target.value)}
+              className="w-full rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-cyan-400 focus:outline-none"
+            >
+              <option value="">Keep as "{segment.speaker}"</option>
+              <option value="new">+ Create New Person</option>
+              {knownSpeakers.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} ({s.providerIds.speechmatics?.length || s.providerIds.local?.length ? "Voiceprint enrolled" : "Discovered"})
+                </option>
+              ))}
+            </select>
           </div>
 
-          {/* Split Comparison Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {/* Part 1 */}
-            <div className="rounded-xl border border-lime-500/30 bg-lime-950/10 p-3.5 space-y-2">
-              <div className="flex items-center justify-between text-xs">
-                <span className="font-semibold text-lime-400 uppercase tracking-wide">
-                  Part 1 ({segment.speaker})
-                </span>
-                <span className="font-mono text-stone-400 text-[11px]">
-                  {formatTimeOffset(segment.startMs)} → {formatTimeOffset(splitTimestamp)}
-                </span>
-              </div>
-              <p className="text-xs text-stone-300 line-clamp-4 italic">
-                "{part1Text || "(empty)"}"
-              </p>
-            </div>
-
-            {/* Part 2 */}
-            <div className="rounded-xl border border-cyan-500/30 bg-cyan-950/10 p-3.5 space-y-2">
-              <div className="flex items-center justify-between text-xs">
-                <span className="font-semibold text-cyan-400 uppercase tracking-wide">
-                  Part 2 ({part2SpeakerName})
-                </span>
-                <span className="font-mono text-stone-400 text-[11px]">
-                  {formatTimeOffset(splitTimestamp)} → {formatTimeOffset(segment.endMs)}
-                </span>
-              </div>
-              <p className="text-xs text-stone-300 line-clamp-4 italic">
-                "{part2Text || "(empty)"}"
-              </p>
-            </div>
-          </div>
-
-          {/* Reassign Part 2 Speaker */}
-          <div className="space-y-3 pt-1 border-t border-stone-800">
+          {selectedSpeakerId === "new" && (
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1">
-                Speaker for Part 2
+                New Person Name
               </label>
-              <select
-                value={selectedSpeakerId}
-                onChange={(e) => setSelectedSpeakerId(e.target.value)}
-                className="w-full rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-sm text-stone-100 focus:border-cyan-400 focus:outline-none"
-              >
-                <option value="">Keep as "{segment.speaker}"</option>
-                <option value="new">+ Create New Person</option>
-                {knownSpeakers.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} ({s.providerIds.speechmatics?.length || s.providerIds.local?.length ? "Voiceprint enrolled" : "Discovered"})
-                  </option>
-                ))}
-              </select>
+              <input
+                type="text"
+                placeholder="e.g. Harrison"
+                value={customName}
+                onChange={(e) => setCustomName(e.target.value)}
+                className="w-full rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 placeholder-stone-500 focus:border-cyan-400 focus:outline-none"
+              />
             </div>
+          )}
+        </div>
 
-            {selectedSpeakerId === "new" && (
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1">
-                  New Person Name
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. Harrison"
-                  value={customName}
-                  onChange={(e) => setCustomName(e.target.value)}
-                  className="w-full rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-sm text-stone-100 placeholder-stone-500 focus:border-cyan-400 focus:outline-none"
-                />
-              </div>
-            )}
-          </div>
-
-          <div className="flex justify-end gap-3 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-lg px-4 py-2 text-sm font-medium text-stone-400 hover:text-stone-200"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={submitting || !part1Text || !part2Text}
-              className="rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-stone-950 hover:bg-amber-300 disabled:opacity-50 transition"
-            >
-              {submitting ? "Splitting…" : "Confirm & Split Turn"}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+        <div className="flex justify-end gap-3 pt-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg px-4 py-2 text-sm font-medium text-stone-400 hover:text-stone-200"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={submitting || !part1Text || !part2Text}
+            className="rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-stone-950 hover:bg-amber-300 disabled:opacity-50 transition"
+          >
+            {submitting ? "Splitting…" : "Confirm & Split Turn"}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
@@ -3456,98 +3567,89 @@ function UploadAudioModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/80 backdrop-blur-sm p-4">
-      <div className="w-full max-w-md rounded-2xl border border-stone-800 bg-stone-900 p-6 shadow-2xl space-y-5">
-        <div className="flex items-center justify-between border-b border-stone-800 pb-3">
-          <h3 className="text-lg font-bold">Upload Audio Recording</h3>
-          <button type="button" onClick={onClose} className="text-stone-400 hover:text-stone-200 text-lg">
-            ✕
-          </button>
+    <Modal onClose={onClose} title={"Upload Audio Recording"} ariaLabel="Upload audio recording" maxWidth="max-w-md">
+      {error && <div className="rounded-xl border border-red-900 bg-red-950/40 p-3 text-xs text-red-200">{error}</div>}
+
+      <form onSubmit={handleUpload} className="space-y-4 text-sm">
+        <div>
+          <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1">
+            Audio File (.m4a, .mp3, .wav, .aac, .ogg, .flac)
+          </label>
+          <input
+            type="file"
+            required
+            accept="audio/*,.m4a,.mp3,.wav,.aac,.ogg,.flac,.webm"
+            onChange={handleFileChange}
+            className="w-full rounded-lg border border-stone-800 bg-stone-950 p-2.5 text-base sm:text-sm text-stone-200 file:mr-3 file:rounded-md file:border-0 file:bg-stone-800 file:px-3 file:py-1 file:text-sm file:font-semibold file:text-lime-300 hover:file:bg-stone-700"
+          />
+          {file && (
+            <p className="mt-1 text-xs text-stone-400">
+              Selected: {file.name} ({(file.size / 1024 / 1024).toFixed(2)} MB)
+            </p>
+          )}
         </div>
 
-        {error && <div className="rounded-xl border border-red-900 bg-red-950/40 p-3 text-xs text-red-200">{error}</div>}
+        <div>
+          <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1">
+            Meeting / Recording Title
+          </label>
+          <input
+            type="text"
+            placeholder="e.g. Planning Session with Team"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            className="w-full rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none"
+          />
+        </div>
 
-        <form onSubmit={handleUpload} className="space-y-4 text-sm">
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1">
-              Audio File (.m4a, .mp3, .wav, .aac, .ogg, .flac)
-            </label>
+        <div className="space-y-2 rounded-lg border border-stone-800 bg-stone-950/50 p-3">
+          <div className="flex items-center gap-2">
             <input
-              type="file"
-              required
-              accept="audio/*,.m4a,.mp3,.wav,.aac,.ogg,.flac,.webm"
-              onChange={handleFileChange}
-              className="w-full rounded-lg border border-stone-800 bg-stone-950 p-2.5 text-xs text-stone-200 file:mr-3 file:rounded-md file:border-0 file:bg-stone-800 file:px-3 file:py-1 file:text-xs file:font-semibold file:text-lime-300 hover:file:bg-stone-700"
+              type="checkbox"
+              id="auto-transcribe"
+              checked={autoTranscribe}
+              onChange={(e) => setAutoTranscribe(e.target.checked)}
+              className="h-4 w-4 rounded border-stone-700 bg-stone-900 text-lime-400 focus:ring-lime-400"
             />
-            {file && (
-              <p className="mt-1 text-xs text-stone-400">
-                Selected: {file.name} ({(file.size / 1024 / 1024).toFixed(2)} MB)
-              </p>
-            )}
+            <label htmlFor="auto-transcribe" className="text-xs font-semibold text-stone-200 cursor-pointer">
+              Automatically transcribe after upload
+            </label>
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1">
-              Meeting / Recording Title
-            </label>
-            <input
-              type="text"
-              placeholder="e.g. Planning Session with Team"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              className="w-full rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-sm text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none"
-            />
-          </div>
-
-          <div className="space-y-2 rounded-lg border border-stone-800 bg-stone-950/50 p-3">
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                id="auto-transcribe"
-                checked={autoTranscribe}
-                onChange={(e) => setAutoTranscribe(e.target.checked)}
-                className="h-4 w-4 rounded border-stone-700 bg-stone-900 text-lime-400 focus:ring-lime-400"
-              />
-              <label htmlFor="auto-transcribe" className="text-xs font-semibold text-stone-200 cursor-pointer">
-                Automatically transcribe after upload
-              </label>
+          {autoTranscribe && (
+            <div className="pt-2 pl-6">
+              <label className="block text-xs text-stone-400 mb-1">Transcription Engine:</label>
+              <select
+                value={selectedEngine}
+                onChange={(e) => setSelectedEngine(e.target.value)}
+                className="w-full rounded border border-stone-700 bg-stone-900 px-2 py-1 text-base sm:text-sm text-stone-200"
+              >
+                <option value="local:cohere">Local (Cohere + Diarization) (Default)</option>
+                <option value="speechmatics">Speechmatics (Cloud API)</option>
+                <option value="assemblyai">AssemblyAI (Cloud API)</option>
+              </select>
             </div>
+          )}
+        </div>
 
-            {autoTranscribe && (
-              <div className="pt-2 pl-6">
-                <label className="block text-xs text-stone-400 mb-1">Transcription Engine:</label>
-                <select
-                  value={selectedEngine}
-                  onChange={(e) => setSelectedEngine(e.target.value)}
-                  className="w-full rounded border border-stone-700 bg-stone-900 px-2 py-1 text-xs text-stone-200"
-                >
-                  <option value="local:cohere">Local (Cohere + Diarization) (Default)</option>
-                  <option value="speechmatics">Speechmatics (Cloud API)</option>
-                  <option value="assemblyai">AssemblyAI (Cloud API)</option>
-                </select>
-              </div>
-            )}
-          </div>
-
-          <div className="flex justify-end gap-3 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-lg px-4 py-2 text-sm text-stone-400 hover:text-stone-200"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={uploading || !file}
-              className="rounded-lg bg-lime-400 px-5 py-2 text-sm font-semibold text-stone-950 hover:bg-lime-300 disabled:opacity-50 transition"
-            >
-              {uploading ? "Ingesting…" : "Upload & Save"}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+        <div className="flex justify-end gap-3 pt-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg px-4 py-2 text-sm text-stone-400 hover:text-stone-200"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={uploading || !file}
+            className="rounded-lg bg-lime-400 px-5 py-2 text-sm font-semibold text-stone-950 hover:bg-lime-300 disabled:opacity-50 transition"
+          >
+            {uploading ? "Ingesting…" : "Upload & Save"}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
@@ -3672,12 +3774,12 @@ function SpeakersListView({
                           type="text"
                           value={editingName}
                           onChange={(e) => setEditingName(e.target.value)}
-                          className="rounded border border-stone-700 bg-stone-950 px-2 py-1 text-sm text-stone-100"
+                          className="min-h-[44px] min-w-0 rounded border border-stone-700 bg-stone-950 px-2 py-1 text-base text-stone-100 sm:min-h-0 sm:text-sm"
                         />
                         <button
                           type="button"
                           onClick={() => void handleRename(s.id)}
-                          className="text-xs bg-lime-400 text-stone-950 px-2 py-1 rounded font-semibold"
+                          className="min-h-[44px] shrink-0 rounded bg-lime-400 px-3 text-sm font-semibold text-stone-950 sm:min-h-0 sm:px-2 sm:py-1 sm:text-xs"
                         >
                           Save
                         </button>
@@ -3691,7 +3793,7 @@ function SpeakersListView({
                             setEditingId(s.id);
                             setEditingName(s.name);
                           }}
-                          className="text-xs text-stone-500 hover:text-stone-300"
+                          className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center text-xs text-stone-500 hover:text-stone-300 sm:min-h-0 sm:min-w-0"
                         >
                           ✎
                         </button>
@@ -3753,7 +3855,7 @@ function SpeakersListView({
                     <select
                       value={targetMergeId}
                       onChange={(e) => setTargetMergeId(e.target.value)}
-                      className="w-full rounded border border-stone-700 bg-stone-950 px-2 py-1 text-xs text-stone-100"
+                      className="min-h-[44px] w-full rounded border border-stone-700 bg-stone-950 px-2 py-1 text-base text-stone-100 sm:min-h-0 sm:text-xs"
                     >
                       <option value="">-- Choose target --</option>
                       {speakers
@@ -3768,32 +3870,32 @@ function SpeakersListView({
                       <button
                         type="button"
                         onClick={() => setMergingId(null)}
-                        className="text-xs text-stone-400 px-2 py-1"
+                        className="min-h-[44px] px-3 text-sm text-stone-400 sm:min-h-0 sm:px-2 sm:py-1 sm:text-xs"
                       >
                         Cancel
                       </button>
                       <button
                         type="button"
                         onClick={() => void handleMerge(s.id)}
-                        className="text-xs bg-lime-400 text-stone-950 font-semibold px-2 py-1 rounded"
+                        className="min-h-[44px] rounded bg-lime-400 px-3 text-sm font-semibold text-stone-950 sm:min-h-0 sm:px-2 sm:py-1 sm:text-xs"
                       >
                         Confirm Merge
                       </button>
                     </div>
                   </div>
                 ) : (
-                  <div className="flex items-center justify-between border-t border-stone-800/80 pt-3 text-xs text-stone-400">
+                  <div className="flex items-stretch gap-2 border-t border-stone-800/80 pt-3 text-xs text-stone-400">
                     <button
                       type="button"
                       onClick={() => setMergingId(s.id)}
-                      className="hover:text-lime-300 transition"
+                      className="flex min-h-[44px] flex-1 items-center justify-center rounded-lg border border-stone-700 px-3 text-sm hover:border-lime-400 hover:text-lime-300 transition sm:min-h-0 sm:py-1.5 sm:text-xs"
                     >
                       Merge into…
                     </button>
                     <button
                       type="button"
                       onClick={() => void handleDelete(s.id, s.name)}
-                      className="text-stone-500 hover:text-red-400 transition"
+                      className="flex min-h-[44px] flex-1 items-center justify-center rounded-lg border border-stone-700 px-3 text-sm hover:border-red-500/50 hover:text-red-400 transition sm:min-h-0 sm:py-1.5 sm:text-xs"
                     >
                       Delete
                     </button>
@@ -3891,7 +3993,7 @@ function TemplatesListView(): ReactElement {
             setCloningTemplate(null);
             setIsCreating(true);
           }}
-          className="inline-flex items-center gap-2 rounded-lg bg-lime-400 px-4 py-2 text-sm font-semibold text-stone-950 transition hover:bg-lime-300"
+          className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-lime-400 px-4 py-2 text-sm font-semibold text-stone-950 transition hover:bg-lime-300 sm:min-h-0"
         >
           <span>+</span>
           <span>New Template</span>
@@ -3904,7 +4006,7 @@ function TemplatesListView(): ReactElement {
           placeholder="Filter templates…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="w-full max-w-sm rounded-lg border border-stone-800 bg-stone-900/80 px-3.5 py-2 text-sm text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none"
+          className="min-h-[44px] w-full max-w-sm rounded-lg border border-stone-800 bg-stone-900/80 px-3.5 py-2 text-base text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none sm:text-sm"
         />
       </div>
 
@@ -3977,20 +4079,20 @@ function TemplatesListView(): ReactElement {
                 </div>
               </div>
 
-              <div className="mt-5 flex items-center justify-between border-t border-stone-800/80 pt-3 text-xs">
+              <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-stone-800/80 pt-3 text-xs">
                 <div>
                   {!t.isDefault && (
                     <button
                       type="button"
                       onClick={() => void handleSetDefault(t.id)}
-                      className="font-medium text-lime-400 hover:text-lime-300 transition"
+                      className="min-h-[44px] rounded-lg border border-lime-400/30 bg-lime-400/10 px-3 text-sm font-medium text-lime-300 hover:bg-lime-400/20 transition sm:min-h-[36px] sm:text-xs"
                     >
                       Make Default
                     </button>
                   )}
                 </div>
 
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-2">
                   {t.isBuiltin ? (
                     <button
                       type="button"
@@ -3999,7 +4101,7 @@ function TemplatesListView(): ReactElement {
                         setEditingTemplate(null);
                         setIsCreating(true);
                       }}
-                      className="text-stone-300 hover:text-white transition"
+                      className="min-h-[44px] rounded-lg border border-stone-700 px-3 text-sm text-stone-200 hover:border-stone-500 hover:text-white transition sm:min-h-[36px] sm:text-xs"
                     >
                       Duplicate & Edit
                     </button>
@@ -4012,14 +4114,14 @@ function TemplatesListView(): ReactElement {
                           setCloningTemplate(null);
                           setIsCreating(true);
                         }}
-                        className="text-stone-300 hover:text-white transition"
+                        className="min-h-[44px] rounded-lg border border-stone-700 px-3 text-sm text-stone-200 hover:border-stone-500 hover:text-white transition sm:min-h-[36px] sm:text-xs"
                       >
                         Edit
                       </button>
                       <button
                         type="button"
                         onClick={() => void handleDelete(t.id, t.name)}
-                        className="text-stone-500 hover:text-red-400 transition"
+                        className="min-h-[44px] rounded-lg border border-stone-700 px-3 text-sm text-stone-400 hover:border-red-500/50 hover:text-red-400 transition sm:min-h-[36px] sm:text-xs"
                       >
                         Delete
                       </button>
@@ -4147,130 +4249,115 @@ function TemplateEditorModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm overflow-y-auto">
-      <div className="relative w-full max-w-2xl rounded-xl border border-stone-800 bg-stone-900 p-6 shadow-2xl space-y-5 my-8">
-        <div className="flex items-center justify-between border-b border-stone-800 pb-3">
-          <h3 className="text-lg font-semibold text-stone-100">
-            {isEditing ? "Edit Template" : initialClone ? `Customize "${initialClone.name}"` : "New Summary Template"}
-          </h3>
+    <Modal onClose={onClose} title={isEditing ? "Edit Template" : initialClone ? `Customize "${initialClone.name}"` : "New Summary Template"} ariaLabel="Summary template editor" maxWidth="max-w-2xl">
+      {error && (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300">
+          {error}
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="space-y-1">
+          <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
+            Template Name *
+          </label>
+          <input
+            type="text"
+            required
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. Sprint Retrospective"
+            className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none"
+          />
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
+            Description
+          </label>
+          <input
+            type="text"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="e.g. Highlights wins, blockers, and next sprint commitments"
+            className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none"
+          />
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
+            System Instructions (Optional)
+          </label>
+          <textarea
+            rows={2}
+            value={systemPrompt}
+            onChange={(e) => setSystemPrompt(e.target.value)}
+            placeholder="e.g. You are an expert agile coach summarizing a team retrospective."
+            className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none font-mono"
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
+              User Prompt Template *
+            </label>
+            <div className="flex items-center gap-1">
+              <span className="text-[11px] text-stone-500 mr-1">Insert tags:</span>
+              {["{{title}}", "{{date}}", "{{speakers}}", "{{transcript}}"].map((tag) => (
+                <button
+                  key={tag}
+                  type="button"
+                  onClick={() => insertVariable(tag)}
+                  className="rounded bg-stone-800 px-1.5 py-0.5 text-[11px] font-mono text-lime-300 hover:bg-stone-700 transition"
+                >
+                  {tag}
+                </button>
+              ))}
+            </div>
+          </div>
+          <textarea
+            ref={promptTextareaRef}
+            rows={9}
+            required
+            value={userPrompt}
+            onChange={(e) => setUserPrompt(e.target.value)}
+            className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none font-mono whitespace-pre leading-relaxed"
+          />
+        </div>
+
+        <div className="flex items-center gap-2 pt-1">
+          <input
+            type="checkbox"
+            id="isDefaultCheckbox"
+            checked={isDefault}
+            onChange={(e) => setIsDefault(e.target.checked)}
+            className="rounded border-stone-700 bg-stone-950 text-lime-400 focus:ring-lime-400"
+          />
+          <label htmlFor="isDefaultCheckbox" className="text-xs text-stone-300 cursor-pointer">
+            Set as default summary template
+          </label>
+        </div>
+
+        <div className="flex justify-end gap-3 border-t border-stone-800 pt-4">
           <button
             type="button"
             onClick={onClose}
-            className="text-stone-400 hover:text-stone-200 transition"
+            disabled={saving}
+            className="rounded-lg border border-stone-700 px-4 py-2 text-xs font-medium text-stone-300 hover:bg-stone-800 transition"
           >
-            ✕
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={saving}
+            className="inline-flex items-center gap-2 rounded-lg bg-lime-400 px-4 py-2 text-xs font-semibold text-stone-950 transition hover:bg-lime-300 disabled:opacity-50"
+          >
+            {saving ? "Saving…" : isEditing ? "Save Changes" : "Create Template"}
           </button>
         </div>
-
-        {error && (
-          <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300">
-            {error}
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-1">
-            <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
-              Template Name *
-            </label>
-            <input
-              type="text"
-              required
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Sprint Retrospective"
-              className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100 focus:border-lime-400 focus:outline-none"
-            />
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
-              Description
-            </label>
-            <input
-              type="text"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="e.g. Highlights wins, blockers, and next sprint commitments"
-              className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100 focus:border-lime-400 focus:outline-none"
-            />
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
-              System Instructions (Optional)
-            </label>
-            <textarea
-              rows={2}
-              value={systemPrompt}
-              onChange={(e) => setSystemPrompt(e.target.value)}
-              placeholder="e.g. You are an expert agile coach summarizing a team retrospective."
-              className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-xs text-stone-100 focus:border-lime-400 focus:outline-none font-mono"
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
-                User Prompt Template *
-              </label>
-              <div className="flex items-center gap-1">
-                <span className="text-[11px] text-stone-500 mr-1">Insert tags:</span>
-                {["{{title}}", "{{date}}", "{{speakers}}", "{{transcript}}"].map((tag) => (
-                  <button
-                    key={tag}
-                    type="button"
-                    onClick={() => insertVariable(tag)}
-                    className="rounded bg-stone-800 px-1.5 py-0.5 text-[11px] font-mono text-lime-300 hover:bg-stone-700 transition"
-                  >
-                    {tag}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <textarea
-              ref={promptTextareaRef}
-              rows={9}
-              required
-              value={userPrompt}
-              onChange={(e) => setUserPrompt(e.target.value)}
-              className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-xs text-stone-100 focus:border-lime-400 focus:outline-none font-mono whitespace-pre leading-relaxed"
-            />
-          </div>
-
-          <div className="flex items-center gap-2 pt-1">
-            <input
-              type="checkbox"
-              id="isDefaultCheckbox"
-              checked={isDefault}
-              onChange={(e) => setIsDefault(e.target.checked)}
-              className="rounded border-stone-700 bg-stone-950 text-lime-400 focus:ring-lime-400"
-            />
-            <label htmlFor="isDefaultCheckbox" className="text-xs text-stone-300 cursor-pointer">
-              Set as default summary template
-            </label>
-          </div>
-
-          <div className="flex justify-end gap-3 border-t border-stone-800 pt-4">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={saving}
-              className="rounded-lg border border-stone-700 px-4 py-2 text-xs font-medium text-stone-300 hover:bg-stone-800 transition"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={saving}
-              className="inline-flex items-center gap-2 rounded-lg bg-lime-400 px-4 py-2 text-xs font-semibold text-stone-950 transition hover:bg-lime-300 disabled:opacity-50"
-            >
-              {saving ? "Saving…" : isEditing ? "Save Changes" : "Create Template"}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+      </form>
+    </Modal>
   );
 }
 
@@ -4509,282 +4596,267 @@ function LlmSettingsModal({
   const currentProviderSummary = providers.find((p) => p.id === selectedProvider);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm overflow-y-auto">
-      <div className="relative w-full max-w-2xl rounded-xl border border-stone-800 bg-stone-900 p-6 shadow-2xl space-y-5 my-8">
-        <div className="flex items-center justify-between border-b border-stone-800 pb-3">
-          <div>
-            <h3 className="text-lg font-semibold text-stone-100">LLM Provider & Model Settings</h3>
-            <p className="text-xs text-stone-400">Powered by pi-ai unified multi-provider model catalog</p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-stone-400 hover:text-stone-200 transition"
-          >
-            ✕
-          </button>
+    <Modal onClose={onClose} title={"LLM Provider & Model Settings"} ariaLabel="LLM provider and model settings" maxWidth="max-w-2xl">
+      <p className="text-xs text-stone-400">Powered by pi-ai unified multi-provider model catalog</p>
+      {error && (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300">
+          {error}
         </div>
+      )}
 
-        {error && (
-          <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300">
-            {error}
-          </div>
-        )}
-
-        {loading ? (
-          <div className="p-8 text-center text-sm text-stone-400">Loading catalog…</div>
-        ) : (
-          <form onSubmit={handleSave} className="space-y-4">
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <div className="space-y-1">
-                <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
-                  AI Provider
-                </label>
-                <select
-                  value={selectedProvider}
-                  onChange={(e) => handleProviderChange(e.target.value)}
-                  className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100 focus:border-lime-400 focus:outline-none"
-                >
-                  {providers.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name} {p.isConfigured ? "✓" : "(unconfigured)"} ({p.modelCount} models)
-                    </option>
-                  ))}
-                </select>
-                <div className="flex items-center justify-between pt-1">
-                  <span className="text-[11px] text-stone-500">
-                    Status: {currentProviderSummary?.isConfigured ? "🟢 Key Configured" : "🟡 Needs API Key"}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => void handleRefreshCatalog()}
-                    disabled={refreshingCatalog}
-                    className="text-[11px] text-lime-400 hover:underline disabled:opacity-50"
-                  >
-                    {refreshingCatalog ? "Syncing…" : "↻ Sync Web Catalog"}
-                  </button>
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
-                  Model
-                </label>
-                <input
-                  type="text"
-                  placeholder="Filter models…"
-                  value={searchModel}
-                  onChange={(e) => setSearchModel(e.target.value)}
-                  className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-1.5 text-xs text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none mb-1"
-                />
-                <select
-                  value={selectedModel}
-                  onChange={(e) => handleModelChange(e.target.value)}
-                  className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100 focus:border-lime-400 focus:outline-none"
-                >
-                  {filteredModels.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name} {m.reasoning ? "🧠" : ""} {m.contextWindow ? `(${Math.round(m.contextWindow / 1000)}k ctx)` : ""}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            {selectedModelObj && selectedModelObj.reasoning && (
-              <div className="space-y-1">
-                <label className="text-xs font-medium uppercase tracking-wider text-stone-400 flex items-center gap-1.5">
-                  <span>🧠 Thinking / Reasoning Level</span>
-                </label>
-                <select
-                  value={thinkingLevel}
-                  onChange={(e) => setThinkingLevel(e.target.value)}
-                  className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100 focus:border-lime-400 focus:outline-none capitalize"
-                >
-                  {(selectedModelObj.supportedThinkingLevels || ["low", "medium", "high"]).map((lvl) => (
-                    <option key={lvl} value={lvl}>
-                      {lvl === "off" ? "Off (Standard Response)" : `${lvl.charAt(0).toUpperCase() + lvl.slice(1)} Thinking`}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
+      {loading ? (
+        <div className="p-8 text-center text-sm text-stone-400">Loading catalog…</div>
+      ) : (
+        <form onSubmit={handleSave} className="space-y-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-1">
               <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
-                API Key Override (Optional)
+                AI Provider
               </label>
-              <input
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder={currentProviderSummary?.isConfigured ? "Using configured environment key (leave blank to keep)" : "Enter provider API key…"}
-                className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100 placeholder-stone-600 focus:border-lime-400 focus:outline-none font-mono"
-              />
+              <select
+                value={selectedProvider}
+                onChange={(e) => handleProviderChange(e.target.value)}
+                className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none"
+              >
+                {providers.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} {p.isConfigured ? "✓" : "(unconfigured)"} ({p.modelCount} models)
+                  </option>
+                ))}
+              </select>
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-[11px] text-stone-500">
+                  Status: {currentProviderSummary?.isConfigured ? "🟢 Key Configured" : "🟡 Needs API Key"}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void handleRefreshCatalog()}
+                  disabled={refreshingCatalog}
+                  className="text-[11px] text-lime-400 hover:underline disabled:opacity-50"
+                >
+                  {refreshingCatalog ? "Syncing…" : "↻ Sync Web Catalog"}
+                </button>
+              </div>
             </div>
 
             <div className="space-y-1">
               <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
-                Base URL Override (Optional)
+                Model
               </label>
               <input
                 type="text"
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder="e.g. http://localhost:11434/v1 for Ollama, or custom LiteLLM proxy"
-                className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100 placeholder-stone-600 focus:border-lime-400 focus:outline-none font-mono"
+                placeholder="Filter models…"
+                value={searchModel}
+                onChange={(e) => setSearchModel(e.target.value)}
+                className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-1.5 text-base sm:text-sm text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none mb-1"
               />
+              <select
+                value={selectedModel}
+                onChange={(e) => handleModelChange(e.target.value)}
+                className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none"
+              >
+                {filteredModels.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name} {m.reasoning ? "🧠" : ""} {m.contextWindow ? `(${Math.round(m.contextWindow / 1000)}k ctx)` : ""}
+                  </option>
+                ))}
+              </select>
             </div>
+          </div>
 
-            {/* Local Audio Diarization & Speaker Recognition Settings */}
-            <div className="rounded-xl border border-stone-800 bg-stone-950/60 p-4 space-y-3.5">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold uppercase tracking-wider text-stone-300">
-                  🎙️ Local ASR & Speaker Recognition
-                </span>
-                <span className="text-[11px] text-stone-500 font-mono">Engine & Sensitivity Tuning</span>
-              </div>
-
-              {/* Hugging Face Token for Gated Diarization Models */}
-              <div className="space-y-1.5">
-                <label
-                  htmlFor="hf-token-input"
-                  className="text-xs text-stone-300 font-medium flex items-center justify-between"
-                >
-                  <span>Hugging Face Access Token (pyannote community-1):</span>
-                  <span className="text-[10px] text-stone-500 font-mono">HF_TOKEN env overrides</span>
-                </label>
-                <input
-                  id="hf-token-input"
-                  type="password"
-                  value={hfToken}
-                  onChange={(e) => setHfToken(e.target.value)}
-                  placeholder="hf_..."
-                  className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-stone-100 placeholder-stone-600 focus:border-lime-400 focus:outline-none font-mono"
-                />
-                <p className="text-[11px] text-stone-500 leading-tight">
-                  Used to download gated pyannote diarization models. Accept terms on huggingface.co/pyannote/speaker-diarization-community-1.
-                </p>
-              </div>
-
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 pt-1">
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between text-xs">
-                    <label htmlFor="clustering-threshold-slider" className="text-stone-300 font-medium">
-                      Within-Meeting Clustering:
-                    </label>
-                    <span className="font-mono font-bold text-lime-400">
-                      {localClusteringThreshold.toFixed(2)}
-                    </span>
-                  </div>
-                  <input
-                    id="clustering-threshold-slider"
-                    type="range"
-                    min="0.10"
-                    max="0.95"
-                    step="0.01"
-                    value={localClusteringThreshold}
-                    onChange={(e) => setLocalClusteringThreshold(parseFloat(e.target.value))}
-                    className="w-full accent-lime-400 cursor-pointer"
-                  />
-                  <p className="text-[11px] text-stone-500 leading-tight">
-                    Controls separation of distinct voices within a meeting (recommended: 0.50).
-                  </p>
-                </div>
-
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between text-xs">
-                    <label htmlFor="similarity-threshold-slider" className="text-stone-300 font-medium">
-                      Enrolled Voiceprint Matching:
-                    </label>
-                    <span className="font-mono font-bold text-cyan-400">
-                      {localSimilarityThreshold.toFixed(2)}
-                    </span>
-                  </div>
-                  <input
-                    id="similarity-threshold-slider"
-                    type="range"
-                    min="0.10"
-                    max="0.95"
-                    step="0.01"
-                    value={localSimilarityThreshold}
-                    onChange={(e) => setLocalSimilarityThreshold(parseFloat(e.target.value))}
-                    className="w-full accent-cyan-400 cursor-pointer"
-                  />
-                  <p className="text-[11px] text-stone-500 leading-tight">
-                    Minimum cosine similarity required to match speech against enrolled WeSpeaker voiceprints (recommended: 0.45).
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-stone-800 bg-stone-950/60 p-4 space-y-2">
-              <label className="block text-xs font-semibold uppercase tracking-wider text-stone-300">
-                Automatic Transcription Engine
+          {selectedModelObj && selectedModelObj.reasoning && (
+            <div className="space-y-1">
+              <label className="text-xs font-medium uppercase tracking-wider text-stone-400 flex items-center gap-1.5">
+                <span>🧠 Thinking / Reasoning Level</span>
               </label>
               <select
-                value={transcriptionProvider}
-                onChange={(e) => setTranscriptionProvider(e.target.value as "speechmatics" | "local" | "assemblyai")}
-                className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-stone-100 focus:border-lime-400 focus:outline-none"
+                value={thinkingLevel}
+                onChange={(e) => setThinkingLevel(e.target.value)}
+                className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none capitalize"
               >
-                <option value="local">Local (Cohere + diarization)</option>
-                <option value="speechmatics">Speechmatics Cloud</option>
-                <option value="assemblyai">AssemblyAI Cloud (Universal-3.5 Pro)</option>
+                {(selectedModelObj.supportedThinkingLevels || ["low", "medium", "high"]).map((lvl) => (
+                  <option key={lvl} value={lvl}>
+                    {lvl === "off" ? "Off (Standard Response)" : `${lvl.charAt(0).toUpperCase() + lvl.slice(1)} Thinking`}
+                  </option>
+                ))}
               </select>
-              <p className="text-[11px] text-stone-500">
-                Controls the default for new uploads and manual transcription. AssemblyAI requires ASSEMBLY_API_KEY; Speechmatics requires SPEECHMATICS_API_KEY.
+            </div>
+          )}
+
+          <div className="space-y-1">
+            <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
+              API Key Override (Optional)
+            </label>
+            <input
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder={currentProviderSummary?.isConfigured ? "Using configured environment key (leave blank to keep)" : "Enter provider API key…"}
+              className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 placeholder-stone-600 focus:border-lime-400 focus:outline-none font-mono"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
+              Base URL Override (Optional)
+            </label>
+            <input
+              type="text"
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+              placeholder="e.g. http://localhost:11434/v1 for Ollama, or custom LiteLLM proxy"
+              className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 placeholder-stone-600 focus:border-lime-400 focus:outline-none font-mono"
+            />
+          </div>
+
+          {/* Local Audio Diarization & Speaker Recognition Settings */}
+          <div className="rounded-xl border border-stone-800 bg-stone-950/60 p-4 space-y-3.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold uppercase tracking-wider text-stone-300">
+                🎙️ Local ASR & Speaker Recognition
+              </span>
+              <span className="text-[11px] text-stone-500 font-mono">Engine & Sensitivity Tuning</span>
+            </div>
+
+            {/* Hugging Face Token for Gated Diarization Models */}
+            <div className="space-y-1.5">
+              <label
+                htmlFor="hf-token-input"
+                className="text-xs text-stone-300 font-medium flex items-center justify-between"
+              >
+                <span>Hugging Face Access Token (pyannote community-1):</span>
+                <span className="text-[10px] text-stone-500 font-mono">HF_TOKEN env overrides</span>
+              </label>
+              <input
+                id="hf-token-input"
+                type="password"
+                value={hfToken}
+                onChange={(e) => setHfToken(e.target.value)}
+                placeholder="hf_..."
+                className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-base sm:text-sm text-stone-100 placeholder-stone-600 focus:border-lime-400 focus:outline-none font-mono"
+              />
+              <p className="text-[11px] text-stone-500 leading-tight">
+                Used to download gated pyannote diarization models. Accept terms on huggingface.co/pyannote/speaker-diarization-community-1.
               </p>
             </div>
 
-            {testResult && (
-              <div
-                className={`rounded-lg border p-3 text-xs ${
-                  testResult.ok
-                    ? "border-lime-400/30 bg-lime-400/10 text-lime-300"
-                    : "border-red-500/30 bg-red-500/10 text-red-300"
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <span>{testResult.message}</span>
-                  {testResult.durationMs && (
-                    <span className="font-mono text-[10px] opacity-75">{testResult.durationMs}ms</span>
-                  )}
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 pt-1">
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <label htmlFor="clustering-threshold-slider" className="text-stone-300 font-medium">
+                    Within-Meeting Clustering:
+                  </label>
+                  <span className="font-mono font-bold text-lime-400">
+                    {localClusteringThreshold.toFixed(2)}
+                  </span>
                 </div>
+                <input
+                  id="clustering-threshold-slider"
+                  type="range"
+                  min="0.10"
+                  max="0.95"
+                  step="0.01"
+                  value={localClusteringThreshold}
+                  onChange={(e) => setLocalClusteringThreshold(parseFloat(e.target.value))}
+                  className="w-full accent-lime-400 cursor-pointer"
+                />
+                <p className="text-[11px] text-stone-500 leading-tight">
+                  Controls separation of distinct voices within a meeting (recommended: 0.50).
+                </p>
               </div>
-            )}
 
-            <div className="flex items-center justify-between border-t border-stone-800 pt-4">
-              <button
-                type="button"
-                onClick={() => void handleTestConnection()}
-                disabled={testing}
-                className="rounded-lg border border-stone-700 bg-stone-800 px-3 py-1.5 text-xs font-medium text-stone-200 hover:bg-stone-700 transition disabled:opacity-50"
-              >
-                {testing ? "Testing…" : "⚡ Test Connection"}
-              </button>
-
-              <div className="flex gap-3">
-                <button
-                  type="button"
-                  onClick={onClose}
-                  disabled={saving}
-                  className="rounded-lg border border-stone-700 px-4 py-2 text-xs font-medium text-stone-300 hover:bg-stone-800 transition"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="inline-flex items-center gap-2 rounded-lg bg-lime-400 px-4 py-2 text-xs font-semibold text-stone-950 transition hover:bg-lime-300 disabled:opacity-50"
-                >
-                  {saving ? "Saving…" : "Save LLM Settings"}
-                </button>
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <label htmlFor="similarity-threshold-slider" className="text-stone-300 font-medium">
+                    Enrolled Voiceprint Matching:
+                  </label>
+                  <span className="font-mono font-bold text-cyan-400">
+                    {localSimilarityThreshold.toFixed(2)}
+                  </span>
+                </div>
+                <input
+                  id="similarity-threshold-slider"
+                  type="range"
+                  min="0.10"
+                  max="0.95"
+                  step="0.01"
+                  value={localSimilarityThreshold}
+                  onChange={(e) => setLocalSimilarityThreshold(parseFloat(e.target.value))}
+                  className="w-full accent-cyan-400 cursor-pointer"
+                />
+                <p className="text-[11px] text-stone-500 leading-tight">
+                  Minimum cosine similarity required to match speech against enrolled WeSpeaker voiceprints (recommended: 0.45).
+                </p>
               </div>
             </div>
-          </form>
-        )}
-      </div>
-    </div>
+          </div>
+
+          <div className="rounded-xl border border-stone-800 bg-stone-950/60 p-4 space-y-2">
+            <label className="block text-xs font-semibold uppercase tracking-wider text-stone-300">
+              Automatic Transcription Engine
+            </label>
+            <select
+              value={transcriptionProvider}
+              onChange={(e) => setTranscriptionProvider(e.target.value as "speechmatics" | "local" | "assemblyai")}
+              className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none"
+            >
+              <option value="local">Local (Cohere + diarization)</option>
+              <option value="speechmatics">Speechmatics Cloud</option>
+              <option value="assemblyai">AssemblyAI Cloud (Universal-3.5 Pro)</option>
+            </select>
+            <p className="text-[11px] text-stone-500">
+              Controls the default for new uploads and manual transcription. AssemblyAI requires ASSEMBLY_API_KEY; Speechmatics requires SPEECHMATICS_API_KEY.
+            </p>
+          </div>
+
+          {testResult && (
+            <div
+              className={`rounded-lg border p-3 text-xs ${
+                testResult.ok
+                  ? "border-lime-400/30 bg-lime-400/10 text-lime-300"
+                  : "border-red-500/30 bg-red-500/10 text-red-300"
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span>{testResult.message}</span>
+                {testResult.durationMs && (
+                  <span className="font-mono text-[10px] opacity-75">{testResult.durationMs}ms</span>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="flex items-center justify-between border-t border-stone-800 pt-4">
+            <button
+              type="button"
+              onClick={() => void handleTestConnection()}
+              disabled={testing}
+              className="rounded-lg border border-stone-700 bg-stone-800 px-3 py-1.5 text-xs font-medium text-stone-200 hover:bg-stone-700 transition disabled:opacity-50"
+            >
+              {testing ? "Testing…" : "⚡ Test Connection"}
+            </button>
+
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={saving}
+                className="rounded-lg border border-stone-700 px-4 py-2 text-xs font-medium text-stone-300 hover:bg-stone-800 transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={saving}
+                className="inline-flex items-center gap-2 rounded-lg bg-lime-400 px-4 py-2 text-xs font-semibold text-stone-950 transition hover:bg-lime-300 disabled:opacity-50"
+              >
+                {saving ? "Saving…" : "Save LLM Settings"}
+              </button>
+            </div>
+          </div>
+        </form>
+      )}
+    </Modal>
   );
 }
 
@@ -4889,12 +4961,12 @@ export function UsageView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
               }
             }}
             aria-label="Usage month"
-            className="rounded-lg border border-stone-700 bg-stone-900 px-3 py-1.5 text-sm text-stone-200 focus:border-lime-400 focus:outline-none disabled:opacity-50"
+            className="min-h-[44px] rounded-lg border border-stone-700 bg-stone-900 px-3 py-1.5 text-base text-stone-200 focus:border-lime-400 focus:outline-none disabled:opacity-50 sm:min-h-0 sm:text-sm"
           />
           <button
             type="button"
             onClick={() => setShowAllTime((v) => !v)}
-            className={`rounded-lg border px-3 py-1.5 text-sm font-medium transition ${
+            className={`min-h-[44px] rounded-lg border px-3 py-1.5 text-sm font-medium transition sm:min-h-0 ${
               showAllTime
                 ? "border-lime-400/50 bg-lime-400/10 text-lime-300"
                 : "border-stone-700 text-stone-300 hover:border-stone-500 hover:text-stone-100"
@@ -4937,7 +5009,8 @@ export function UsageView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
             {byProvider.length === 0 ? (
               <p className="mt-2 text-sm text-stone-500">No cloud usage in this period. Local transcription is free.</p>
             ) : (
-              <div className="mt-2 overflow-x-auto">
+              <>
+              <div className="mt-2 hidden overflow-x-auto sm:block">
                 <table className="w-full min-w-[560px] text-left text-sm">
                   <thead>
                     <tr className="text-xs uppercase tracking-wide text-stone-500">
@@ -4962,6 +5035,31 @@ export function UsageView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
                   </tbody>
                 </table>
               </div>
+              <ul className="mt-2 space-y-2 sm:hidden">
+                {byProvider.map((p) => (
+                  <li key={p.provider} className="rounded-lg border border-stone-800 bg-stone-950/60 p-3">
+                    <div>
+                      <span className="font-medium text-stone-200">{p.provider}</span>
+                      <span className="ml-2 text-xs text-stone-500">{(p.kinds ?? []).join(", ")}</span>
+                    </div>
+                    <dl className="mt-2 grid grid-cols-3 gap-2 text-xs">
+                      <div>
+                        <dt className="text-stone-500">Audio</dt>
+                        <dd className="text-stone-300">{formatUsageHours(p.audioSeconds)}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-stone-500">Tokens</dt>
+                        <dd className="text-stone-300">{formatUsageTokens(p.totalTokens)}</dd>
+                      </div>
+                      <div className="text-right">
+                        <dt className="text-stone-500">Cost</dt>
+                        <dd className="font-semibold text-stone-100">{formatUsageUsd(p.costUsd)}</dd>
+                      </div>
+                    </dl>
+                  </li>
+                ))}
+              </ul>
+              </>
             )}
           </div>
 
@@ -4970,7 +5068,8 @@ export function UsageView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
             {byMeeting.length === 0 ? (
               <p className="mt-2 text-sm text-stone-500">No per-meeting usage in this period.</p>
             ) : (
-              <div className="mt-2 overflow-x-auto">
+              <>
+              <div className="mt-2 hidden overflow-x-auto sm:block">
                 <table className="w-full min-w-[640px] text-left text-sm">
                   <thead>
                     <tr className="text-xs uppercase tracking-wide text-stone-500">
@@ -5010,6 +5109,44 @@ export function UsageView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
                   </tbody>
                 </table>
               </div>
+              <ul className="mt-2 space-y-2 sm:hidden">
+                {byMeeting.map((m) => (
+                  <li key={m.meetingId} className="rounded-lg border border-stone-800 bg-stone-950/60 p-3">
+                    <button
+                      type="button"
+                      onClick={() => onSelectMeeting(m.meetingId)}
+                      className="flex min-h-[44px] w-full flex-col justify-center text-left"
+                    >
+                      <span className="font-medium text-lime-300">{m.meetingTitle || "Untitled meeting"}</span>
+                      {m.meetingStartTime ? (
+                        <span className="text-xs text-stone-500">{formatDate(m.meetingStartTime)}</span>
+                      ) : null}
+                    </button>
+                    <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
+                      <div>
+                        <dt className="text-stone-500">Audio</dt>
+                        <dd className="text-stone-300">{formatUsageHours(m.audioSeconds)}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-stone-500">Transcription</dt>
+                        <dd className="text-stone-300">{formatUsageUsd(m.transcriptionCostUsd)}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-stone-500">LLM</dt>
+                        <dd className="text-stone-300">
+                          {formatUsageUsd(m.llmCostUsd)}
+                          <span className="ml-1 text-stone-500">({formatUsageTokens(m.totalTokens)})</span>
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-stone-500">Total</dt>
+                        <dd className="font-semibold text-stone-100">{formatUsageUsd(m.totalCostUsd)}</dd>
+                      </div>
+                    </dl>
+                  </li>
+                ))}
+              </ul>
+              </>
             )}
           </div>
 
@@ -5146,11 +5283,11 @@ export function LogsView({ onSelectMeeting }: { onSelectMeeting: (id: string) =>
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-2.5">
           <button
             type="button"
             onClick={() => setAutoRefresh(!autoRefresh)}
-            className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
+            className={`min-h-[44px] flex-1 rounded-lg border px-3 py-1.5 text-sm font-medium transition sm:min-h-0 sm:flex-none sm:text-xs ${
               autoRefresh
                 ? "border-lime-400/40 bg-lime-400/10 text-lime-300 hover:bg-lime-400/20"
                 : "border-stone-700 bg-stone-800 text-stone-400 hover:text-stone-200"
@@ -5162,14 +5299,14 @@ export function LogsView({ onSelectMeeting }: { onSelectMeeting: (id: string) =>
             type="button"
             onClick={() => void fetchLogs()}
             disabled={loading}
-            className="rounded-lg border border-stone-700 bg-stone-800 px-3 py-1.5 text-xs font-medium text-stone-200 hover:bg-stone-700 transition disabled:opacity-50"
+            className="min-h-[44px] flex-1 rounded-lg border border-stone-700 bg-stone-800 px-3 py-1.5 text-sm font-medium text-stone-200 hover:bg-stone-700 transition disabled:opacity-50 sm:min-h-0 sm:flex-none sm:text-xs"
           >
             {loading ? "Refreshing…" : "🔄 Refresh"}
           </button>
           <button
             type="button"
             onClick={() => void handleClearLogs()}
-            className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-500/20 transition"
+            className="min-h-[44px] flex-1 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-1.5 text-sm font-medium text-red-400 hover:bg-red-500/20 transition sm:min-h-0 sm:flex-none sm:text-xs"
           >
             🗑️ Clear
           </button>
@@ -5177,9 +5314,9 @@ export function LogsView({ onSelectMeeting }: { onSelectMeeting: (id: string) =>
       </div>
 
       {/* Filter Toolbar */}
-      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-stone-800 bg-stone-900/60 p-3.5 backdrop-blur">
+      <div className="flex flex-col gap-3 rounded-xl border border-stone-800 bg-stone-900/60 p-3.5 backdrop-blur sm:flex-row sm:flex-wrap sm:items-center">
         {/* Severity Level Filter */}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-2">
           <label htmlFor="log-level-select" className="text-xs font-medium text-stone-400">
             Min Level:
           </label>
@@ -5187,7 +5324,7 @@ export function LogsView({ onSelectMeeting }: { onSelectMeeting: (id: string) =>
             id="log-level-select"
             value={selectedLevel}
             onChange={(e) => setSelectedLevel(e.target.value as LogLevel)}
-            className="rounded-lg border border-stone-700 bg-stone-950 px-2.5 py-1.5 text-xs font-medium text-stone-200 focus:border-lime-400 focus:outline-none"
+            className="min-h-[44px] rounded-lg border border-stone-700 bg-stone-950 px-2.5 py-1.5 text-base font-medium text-stone-200 focus:border-lime-400 focus:outline-none sm:min-h-0 sm:text-xs"
           >
             <option value="debug">All Levels (DEBUG+)</option>
             <option value="info">INFO and above</option>
@@ -5197,7 +5334,7 @@ export function LogsView({ onSelectMeeting }: { onSelectMeeting: (id: string) =>
         </div>
 
         {/* Category Filter */}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-2">
           <label htmlFor="log-category-select" className="text-xs font-medium text-stone-400">
             Category:
           </label>
@@ -5205,7 +5342,7 @@ export function LogsView({ onSelectMeeting }: { onSelectMeeting: (id: string) =>
             id="log-category-select"
             value={selectedCategory}
             onChange={(e) => setSelectedCategory(e.target.value)}
-            className="rounded-lg border border-stone-700 bg-stone-950 px-2.5 py-1.5 text-xs font-medium text-stone-200 focus:border-lime-400 focus:outline-none"
+            className="min-h-[44px] rounded-lg border border-stone-700 bg-stone-950 px-2.5 py-1.5 text-base font-medium text-stone-200 focus:border-lime-400 focus:outline-none sm:min-h-0 sm:text-xs"
           >
             <option value="">All Categories</option>
             {categories.map((c) => (
@@ -5217,19 +5354,19 @@ export function LogsView({ onSelectMeeting }: { onSelectMeeting: (id: string) =>
         </div>
 
         {/* Search Input */}
-        <div className="flex flex-1 min-w-[200px] items-center gap-2">
+        <div className="flex flex-1 min-w-0 items-center gap-2 sm:min-w-[200px]">
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search logs by message, meeting, or detail…"
-            className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-1.5 text-xs text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none"
+            className="min-h-[44px] w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-1.5 text-base text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none sm:min-h-0 sm:text-xs"
           />
           {searchQuery && (
             <button
               type="button"
               onClick={() => setSearchQuery("")}
-              className="text-stone-500 hover:text-stone-300 text-xs px-1"
+              className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center text-stone-500 hover:text-stone-300 text-xs sm:min-h-0 sm:min-w-0 sm:px-1"
             >
               ✕
             </button>
@@ -5466,6 +5603,42 @@ export function BackupRestoreView({ onRestoreComplete }: { onRestoreComplete: ()
     }
   };
 
+  const backupActions = (b: BackupInfo) => (
+    <>
+      <a
+        href={`/api/backup/download/${encodeURIComponent(b.filename)}`}
+        download
+        className="inline-flex min-h-[44px] flex-1 items-center justify-center whitespace-nowrap rounded border border-stone-700 bg-stone-800 px-2.5 py-1 text-xs text-stone-200 hover:bg-stone-700 hover:text-white transition sm:min-h-0 sm:flex-none"
+      >
+        ⬇️ Download
+      </a>
+      <button
+        type="button"
+        onClick={() => {
+          setConfirmRestoreTarget({
+            type: "stored",
+            filename: b.filename,
+            stats: {
+              meetings: b.manifest?.stats.meetingCount ?? 0,
+              audioFiles: b.manifest?.stats.audioFilesCount ?? 0,
+              sizeBytes: b.sizeBytes
+            }
+          });
+        }}
+        className="inline-flex min-h-[44px] flex-1 items-center justify-center whitespace-nowrap rounded border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs text-amber-300 hover:bg-amber-500/20 transition sm:min-h-0 sm:flex-none"
+      >
+        ♻️ Restore
+      </button>
+      <button
+        type="button"
+        onClick={() => void handleDeleteBackup(b.filename)}
+        className="inline-flex min-h-[44px] flex-1 items-center justify-center whitespace-nowrap rounded border border-red-500/30 bg-red-500/10 px-2.5 py-1 text-xs text-red-400 hover:bg-red-500/20 transition sm:min-h-0 sm:flex-none"
+      >
+        🗑️ Delete
+      </button>
+    </>
+  );
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -5540,7 +5713,7 @@ export function BackupRestoreView({ onRestoreComplete }: { onRestoreComplete: ()
               const file = e.target.files?.[0] || null;
               setSelectedFile(file);
             }}
-            className="block w-full text-xs text-stone-400 file:mr-4 file:rounded-lg file:border-0 file:bg-stone-800 file:px-4 file:py-2 file:text-xs file:font-semibold file:text-lime-400 hover:file:bg-stone-700 cursor-pointer"
+            className="block min-h-[44px] w-full text-base text-stone-400 file:mr-4 file:min-h-[44px] file:rounded-lg file:border-0 file:bg-stone-800 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-lime-400 hover:file:bg-stone-700 cursor-pointer sm:min-h-0 sm:text-xs sm:file:min-h-0 sm:file:text-xs"
           />
           {selectedFile && (
             <button
@@ -5552,7 +5725,7 @@ export function BackupRestoreView({ onRestoreComplete }: { onRestoreComplete: ()
                   stats: { meetings: 0, audioFiles: 0, sizeBytes: selectedFile.size }
                 });
               }}
-              className="whitespace-nowrap rounded-lg bg-amber-400 px-4 py-2 text-xs font-semibold text-stone-950 hover:bg-amber-300 transition shadow"
+              className="min-h-[44px] w-full whitespace-nowrap rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-stone-950 hover:bg-amber-300 transition shadow sm:w-auto sm:min-h-0 sm:text-xs"
             >
               Restore Uploaded File
             </button>
@@ -5584,7 +5757,8 @@ export function BackupRestoreView({ onRestoreComplete }: { onRestoreComplete: ()
             No backup snapshots currently saved on the server. Click &ldquo;Save Server Snapshot&rdquo; or &ldquo;Download Full Backup&rdquo; above.
           </div>
         ) : (
-          <div className="overflow-x-auto">
+          <>
+          <div className="hidden overflow-x-auto sm:block">
             <table className="w-full text-left text-xs text-stone-300">
               <thead className="border-b border-stone-800 bg-stone-950/40 text-stone-400 font-medium">
                 <tr>
@@ -5632,52 +5806,44 @@ export function BackupRestoreView({ onRestoreComplete }: { onRestoreComplete: ()
                       </span>
                     </td>
                     <td className="px-5 py-3.5 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <a
-                          href={`/api/backup/download/${encodeURIComponent(b.filename)}`}
-                          download
-                          className="rounded border border-stone-700 bg-stone-800 px-2.5 py-1 text-xs text-stone-200 hover:bg-stone-700 hover:text-white transition"
-                        >
-                          ⬇️ Download
-                        </a>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setConfirmRestoreTarget({
-                              type: "stored",
-                              filename: b.filename,
-                              stats: {
-                                meetings: b.manifest?.stats.meetingCount ?? 0,
-                                audioFiles: b.manifest?.stats.audioFilesCount ?? 0,
-                                sizeBytes: b.sizeBytes
-                              }
-                            });
-                          }}
-                          className="rounded border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs text-amber-300 hover:bg-amber-500/20 transition"
-                        >
-                          ♻️ Restore
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void handleDeleteBackup(b.filename)}
-                          className="rounded border border-red-500/30 bg-red-500/10 px-2.5 py-1 text-xs text-red-400 hover:bg-red-500/20 transition"
-                        >
-                          🗑️ Delete
-                        </button>
-                      </div>
+                      <div className="flex items-center justify-end gap-2">{backupActions(b)}</div>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+          <ul className="divide-y divide-stone-800/60 sm:hidden">
+            {backups.map((b) => (
+              <li key={b.filename} className="space-y-3 p-4">
+                <div>
+                  <div className="break-all font-mono text-sm font-medium text-lime-400">{b.filename}</div>
+                  <div className="mt-1 text-xs text-stone-400">
+                    {formatDate(new Date(b.createdAt).getTime())} · <span className="font-mono text-stone-300">{formatBytes(b.sizeBytes)}</span>
+                  </div>
+                </div>
+                <dl className="grid grid-cols-2 gap-2 text-xs">
+                  <div>
+                    <dt className="text-stone-500">Meetings</dt>
+                    <dd className="font-mono text-stone-200">{b.manifest?.stats.meetingCount ?? "—"}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-stone-500">Audio</dt>
+                    <dd className="font-mono text-stone-200">{b.manifest?.stats.audioFilesCount ?? "—"} files</dd>
+                  </div>
+                </dl>
+                <div className="flex flex-wrap gap-2">{backupActions(b)}</div>
+              </li>
+            ))}
+          </ul>
+          </>
         )}
       </div>
 
       {/* Confirmation Modal for Restore */}
       {confirmRestoreTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/80 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-lg rounded-2xl border border-amber-500/40 bg-stone-900 p-6 shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-50 flex max-h-[100dvh] items-center justify-center overflow-y-auto bg-stone-950/80 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="Confirm system restore">
+          <div className="my-auto w-full max-w-lg rounded-2xl border border-amber-500/40 bg-stone-900 p-6 shadow-2xl space-y-4">
             <div className="flex items-center gap-3 text-amber-400">
               <span className="text-2xl">⚠️</span>
               <h3 className="text-lg font-bold text-stone-100">Confirm System Restore</h3>
