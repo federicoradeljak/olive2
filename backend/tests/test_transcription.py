@@ -11,8 +11,13 @@ from sqlalchemy import text
 from olive.app import create_app
 from olive.db import create_db
 from olive.layout import meeting_paths
+from olive.ml import AbortController
 from olive.providers.speechmatics import SpeechmaticsClient
-from olive.services.transcription import STAGE_SPEECHMATICS_TRANSCRIBE, TranscriptionService
+from olive.services.transcription import (
+    STAGE_SPEECHMATICS_TRANSCRIBE,
+    TranscriptionService,
+    _ActiveTranscriptionJob,
+)
 
 AUDIO_BYTES = b"fake audio bytes"
 
@@ -258,4 +263,49 @@ def test_api_endpoints_triggers_transcription_handles_webhook_and_retrieves_deta
     assert len(detail["speakers"]) == 1
     assert detail["speakers"][0]["name"] == "Alice"
     assert "Welcome" in (detail["transcriptContent"] or "")
+    handle.engine.dispose()
+
+
+async def test_late_in_progress_updates_do_not_overwrite_cancelled(tmp_path: Path) -> None:
+    """Cancelling must stick: stale in-progress updates arriving after the
+    cancel (the in-flight job draining its queue a few hundred ms later)
+    must not flip the meeting back to in-progress."""
+    handle = create_db(":memory:")
+    meetings_dir = str(tmp_path / "meetings")
+    meeting_id = "m-cancel-race"
+
+    sm_client, _ = _create_mock_speechmatics_client()
+    service = TranscriptionService(
+        {
+            "db": handle.engine,
+            "meetingsDir": meetings_dir,
+            "speechmaticsClient": sm_client,
+        }
+    )
+
+    controller = AbortController()
+    service._active_jobs[meeting_id] = _ActiveTranscriptionJob(
+        abort_controller=controller,
+        provider="local",
+    )
+    service.emit_progress(
+        meeting_id,
+        {"stage": "transcribing", "percent": 40, "message": "working..."},
+    )
+    assert service.get_transcription_progress(meeting_id) is not None
+    assert service.get_transcription_progress(meeting_id).stage == "transcribing"  # type: ignore[union-attr]
+
+    cancel_res = await service.cancel_transcription(meeting_id)
+    assert cancel_res["success"] is True
+    assert service.get_transcription_progress(meeting_id) is not None
+    assert service.get_transcription_progress(meeting_id).stage == "cancelled"  # type: ignore[union-attr]
+
+    # Stale update from the in-flight job arriving after the cancel.
+    service.emit_progress(
+        meeting_id,
+        {"stage": "transcribing", "percent": 60, "message": "stale late update"},
+    )
+    progress = service.get_transcription_progress(meeting_id)
+    assert progress is not None
+    assert progress.stage == "cancelled"  # type: ignore[union-attr]
     handle.engine.dispose()

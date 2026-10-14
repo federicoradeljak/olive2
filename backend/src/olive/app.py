@@ -894,7 +894,17 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                     c_dict = (
                         current.model_dump(exclude_none=True) if hasattr(current, "model_dump") else current
                     )
-                    yield {"event": "progress", "data": json.dumps(c_dict)}
+                    c_stage = c_dict.get("stage") if isinstance(c_dict, dict) else None
+                    c_evt = (
+                        "result"
+                        if c_stage == "done"
+                        else "cancelled"
+                        if c_stage == "cancelled"
+                        else "error"
+                        if c_stage == "error"
+                        else "progress"
+                    )
+                    yield {"event": c_evt, "data": json.dumps(c_dict)}
 
                 async def listener(update: Any) -> None:
                     upd_dict = (

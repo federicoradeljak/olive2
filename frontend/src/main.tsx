@@ -1170,8 +1170,17 @@ function MeetingDetailView({
         setSummaryGeneration(data.summaryGeneration);
       }
       if (data.transcriptionProgress) {
-        setTranscriptionProgress(data.transcriptionProgress);
-        setTranscribing(true);
+        const stage = data.transcriptionProgress.stage;
+        if (stage === "done" || stage === "error" || stage === "cancelled") {
+          // Terminal state (e.g. just-cancelled): not active work. Clearing
+          // here keeps a cancel from flipping back to in-progress when the
+          // detail refresh lands after the optimistic cancelled UI.
+          setTranscriptionProgress(null);
+          setTranscribing(false);
+        } else {
+          setTranscriptionProgress(data.transcriptionProgress);
+          setTranscribing(true);
+        }
       } else if (data.meeting?.status === "processing") {
         setTranscribing(true);
       } else if (data.meeting?.status === "ready") {
@@ -1212,6 +1221,11 @@ function MeetingDetailView({
           if (isClosed) return;
           try {
             const data = JSON.parse(e.data);
+            if (data && (data.stage === "done" || data.stage === "error" || data.stage === "cancelled")) {
+              // Mislabeled terminal state (e.g. a snapshot taken right after
+              // cancel): never treat it as active work.
+              return;
+            }
             setTranscriptionProgress(data);
             setTranscribing(true);
           } catch {}
