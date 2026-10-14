@@ -53,6 +53,17 @@ def _format_transcript(raw_transcript: str) -> str:
                 for seg in segs
                 if isinstance(seg, dict)
             )
+        if isinstance(parsed, list):
+            # Plaud raw transcript: [{speaker, content, ...}, ...]. Without
+            # this branch the LLM received a raw JSON dump instead of a
+            # readable transcript.
+            lines = [
+                f"{seg.get('speaker') or 'Unknown'}: {seg.get('text', seg.get('content', ''))}"
+                for seg in parsed
+                if isinstance(seg, dict)
+            ]
+            if lines:
+                return "\n\n".join(lines)
     except Exception:
         pass
     return raw_transcript

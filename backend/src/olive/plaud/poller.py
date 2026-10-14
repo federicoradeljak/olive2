@@ -26,6 +26,7 @@ from ..layout import ensure_meeting_folder, meeting_paths
 from ..logging_db import Logger
 from ..logging_db import logger as default_logger
 from ..ml.opus import is_raw_plaud_opus, wrap_raw_opus_bytes
+from ..schemas import EnrolledSpeaker, Transcript, TranscriptSegment
 from .retry import (
     compute_retry_delay_ms,
     is_rate_limit_error,
@@ -191,6 +192,74 @@ def _content_is_ready(detail: Mapping[str, Any]) -> bool:
     return bool(detail.get("source_list") or detail.get("note_list"))
 
 
+def _is_placeholder_speaker_name(name: str) -> bool:
+    s = name.strip()
+    return bool(re.match(r"^speaker\s*\d+$", s, re.I) or re.match(r"^s\d+$", s, re.I))
+
+
+#: Speaker cluster id used for Plaud segments with no usable speaker label.
+#: ``identify_speakers_from_turns`` skips ``UU`` turns, so they never pollute
+#: voiceprint centroids.
+UNKNOWN_PLAUD_SPEAKER = "UU"
+
+
+def plaud_segments_to_transcript(
+    segments: list[dict[str, Any]] | None,
+    duration_ms: int | float | None = None,
+) -> Transcript | None:
+    """Convert raw Plaud segments to a :class:`Transcript` for speaker identification.
+
+    Plaud emits ``{start_time, end_time, speaker, content}`` dicts at
+    millisecond scale. Older payloads may carry seconds instead, so the scale
+    is detected once: when the whole transcript would cover less than 10% of
+    the audio under a millisecond reading but fits inside the recording under
+    a seconds reading, values are scaled by 1000. Per-value heuristics are
+    deliberately avoided so genuine sub-second millisecond timestamps survive.
+
+    Segments without a speaker label become ``UU`` turns (skipped by the
+    identifier); segments with unusable timings are dropped. Returns ``None``
+    when nothing usable remains. Word timings are not required — the
+    ASR-first identifier only needs segment turns.
+    """
+    parsed: list[tuple[float, float, str, str]] = []
+    for seg in segments or []:
+        if not isinstance(seg, dict):
+            continue
+        try:
+            start = float(seg.get("start_time") or 0)
+            end = float(seg.get("end_time") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not (math.isfinite(start) and math.isfinite(end)) or end <= start:
+            continue
+        speaker = str(seg.get("speaker") or "").strip() or UNKNOWN_PLAUD_SPEAKER
+        parsed.append((start, end, speaker, str(seg.get("content") or "")))
+    if not parsed:
+        return None
+
+    scale = 1.0
+    try:
+        total_ms = float(duration_ms) if duration_ms else 0.0
+    except (TypeError, ValueError):
+        total_ms = 0.0
+    max_end = max(end for _, end, _, _ in parsed)
+    if total_ms > 0 and max_end > 0 and max_end < total_ms * 0.1 and max_end * 1000.0 <= total_ms * 1.05:
+        scale = 1000.0
+
+    return Transcript(
+        segments=[
+            TranscriptSegment(
+                startMs=int(round(start * scale)),
+                endMs=int(round(end * scale)),
+                speaker=speaker,
+                text=content,
+            )
+            for start, end, speaker, content in parsed
+        ],
+        durationMs=int(round(total_ms)) if total_ms > 0 else None,
+    )
+
+
 class _DefaultHttpResponse:
     def __init__(self, status: int, content: bytes, headers: Mapping[str, str]) -> None:
         self.status = status
@@ -241,6 +310,16 @@ class PlaudPoller:
             opts.get("fetchImpl") or opts.get("fetch_impl") or _default_fetch
         )
         self.logger: Logger = opts.get("logger") or default_logger
+        self.config_dir: str = str(opts.get("configDir") or opts.get("config_dir") or "")
+        raw_threshold = opts.get("similarityThreshold")
+        if raw_threshold is None:
+            raw_threshold = opts.get("similarity_threshold")
+        try:
+            self.similarity_threshold: float | None = (
+                float(raw_threshold) if raw_threshold is not None else None
+            )
+        except (TypeError, ValueError):
+            self.similarity_threshold = None
         self.page_size: int = int(opts.get("pageSize") or DEFAULT_PAGE_SIZE)
         self.pcs_wait_ms: int = int(opts.get("pcsWaitMs") or DEFAULT_PCS_WAIT_MS)
         self.retry_options: dict[str, Any] = dict(opts.get("retryOptions") or {})
@@ -295,6 +374,9 @@ class PlaudPoller:
             self._scheduler = None
         try:
             asyncio.get_running_loop().create_task(self.trigger())
+            # Boot backfill: already-ingested Plaud meetings predate speaker
+            # identification — queue them so new enrollments also apply.
+            self._spawn_background(self.backfill_plaud_speaker_identification())
         except RuntimeError:
             pass
 
@@ -808,6 +890,12 @@ class PlaudPoller:
         ):
             self._hand_off_transcription(meeting["id"], "Plaud meeting")
 
+        if segments:
+            # ASR-first speaker identification runs as a durable plaud_sync
+            # queue job (never inline: embedding would block the poll cycle).
+            # Failures keep the Plaud labels persisted above.
+            await self._enqueue_plaud_speaker_identification(meeting["id"])
+
     async def _ingest_audio_only_meeting(
         self,
         meeting: Mapping[Any, Any],
@@ -1166,6 +1254,370 @@ class PlaudPoller:
                     ),
                     {"mid": meeting_id, "sid": speaker_id, "aid": evidence_artifact_id},
                 )
+
+    def _resolve_similarity_threshold(self) -> float:
+        """Similarity threshold for Plaud speaker matching (opt → settings → default)."""
+        if self.similarity_threshold is not None:
+            return self.similarity_threshold
+        if self.config_dir:
+            try:
+                raw = json.loads((Path(self.config_dir) / "settings.json").read_text(encoding="utf-8"))
+                value = raw.get("localSimilarityThreshold")
+                if value is not None:
+                    return float(value)
+            except Exception:
+                pass
+        return 0.45
+
+    async def _get_enrolled_speakers_with_voiceprints(self) -> list[EnrolledSpeaker]:
+        """Enrolled speakers that actually carry local voiceprints."""
+        with self.db.connect() as conn:
+            rows = conn.execute(text("SELECT * FROM speakers")).mappings().all()
+        out: list[EnrolledSpeaker] = []
+        for row in rows:
+            name = str(row["name"] or "").strip()
+            if not name or _is_placeholder_speaker_name(name):
+                continue
+            try:
+                provider_ids = json.loads(row.get("provider_ids") or "{}")
+            except Exception:
+                continue
+            if not isinstance(provider_ids, dict):
+                continue
+            has_vector = False
+            for item in provider_ids.get("local") or []:
+                try:
+                    parsed = json.loads(item) if isinstance(item, str) else item
+                except Exception:
+                    continue
+                candidates = (
+                    parsed
+                    if isinstance(parsed, list) and parsed and isinstance(parsed[0], list)
+                    else [parsed]
+                )
+                if any(isinstance(v, list) and len(v) > 0 for v in candidates):
+                    has_vector = True
+                    break
+            if has_vector:
+                out.append(EnrolledSpeaker(id=row["id"], name=row["name"], providerIds=provider_ids))
+        return out
+
+    async def _enqueue_plaud_speaker_identification(self, meeting_id: str) -> bool:
+        """Queue ASR-first speaker identification for a freshly ingested Plaud meeting.
+
+        Skips quietly when nobody is enrolled with local voiceprints (there is
+        nothing to match against, and matching would only mint junk
+        single-meeting speakers). The transcript persisted by
+        :meth:`_ingest_ready_meeting` stays untouched on any failure.
+        """
+        enrolled = await self._get_enrolled_speakers_with_voiceprints()
+        if not enrolled:
+            self.logger.debug(
+                "Skipping Plaud speaker identification: no enrolled voiceprints",
+                {"category": "plaud", "meetingId": meeting_id},
+            )
+            return False
+        try:
+            from ..workflows import (
+                QUEUE_PLAUD_SYNC,
+                enqueue_stage_job,
+                ensure_dbos_launched_async,
+            )
+
+            await ensure_dbos_launched_async(
+                config_dir=self.config_dir or None,
+                meetings_dir=self.meetings_dir or None,
+            )
+            await enqueue_stage_job(
+                QUEUE_PLAUD_SYNC,
+                lambda: self.run_plaud_speaker_identification(meeting_id),
+                deduplication_id=f"plaud-identify:{meeting_id}",
+                label="plaud-identify",
+                meeting_id=meeting_id,
+            )
+            self.logger.debug(
+                "Enqueued Plaud speaker identification",
+                {"category": "plaud", "meetingId": meeting_id},
+            )
+            return True
+        except Exception as exc:
+            self.logger.warn(
+                "Failed to enqueue Plaud speaker identification; keeping Plaud labels",
+                {"category": "plaud", "meetingId": meeting_id, "error": str(exc)},
+            )
+            return False
+
+    async def run_plaud_speaker_identification(self, meeting_id: str) -> dict[str, Any]:
+        """DBOS ``plaud_sync`` job: match Plaud transcript turns to local voiceprints.
+
+        Same ASR-first trick as cloud transcription: Plaud speaker labels
+        define the turns, local audio is sliced per turn, embedded with
+        WeSpeaker, and matched against enrolled ``providerIds["local"]``
+        voiceprints. On a match the ``transcripts/plaud.json`` / ``.txt``
+        artifacts are rewritten with enrolled names and the meeting is linked
+        to the enrolled speakers; stale name-only links evidencing the Plaud
+        artifact are pruned. Unmatched clusters keep their Plaud labels and no
+        speaker rows are minted for them. Never raises: the Plaud transcript
+        is already persisted, so any failure just keeps Plaud labels.
+        """
+        try:
+            return await self._run_plaud_speaker_identification(meeting_id)
+        except Exception as exc:
+            self.logger.warn(
+                "Plaud speaker identification failed; keeping Plaud labels",
+                {"category": "plaud", "meetingId": meeting_id, "error": str(exc)},
+            )
+            return {"meetingId": meeting_id, "status": "skipped", "error": str(exc)}
+
+    async def _run_plaud_speaker_identification(self, meeting_id: str) -> dict[str, Any]:
+        from ..ml.identify import identify_cloud_transcript_speakers
+
+        skipped = {"meetingId": meeting_id, "status": "skipped"}
+        with self.db.connect() as conn:
+            meeting = (
+                conn.execute(text("SELECT * FROM meetings WHERE id = :id"), {"id": meeting_id})
+                .mappings()
+                .first()
+            )
+            recording = (
+                conn.execute(
+                    text("SELECT * FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"),
+                    {"mid": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
+        if not meeting or not recording:
+            return skipped
+
+        folder = meeting_paths(
+            self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]
+        ).folder
+        audio_path = str(Path(folder) / recording["path"])
+        if not Path(audio_path).exists():
+            return skipped
+        plaud_json_path = Path(folder) / "transcripts/plaud.json"
+        plaud_txt_path = Path(folder) / "transcripts/plaud.txt"
+        if not plaud_json_path.exists():
+            return skipped
+        try:
+            raw_segments = json.loads(plaud_json_path.read_text(encoding="utf-8"))
+        except Exception:
+            return skipped
+        if not isinstance(raw_segments, list) or not raw_segments:
+            return skipped
+
+        duration_ms = recording.get("duration_ms") or (int(meeting["end_time"]) - int(meeting["start_time"]))
+        transcript = plaud_segments_to_transcript(raw_segments, duration_ms)
+        if transcript is None:
+            return skipped
+
+        enrolled = await self._get_enrolled_speakers_with_voiceprints()
+        if not enrolled:
+            return skipped
+
+        result = await identify_cloud_transcript_speakers(
+            audio_path,
+            transcript,
+            enrolled,
+            similarity_threshold=self._resolve_similarity_threshold(),
+            meeting_id=meeting_id,
+        )
+        if result is None:
+            self.logger.info(
+                "Plaud speaker identification found no match; keeping Plaud labels",
+                {"category": "plaud", "meetingId": meeting_id},
+            )
+            return {"meetingId": meeting_id, "status": "kept-labels"}
+        renamed, discovered = result
+
+        rename_map: dict[str, str] = {}
+        for old_seg, new_seg in zip(transcript.segments, renamed.segments, strict=False):
+            if new_seg.speaker != old_seg.speaker:
+                rename_map[old_seg.speaker] = new_seg.speaker
+        if not rename_map:
+            return {"meetingId": meeting_id, "status": "kept-labels"}
+
+        renamed_raw: list[dict[str, Any]] = []
+        for item in raw_segments:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("speaker") or "").strip() or UNKNOWN_PLAUD_SPEAKER
+            renamed_raw.append({**item, "speaker": rename_map.get(key, item.get("speaker"))})
+        plaud_json_path.write_text(f"{json.dumps(renamed_raw, indent=2)}\n", encoding="utf-8")
+        plaud_txt_path.write_text(f"{segments_to_text(renamed_raw)}\n", encoding="utf-8")
+
+        with self.db.connect() as conn:
+            art = (
+                conn.execute(
+                    text(
+                        "SELECT id FROM artifacts WHERE meeting_id = :mid AND provider = 'plaud' "
+                        "AND kind = 'transcript' AND format = 'json' "
+                        "AND path = 'transcripts/plaud.json' LIMIT 1"
+                    ),
+                    {"mid": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
+        artifact_id = art["id"] if art else None
+        matched = [d for d in discovered if d.isEnrolled]
+        with self.db.begin() as conn:
+            for disc in matched:
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO meeting_speakers (meeting_id, speaker_id, evidence_artifact_id)
+                        VALUES (:mid, :sid, :aid)
+                        ON CONFLICT(meeting_id, speaker_id) DO UPDATE SET evidence_artifact_id = :aid
+                        """
+                    ),
+                    {"mid": meeting_id, "sid": disc.speakerId, "aid": artifact_id},
+                )
+            if artifact_id:
+                # Drop name-only links evidencing this artifact whose label no
+                # longer appears in the transcript (e.g. an unverified "Alice"
+                # renamed away to an enrolled speaker). Labels still present —
+                # matched or not — keep their links.
+                final_names = {
+                    str(item.get("speaker") or "").strip() for item in renamed_raw if isinstance(item, dict)
+                }
+                linked = (
+                    conn.execute(
+                        text(
+                            "SELECT ms.speaker_id AS sid, s.name AS name FROM meeting_speakers ms "
+                            "JOIN speakers s ON s.id = ms.speaker_id "
+                            "WHERE ms.meeting_id = :mid AND ms.evidence_artifact_id = :aid"
+                        ),
+                        {"mid": meeting_id, "aid": artifact_id},
+                    )
+                    .mappings()
+                    .all()
+                )
+                stale = [row["sid"] for row in linked if str(row["name"] or "").strip() not in final_names]
+                if stale:
+                    placeholders = ", ".join(f":s{i}" for i in range(len(stale)))
+                    conn.execute(
+                        text(
+                            "DELETE FROM meeting_speakers WHERE meeting_id = :mid "
+                            f"AND evidence_artifact_id = :aid AND speaker_id IN ({placeholders})"
+                        ),
+                        {
+                            "mid": meeting_id,
+                            "aid": artifact_id,
+                            **{f"s{i}": sid for i, sid in enumerate(stale)},
+                        },
+                    )
+            conn.execute(
+                text("UPDATE meetings SET updated_at = :now WHERE id = :id"),
+                {"now": self.now(), "id": meeting_id},
+            )
+
+        matched_names = sorted({d.name for d in matched})
+        self.logger.info(
+            "Plaud speaker identification renamed speakers",
+            {
+                "category": "plaud",
+                "meetingId": meeting_id,
+                "matched": matched_names,
+                "renamed": rename_map,
+            },
+        )
+        return {
+            "meetingId": meeting_id,
+            "status": "renamed",
+            "matched": matched_names,
+            "renamed": rename_map,
+        }
+
+    async def _plaud_meeting_needs_identify(self, meeting_id: str, enrolled_names: set[str]) -> bool:
+        """Whether a meeting's Plaud transcript still has unresolved speaker labels."""
+        with self.db.connect() as conn:
+            meeting = (
+                conn.execute(text("SELECT * FROM meetings WHERE id = :id"), {"id": meeting_id})
+                .mappings()
+                .first()
+            )
+        if not meeting:
+            return False
+        try:
+            folder = meeting_paths(
+                self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]
+            ).folder
+            raw = json.loads((Path(folder) / "transcripts/plaud.json").read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        if not isinstance(raw, list) or not raw:
+            return False
+        labels = {str(item.get("speaker") or "").strip() for item in raw if isinstance(item, dict)} - {
+            "",
+            UNKNOWN_PLAUD_SPEAKER,
+        }
+        return bool(labels) and any(label.lower() not in enrolled_names for label in labels)
+
+    async def backfill_plaud_speaker_identification(self, limit: int = 200) -> dict[str, Any]:
+        """Enqueue identify jobs for already-ingested Plaud meetings (boot backfill).
+
+        Meetings ingested before speaker identification existed — or since a
+        new speaker was enrolled — still carry raw Plaud labels. This queues
+        the same durable ``plaud-identify`` job the ingest hook uses for any
+        such meeting, newest first. Convergent: meetings whose labels already
+        all match enrolled speakers are skipped, so repeated boots are cheap.
+        """
+        summary: dict[str, Any] = {"checked": 0, "queued": 0, "skipped": 0}
+        try:
+            enrolled = await self._get_enrolled_speakers_with_voiceprints()
+            if not enrolled:
+                return summary
+            enrolled_names = {s.name.strip().lower() for s in enrolled}
+            with self.db.connect() as conn:
+                rows = (
+                    conn.execute(
+                        text(
+                            "SELECT m.id AS mid FROM meetings m "
+                            "JOIN plaud_ingest_state p ON p.meeting_id = m.id "
+                            "JOIN artifacts a ON a.meeting_id = m.id "
+                            "WHERE m.source = 'plaud' AND m.status = 'ready' "
+                            "AND p.pcs_resolved = 1 "
+                            "AND a.provider = 'plaud' AND a.kind = 'transcript' "
+                            "AND a.format = 'json' AND a.path = 'transcripts/plaud.json' "
+                            "ORDER BY m.start_time DESC LIMIT :lim"
+                        ),
+                        {"lim": max(1, int(limit))},
+                    )
+                    .mappings()
+                    .all()
+                )
+            for row in rows:
+                mid = str(row["mid"])
+                summary["checked"] += 1
+                try:
+                    if await self._plaud_meeting_needs_identify(mid, enrolled_names):
+                        if await self._enqueue_plaud_speaker_identification(mid):
+                            summary["queued"] += 1
+                        else:
+                            summary["skipped"] += 1
+                    else:
+                        summary["skipped"] += 1
+                except Exception as exc:
+                    summary["skipped"] += 1
+                    self.logger.warn(
+                        "Plaud identify backfill skipped a meeting",
+                        {"category": "plaud", "meetingId": mid, "error": str(exc)},
+                    )
+            if summary["queued"]:
+                self.logger.info(
+                    "Plaud speaker identification backfill queued",
+                    {"category": "plaud", **summary},
+                )
+            return summary
+        except Exception as exc:
+            self.logger.warn(
+                "Plaud identify backfill failed",
+                {"category": "plaud", "error": str(exc)},
+            )
+            summary["error"] = str(exc)
+            return summary
 
     async def _pending_count(self) -> int:
         with self.db.connect() as conn:

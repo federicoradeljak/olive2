@@ -242,6 +242,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                 meetings_dir=meetings_dir,
                 client=plaud_client,
                 transcription_service=get_transcription_service(),
+                config_dir=config_dir,
             )
         return plaud_poller
 

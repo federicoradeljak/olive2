@@ -15,8 +15,23 @@ from sqlalchemy import text
 from olive.app import create_app
 from olive.db import create_db
 from olive.layout import meeting_paths
-from olive.services.chat import ChatService
+from olive.services.chat import ChatService, _format_transcript
 from olive.services.llm import LlmService
+
+
+def test_format_transcript_handles_plaud_list_shape() -> None:
+    raw = json.dumps(
+        [
+            {"start_time": 0, "end_time": 5000, "speaker": "Matt", "content": "Hello there."},
+            {"start_time": 5000, "end_time": 9000, "speaker": "", "content": "Hi back."},
+        ]
+    )
+    assert _format_transcript(raw) == "Matt: Hello there.\n\nUnknown: Hi back."
+
+
+def test_format_transcript_keeps_canonical_segments_shape() -> None:
+    raw = json.dumps({"segments": [{"speaker": "Alice", "text": "Ship it."}]})
+    assert _format_transcript(raw) == "Alice: Ship it."
 
 
 def test_persists_messages_streams_responses_and_clears_thread(tmp_path: Path) -> None:
@@ -37,9 +52,7 @@ def test_persists_messages_streams_responses_and_clears_thread(tmp_path: Path) -
             }
         ]
     }
-    (Path(paths.folder) / "transcripts/transcript.json").write_text(
-        json.dumps(transcript), encoding="utf-8"
-    )
+    (Path(paths.folder) / "transcripts/transcript.json").write_text(json.dumps(transcript), encoding="utf-8")
 
     with handle.engine.begin() as conn:
         conn.execute(
@@ -71,18 +84,14 @@ def test_persists_messages_streams_responses_and_clears_thread(tmp_path: Path) -
             {"mid": meeting_id, "now": now},
         )
         conn.execute(
-            text(
-                "UPDATE meetings SET primary_transcript_artifact_id = 'chat-transcript-1' WHERE id = :mid"
-            ),
+            text("UPDATE meetings SET primary_transcript_artifact_id = 'chat-transcript-1' WHERE id = :mid"),
             {"mid": meeting_id},
         )
 
     llm_service = LlmService(db=handle.engine, config_dir=str(tmp_path / "config"))
     message_lengths: list[int] = []
 
-    async def fake_stream_text(
-        options: dict[str, Any], on_delta: Callable[[str], Any]
-    ) -> dict[str, Any]:
+    async def fake_stream_text(options: dict[str, Any], on_delta: Callable[[str], Any]) -> dict[str, Any]:
         message_lengths.append(len(options.get("messages") or []))
         res = on_delta("The feature ships on Friday.")
         if inspect.isawaitable(res):
