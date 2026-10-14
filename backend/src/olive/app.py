@@ -1579,6 +1579,36 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         result = await _call_maybe_async(get_llm_service(), ("refresh_catalog", "refreshCatalog"))
         return JSONResponse({"status": "refreshed", **(result or {})})
 
+    @app.get("/api/usage/summary")
+    async def get_usage_summary_route(request: Request) -> JSONResponse:
+        from .services.usage import current_month_str, get_usage_summary, month_bounds_ms
+
+        q = request.query_params
+        period = (q.get("period") or "month").strip().lower()
+        try:
+            if period == "all":
+                summary = get_usage_summary(db)
+            else:
+                month = (q.get("month") or current_month_str()).strip()
+                start_ms, end_ms = month_bounds_ms(month)
+                summary = get_usage_summary(db, start_ms=start_ms, end_ms=end_ms)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse(summary)
+
+    @app.get("/api/meetings/{meeting_id}/usage")
+    async def get_meeting_usage_route(meeting_id: str) -> JSONResponse:
+        from .services.usage import get_meeting_usage
+
+        with db.connect() as conn:
+            exists = conn.execute(
+                text("SELECT id FROM meetings WHERE id = :id"),
+                {"id": meeting_id},
+            ).first()
+        if not exists:
+            return JSONResponse({"error": f"Meeting not found: {meeting_id}"}, status_code=404)
+        return JSONResponse(get_meeting_usage(db, meeting_id))
+
     @app.get("/api/llm/config")
     async def get_llm_config_route() -> JSONResponse:
         settings = await _call_maybe_async(get_llm_service(), ("get_settings", "getSettings"))
@@ -2073,6 +2103,12 @@ def export_openapi_schema() -> dict[str, Any]:
         s.BulkTranscribeResponse,
         s.MeetingDetailAggregate,
         s.BackupManifestStats,
+        s.UsageEvent,
+        s.UsageProviderBreakdown,
+        s.UsageMeetingBreakdown,
+        s.UsageRates,
+        s.UsageSummary,
+        s.MeetingUsageResponse,
         s.BackupManifest,
         s.BackupInfo,
         s.RestoreStats,

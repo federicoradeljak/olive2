@@ -399,6 +399,25 @@ class SummaryService:
             },
         )
 
+        try:
+            from .usage import record_llm_usage
+
+            record_llm_usage(
+                self.db,
+                meeting_id=meeting["id"],
+                kind="summary",
+                provider=llm_result.provider,
+                model=llm_result.model,
+                input_tokens=llm_result.usage.inputTokens if llm_result.usage else 0,
+                output_tokens=llm_result.usage.outputTokens if llm_result.usage else 0,
+                total_tokens=llm_result.usage.totalTokens if llm_result.usage else 0,
+                created_at=fin_now,
+                source=f"summary:{artifact_id}",
+                detail={"artifactId": artifact_id, "template": template.name},
+            )
+        except Exception:
+            pass
+
         return {
             "artifactId": artifact_id,
             "provider": llm_result.provider,

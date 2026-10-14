@@ -103,10 +103,7 @@ class ChatService:
             or resolve_paths().meetings_dir
         )
         self.llm_service = (
-            llm_service
-            or opts.get("llmService")
-            or opts.get("llm_service")
-            or LlmService(db=self.db)
+            llm_service or opts.get("llmService") or opts.get("llm_service") or LlmService(db=self.db)
         )
 
     async def get_messages(self, meeting_id: str) -> list[ChatMessage]:
@@ -118,13 +115,16 @@ class ChatService:
             if not meeting:
                 raise ValueError(f"Meeting not found: {meeting_id}")
 
-            rows = conn.execute(
-                text(
-                    "SELECT * FROM chat_messages WHERE meeting_id = :mid "
-                    "ORDER BY created_at ASC, id ASC"
-                ),
-                {"mid": meeting_id},
-            ).mappings().all()
+            rows = (
+                conn.execute(
+                    text(
+                        "SELECT * FROM chat_messages WHERE meeting_id = :mid ORDER BY created_at ASC, id ASC"
+                    ),
+                    {"mid": meeting_id},
+                )
+                .mappings()
+                .all()
+            )
         return [_to_chat_message(r) for r in rows]
 
     getMessages = get_messages
@@ -205,6 +205,19 @@ class ChatService:
             )
 
             asst_created_at = max(int(time.time() * 1000), created_at + 1)
+            if res.usage is not None:
+                try:
+                    from .usage import estimate_llm_cost
+
+                    if res.usage.cost is None:
+                        res.usage.cost = estimate_llm_cost(
+                            res.provider,
+                            res.model,
+                            res.usage.inputTokens,
+                            res.usage.outputTokens,
+                        )
+                except Exception:
+                    pass
             asst_msg = ChatMessage(
                 id=str(uuid.uuid4()),
                 meetingId=meeting_id,
@@ -240,6 +253,24 @@ class ChatService:
                         "created_at": asst_msg.createdAt,
                     },
                 )
+            try:
+                from .usage import record_llm_usage
+
+                record_llm_usage(
+                    self.db,
+                    meeting_id=meeting_id,
+                    kind="chat",
+                    provider=res.provider,
+                    model=res.model,
+                    input_tokens=res.usage.inputTokens if res.usage else 0,
+                    output_tokens=res.usage.outputTokens if res.usage else 0,
+                    total_tokens=res.usage.totalTokens if res.usage else 0,
+                    created_at=asst_created_at,
+                    source=f"chat:{asst_msg.id}",
+                    detail={"messageId": asst_msg.id},
+                )
+            except Exception:
+                pass
             return asst_msg
         except Exception:
             with self.db.begin() as conn:
@@ -250,29 +281,41 @@ class ChatService:
 
     async def _load_meeting_context(self, meeting_id: str) -> str:
         with self.db.connect() as conn:
-            meeting = conn.execute(
-                text("SELECT * FROM meetings WHERE id = :id"),
-                {"id": meeting_id},
-            ).mappings().first()
+            meeting = (
+                conn.execute(
+                    text("SELECT * FROM meetings WHERE id = :id"),
+                    {"id": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
             if not meeting:
                 raise ValueError(f"Meeting not found: {meeting_id}")
 
-            artifacts = conn.execute(
-                text("SELECT * FROM artifacts WHERE meeting_id = :mid ORDER BY created_at ASC"),
-                {"mid": meeting_id},
-            ).mappings().all()
+            artifacts = (
+                conn.execute(
+                    text("SELECT * FROM artifacts WHERE meeting_id = :mid ORDER BY created_at ASC"),
+                    {"mid": meeting_id},
+                )
+                .mappings()
+                .all()
+            )
 
-            speakers = conn.execute(
-                text(
-                    """
+            speakers = (
+                conn.execute(
+                    text(
+                        """
                     SELECT speakers.name
                     FROM meeting_speakers
                     INNER JOIN speakers ON speakers.id = meeting_speakers.speaker_id
                     WHERE meeting_speakers.meeting_id = :mid
                     """
-                ),
-                {"mid": meeting_id},
-            ).mappings().all()
+                    ),
+                    {"mid": meeting_id},
+                )
+                .mappings()
+                .all()
+            )
 
         folder = Path(
             meeting_paths(
@@ -297,18 +340,14 @@ class ChatService:
                 if c:
                     summaries.append(f"Summary ({art['provider']}):\n{c}")
 
-        date_str = datetime.fromtimestamp(int(meeting["start_time"]) / 1000.0).strftime(
-            "%b %d, %Y, %I:%M %p"
-        )
+        date_str = datetime.fromtimestamp(int(meeting["start_time"]) / 1000.0).strftime("%b %d, %Y, %I:%M %p")
         transcript_text = (
             _format_transcript(transcript_raw)
             if transcript_raw
             else "No transcript is available for this meeting."
         )
         summary_text = (
-            "\n\n---\n\n".join(summaries)
-            if summaries
-            else "No summaries are available for this meeting."
+            "\n\n---\n\n".join(summaries) if summaries else "No summaries are available for this meeting."
         )
         speaker_names = ", ".join(s["name"] for s in speakers) or "Unknown participants"
 

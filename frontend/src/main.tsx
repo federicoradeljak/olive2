@@ -30,8 +30,10 @@ import type {
   Speaker,
   StageRunRow,
   SummaryGenerationStatus,
+  MeetingUsageResponse,
   Template,
-  TranscriptionProgressUpdate
+  TranscriptionProgressUpdate,
+  UsageSummary
 } from "./api/types.ts";
 
 interface MeetingsResponse {
@@ -277,7 +279,7 @@ function MeetingChatRuntime({ meetingId, initialMessages }: { meetingId: string;
   );
 }
 
-type TabKey = "meetings" | "speakers" | "templates" | "logs" | "backup";
+type TabKey = "meetings" | "speakers" | "templates" | "logs" | "backup" | "usage";
 
 function parseLocation(pathname: string): { tab: TabKey; meetingId: string | null } {
   const clean = pathname.replace(/^\/+|\/+$/g, "");
@@ -304,6 +306,10 @@ function parseLocation(pathname: string): { tab: TabKey; meetingId: string | nul
 
   if (clean === "backup" || clean === "backups") {
     return { tab: "backup", meetingId: null };
+  }
+
+  if (clean === "usage") {
+    return { tab: "usage", meetingId: null };
   }
 
   return { tab: "meetings", meetingId: null };
@@ -477,6 +483,20 @@ export function App(): ReactElement {
               >
                 Backup
               </a>
+              <a
+                href="/usage"
+                onClick={(e) => {
+                  e.preventDefault();
+                  navigate("/usage");
+                }}
+                className={`rounded-md px-2.5 sm:px-3 py-1 sm:py-1.5 transition ${
+                  activeTab === "usage"
+                    ? "bg-stone-900 text-lime-400 shadow"
+                    : "text-stone-400 hover:text-stone-200"
+                }`}
+              >
+                Usage
+              </a>
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
@@ -530,6 +550,8 @@ export function App(): ReactElement {
           <LogsView
             onSelectMeeting={(id) => navigate(`/meetings/${id}`)}
           />
+        ) : activeTab === "usage" ? (
+          <UsageView onSelectMeeting={(id) => navigate(`/meetings/${id}`)} />
         ) : (
           <BackupRestoreView
             onRestoreComplete={() => {
@@ -1942,6 +1964,7 @@ function MeetingDetailView({
                   <span>•</span>
                   <span className="capitalize">{detail.meeting.source}</span>
                 </div>
+                <MeetingUsageLine meetingId={meetingId} />
                 <div className="mt-3 flex flex-wrap items-center gap-1.5">
                   {detail.meeting.tags.map((tag) => (
                     <span
@@ -4776,6 +4799,260 @@ function formatLogTimestamp(timestamp: number): string {
   const sec = pad(d.getSeconds());
   const ms = pad(d.getMilliseconds(), 3);
   return `${yr}-${mo}-${day} ${hr}:${min}:${sec}.${ms}`;
+}
+
+function formatUsageUsd(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  if (value === 0) return "$0.00";
+  if (value < 0.01) return `$${value.toFixed(4)}`;
+  return `$${value.toFixed(2)}`;
+}
+
+function formatUsageTokens(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+  return `${value}`;
+}
+
+function formatUsageHours(audioSeconds: number | null | undefined): string {
+  if (audioSeconds === null || audioSeconds === undefined) return "—";
+  const hours = audioSeconds / 3600;
+  if (hours >= 10) return `${hours.toFixed(1)}h`;
+  if (hours >= 1) return `${hours.toFixed(2)}h`;
+  return `${Math.round(audioSeconds / 60)}m`;
+}
+
+export function UsageView({ onSelectMeeting }: { onSelectMeeting: (id: string) => void }): ReactElement {
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  const [month, setMonth] = useState(currentMonth);
+  const [showAllTime, setShowAllTime] = useState(false);
+  const [summary, setSummary] = useState<UsageSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const params = showAllTime ? "period=all" : `month=${encodeURIComponent(month)}`;
+        const res = await fetch(`/api/usage/summary?${params}`);
+        if (!res.ok) {
+          const data = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(data.error || `Request failed (${res.status})`);
+        }
+        const data = (await res.json()) as UsageSummary;
+        if (!cancelled) setSummary(data);
+      } catch (exc) {
+        if (!cancelled) setError(exc instanceof Error ? exc.message : "Failed to load usage");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [month, showAllTime]);
+
+  const rates = summary?.rates?.transcriptionUsdPerHour;
+  const byProvider = summary?.byProvider ?? [];
+  const byMeeting = summary?.byMeeting ?? [];
+  const rateNote = rates
+    ? Object.entries(rates)
+        .filter(([, v]) => (v ?? 0) > 0)
+        .map(([k, v]) => `${k} $${Number(v).toFixed(2)}/hr`)
+        .join(" · ")
+    : null;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-stone-100">API Usage & Spend</h1>
+          <p className="text-sm text-stone-400">
+            Estimated cloud spend: transcription billed per hour of audio, LLM billed per token.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="month"
+            value={month}
+            max={currentMonth}
+            disabled={showAllTime}
+            onChange={(e) => {
+              if (e.target.value) {
+                setMonth(e.target.value);
+                setShowAllTime(false);
+              }
+            }}
+            aria-label="Usage month"
+            className="rounded-lg border border-stone-700 bg-stone-900 px-3 py-1.5 text-sm text-stone-200 focus:border-lime-400 focus:outline-none disabled:opacity-50"
+          />
+          <button
+            type="button"
+            onClick={() => setShowAllTime((v) => !v)}
+            className={`rounded-lg border px-3 py-1.5 text-sm font-medium transition ${
+              showAllTime
+                ? "border-lime-400/50 bg-lime-400/10 text-lime-300"
+                : "border-stone-700 text-stone-300 hover:border-stone-500 hover:text-stone-100"
+            }`}
+          >
+            All time
+          </button>
+        </div>
+      </div>
+
+      {loading ? (
+        <p className="text-sm text-stone-400">Loading usage…</p>
+      ) : error ? (
+        <p className="text-sm text-rose-400">{error}</p>
+      ) : summary ? (
+        <>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="rounded-xl border border-stone-800 bg-stone-900/60 p-4">
+              <div className="text-xs font-medium uppercase tracking-wide text-stone-500">Total spend</div>
+              <div className="mt-1 text-2xl font-bold text-stone-100">{formatUsageUsd(summary.totalCostUsd)}</div>
+              <div className="mt-1 text-xs text-stone-500">{summary.eventCount} billed events</div>
+            </div>
+            <div className="rounded-xl border border-stone-800 bg-stone-900/60 p-4">
+              <div className="text-xs font-medium uppercase tracking-wide text-stone-500">Transcription</div>
+              <div className="mt-1 text-2xl font-bold text-stone-100">{formatUsageUsd(summary.transcriptionCostUsd)}</div>
+              <div className="mt-1 text-xs text-stone-500">{formatUsageHours(summary.audioSeconds)} of audio</div>
+            </div>
+            <div className="rounded-xl border border-stone-800 bg-stone-900/60 p-4">
+              <div className="text-xs font-medium uppercase tracking-wide text-stone-500">LLM</div>
+              <div className="mt-1 text-2xl font-bold text-stone-100">{formatUsageUsd(summary.llmCostUsd)}</div>
+              <div className="mt-1 text-xs text-stone-500">
+                {formatUsageTokens(summary.totalTokens)} tokens ({formatUsageTokens(summary.inputTokens)} in /{" "}
+                {formatUsageTokens(summary.outputTokens)} out)
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-stone-800 bg-stone-900/60 p-4">
+            <h2 className="text-sm font-semibold text-stone-200">By provider</h2>
+            {byProvider.length === 0 ? (
+              <p className="mt-2 text-sm text-stone-500">No cloud usage in this period. Local transcription is free.</p>
+            ) : (
+              <div className="mt-2 overflow-x-auto">
+                <table className="w-full min-w-[560px] text-left text-sm">
+                  <thead>
+                    <tr className="text-xs uppercase tracking-wide text-stone-500">
+                      <th className="py-1.5 pr-3 font-medium">Provider</th>
+                      <th className="py-1.5 pr-3 font-medium">Audio</th>
+                      <th className="py-1.5 pr-3 font-medium">Tokens</th>
+                      <th className="py-1.5 pr-3 text-right font-medium">Cost</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {byProvider.map((p) => (
+                      <tr key={p.provider} className="border-t border-stone-800/80">
+                        <td className="py-2 pr-3">
+                          <span className="font-medium text-stone-200">{p.provider}</span>
+                          <span className="ml-2 text-xs text-stone-500">{(p.kinds ?? []).join(", ")}</span>
+                        </td>
+                        <td className="py-2 pr-3 text-stone-300">{formatUsageHours(p.audioSeconds)}</td>
+                        <td className="py-2 pr-3 text-stone-300">{formatUsageTokens(p.totalTokens)}</td>
+                        <td className="py-2 text-right font-semibold text-stone-100">{formatUsageUsd(p.costUsd)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-stone-800 bg-stone-900/60 p-4">
+            <h2 className="text-sm font-semibold text-stone-200">Per meeting</h2>
+            {byMeeting.length === 0 ? (
+              <p className="mt-2 text-sm text-stone-500">No per-meeting usage in this period.</p>
+            ) : (
+              <div className="mt-2 overflow-x-auto">
+                <table className="w-full min-w-[640px] text-left text-sm">
+                  <thead>
+                    <tr className="text-xs uppercase tracking-wide text-stone-500">
+                      <th className="py-1.5 pr-3 font-medium">Meeting</th>
+                      <th className="py-1.5 pr-3 font-medium">Audio</th>
+                      <th className="py-1.5 pr-3 font-medium">Transcription</th>
+                      <th className="py-1.5 pr-3 font-medium">LLM</th>
+                      <th className="py-1.5 text-right font-medium">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {byMeeting.map((m) => (
+                      <tr key={m.meetingId} className="border-t border-stone-800/80">
+                        <td className="py-2 pr-3">
+                          <button
+                            type="button"
+                            onClick={() => onSelectMeeting(m.meetingId)}
+                            className="font-medium text-lime-300 hover:text-lime-200 hover:underline text-left"
+                          >
+                            {m.meetingTitle || "Untitled meeting"}
+                          </button>
+                          {m.meetingStartTime ? (
+                            <div className="text-xs text-stone-500">{formatDate(m.meetingStartTime)}</div>
+                          ) : null}
+                        </td>
+                        <td className="py-2 pr-3 text-stone-300">{formatUsageHours(m.audioSeconds)}</td>
+                        <td className="py-2 pr-3 text-stone-300">{formatUsageUsd(m.transcriptionCostUsd)}</td>
+                        <td className="py-2 pr-3 text-stone-300">
+                          {formatUsageUsd(m.llmCostUsd)}
+                          <span className="ml-1 text-xs text-stone-500">({formatUsageTokens(m.totalTokens)})</span>
+                        </td>
+                        <td className="py-2 text-right font-semibold text-stone-100">
+                          {formatUsageUsd(m.totalCostUsd)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <p className="text-xs text-stone-500">
+            Estimates, not invoices{rateNote ? `: transcription at ${rateNote}` : ""}; LLM per-token rates vary by
+            model (see the AI model picker for per-model pricing). Summary LLM usage is tracked from this update
+            onward — older summaries predate usage tracking, while transcription and chat history were backfilled.
+          </p>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function MeetingUsageLine({ meetingId }: { meetingId: string }): ReactElement | null {
+  const [usage, setUsage] = useState<MeetingUsageResponse | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch(`/api/meetings/${meetingId}/usage`);
+        if (res.ok) {
+          const data = (await res.json()) as MeetingUsageResponse;
+          if (!cancelled) setUsage(data);
+        }
+      } catch {
+        // Usage is informational; never break the meeting view.
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [meetingId]);
+  if (!usage || usage.eventCount === 0) return null;
+  return (
+    <div className="mt-2 text-xs sm:text-sm text-stone-400" title="Estimated cloud spend for this meeting (transcription billed per audio hour, LLM per token).">
+      Cost ≈ <span className="font-semibold text-stone-200">{formatUsageUsd(usage.totalCostUsd)}</span>
+      <span className="text-stone-500">
+        {" "}(transcription {formatUsageUsd(usage.transcriptionCostUsd)} · LLM {formatUsageUsd(usage.llmCostUsd)})
+      </span>
+    </div>
+  );
 }
 
 export function LogsView({ onSelectMeeting }: { onSelectMeeting: (id: string) => void }): ReactElement {

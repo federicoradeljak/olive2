@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import ForeignKey, Index, Integer, MetaData, Text, text
+from sqlalchemy import Float, ForeignKey, Index, Integer, MetaData, Text, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -75,9 +75,7 @@ class MeetingSpeakerModel(Base):
 
     meeting_id: Mapped[str] = mapped_column(Text, ForeignKey("meetings.id"), primary_key=True)
     speaker_id: Mapped[str] = mapped_column(Text, ForeignKey("speakers.id"), primary_key=True)
-    evidence_artifact_id: Mapped[str | None] = mapped_column(
-        Text, ForeignKey("artifacts.id"), nullable=True
-    )
+    evidence_artifact_id: Mapped[str | None] = mapped_column(Text, ForeignKey("artifacts.id"), nullable=True)
 
 
 class StageRunModel(Base):
@@ -155,6 +153,24 @@ class ChatMessageModel(Base):
     created_at: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
+class UsageEventModel(Base):
+    __tablename__ = "usage_events"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    meeting_id: Mapped[str | None] = mapped_column(Text, ForeignKey("meetings.id"), nullable=True)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    audio_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    source: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
 Index("idx_meetings_start_time", MeetingModel.start_time.desc())
 Index("idx_recordings_meeting", RecordingModel.meeting_id)
 Index(
@@ -172,6 +188,8 @@ Index("idx_logs_level", LogModel.level)
 Index("idx_logs_category", LogModel.category)
 Index("idx_logs_meeting_id", LogModel.meeting_id)
 Index("idx_chat_messages_meeting_created", ChatMessageModel.meeting_id, ChatMessageModel.created_at)
+Index("idx_usage_events_created", UsageEventModel.created_at.desc())
+Index("idx_usage_events_meeting", UsageEventModel.meeting_id)
 
 __all__ = [
     "ArtifactModel",
@@ -186,4 +204,5 @@ __all__ = [
     "StageRunModel",
     "SyncStateModel",
     "TemplateModel",
+    "UsageEventModel",
 ]

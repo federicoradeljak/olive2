@@ -1415,6 +1415,59 @@
         }
       }
     },
+    "/api/usage/summary": {
+      "get": {
+        "summary": "Get Usage Summary Route",
+        "operationId": "get_usage_summary_route_api_usage_summary_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/meetings/{meeting_id}/usage": {
+      "get": {
+        "summary": "Get Meeting Usage Route",
+        "operationId": "get_meeting_usage_route_api_meetings__meeting_id__usage_get",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/llm/config": {
       "get": {
         "summary": "Get Llm Config Route",
@@ -3080,6 +3133,419 @@
           "totalAudioSizeBytes"
         ],
         "title": "BackupManifestStats",
+        "type": "object"
+      },
+      "UsageEvent": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "meetingId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Meetingid"
+          },
+          "meetingTitle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Meetingtitle"
+          },
+          "kind": {
+            "enum": [
+              "transcription",
+              "summary",
+              "chat"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "inputTokens": {
+            "default": 0,
+            "title": "Inputtokens",
+            "type": "integer"
+          },
+          "outputTokens": {
+            "default": 0,
+            "title": "Outputtokens",
+            "type": "integer"
+          },
+          "totalTokens": {
+            "default": 0,
+            "title": "Totaltokens",
+            "type": "integer"
+          },
+          "audioSeconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Audioseconds"
+          },
+          "costUsd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Costusd"
+          },
+          "createdAt": {
+            "title": "Createdat",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "createdAt",
+          "id",
+          "kind",
+          "provider"
+        ],
+        "title": "UsageEvent",
+        "type": "object"
+      },
+      "UsageProviderBreakdown": {
+        "properties": {
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "kinds": {
+            "items": {
+              "enum": [
+                "transcription",
+                "summary",
+                "chat"
+              ],
+              "type": "string"
+            },
+            "title": "Kinds",
+            "type": "array"
+          },
+          "audioSeconds": {
+            "default": 0,
+            "title": "Audioseconds",
+            "type": "number"
+          },
+          "inputTokens": {
+            "default": 0,
+            "title": "Inputtokens",
+            "type": "integer"
+          },
+          "outputTokens": {
+            "default": 0,
+            "title": "Outputtokens",
+            "type": "integer"
+          },
+          "totalTokens": {
+            "default": 0,
+            "title": "Totaltokens",
+            "type": "integer"
+          },
+          "eventCount": {
+            "default": 0,
+            "title": "Eventcount",
+            "type": "integer"
+          },
+          "costUsd": {
+            "default": 0,
+            "title": "Costusd",
+            "type": "number"
+          }
+        },
+        "required": [
+          "provider"
+        ],
+        "title": "UsageProviderBreakdown",
+        "type": "object"
+      },
+      "UsageMeetingBreakdown": {
+        "properties": {
+          "meetingId": {
+            "title": "Meetingid",
+            "type": "string"
+          },
+          "meetingTitle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Meetingtitle"
+          },
+          "meetingStartTime": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Meetingstarttime"
+          },
+          "audioSeconds": {
+            "default": 0,
+            "title": "Audioseconds",
+            "type": "number"
+          },
+          "transcriptionCostUsd": {
+            "default": 0,
+            "title": "Transcriptioncostusd",
+            "type": "number"
+          },
+          "inputTokens": {
+            "default": 0,
+            "title": "Inputtokens",
+            "type": "integer"
+          },
+          "outputTokens": {
+            "default": 0,
+            "title": "Outputtokens",
+            "type": "integer"
+          },
+          "totalTokens": {
+            "default": 0,
+            "title": "Totaltokens",
+            "type": "integer"
+          },
+          "llmCostUsd": {
+            "default": 0,
+            "title": "Llmcostusd",
+            "type": "number"
+          },
+          "totalCostUsd": {
+            "default": 0,
+            "title": "Totalcostusd",
+            "type": "number"
+          },
+          "eventCount": {
+            "default": 0,
+            "title": "Eventcount",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "meetingId"
+        ],
+        "title": "UsageMeetingBreakdown",
+        "type": "object"
+      },
+      "UsageRates": {
+        "properties": {
+          "transcriptionUsdPerHour": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Transcriptionusdperhour",
+            "type": "object"
+          },
+          "llmUsdPerMTokensNote": {
+            "default": "Per-model input/output rates per 1M tokens from the LLM catalog.",
+            "title": "Llmusdpermtokensnote",
+            "type": "string"
+          }
+        },
+        "title": "UsageRates",
+        "type": "object"
+      },
+      "UsageSummary": {
+        "properties": {
+          "startAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Startat"
+          },
+          "endAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Endat"
+          },
+          "audioSeconds": {
+            "default": 0,
+            "title": "Audioseconds",
+            "type": "number"
+          },
+          "transcriptionCostUsd": {
+            "default": 0,
+            "title": "Transcriptioncostusd",
+            "type": "number"
+          },
+          "inputTokens": {
+            "default": 0,
+            "title": "Inputtokens",
+            "type": "integer"
+          },
+          "outputTokens": {
+            "default": 0,
+            "title": "Outputtokens",
+            "type": "integer"
+          },
+          "totalTokens": {
+            "default": 0,
+            "title": "Totaltokens",
+            "type": "integer"
+          },
+          "llmCostUsd": {
+            "default": 0,
+            "title": "Llmcostusd",
+            "type": "number"
+          },
+          "totalCostUsd": {
+            "default": 0,
+            "title": "Totalcostusd",
+            "type": "number"
+          },
+          "eventCount": {
+            "default": 0,
+            "title": "Eventcount",
+            "type": "integer"
+          },
+          "byProvider": {
+            "items": {
+              "$ref": "#/components/schemas/UsageProviderBreakdown"
+            },
+            "title": "Byprovider",
+            "type": "array"
+          },
+          "byMeeting": {
+            "items": {
+              "$ref": "#/components/schemas/UsageMeetingBreakdown"
+            },
+            "title": "Bymeeting",
+            "type": "array"
+          },
+          "rates": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UsageRates"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "title": "UsageSummary",
+        "type": "object"
+      },
+      "MeetingUsageResponse": {
+        "properties": {
+          "meetingId": {
+            "title": "Meetingid",
+            "type": "string"
+          },
+          "audioSeconds": {
+            "default": 0,
+            "title": "Audioseconds",
+            "type": "number"
+          },
+          "transcriptionCostUsd": {
+            "default": 0,
+            "title": "Transcriptioncostusd",
+            "type": "number"
+          },
+          "inputTokens": {
+            "default": 0,
+            "title": "Inputtokens",
+            "type": "integer"
+          },
+          "outputTokens": {
+            "default": 0,
+            "title": "Outputtokens",
+            "type": "integer"
+          },
+          "totalTokens": {
+            "default": 0,
+            "title": "Totaltokens",
+            "type": "integer"
+          },
+          "llmCostUsd": {
+            "default": 0,
+            "title": "Llmcostusd",
+            "type": "number"
+          },
+          "totalCostUsd": {
+            "default": 0,
+            "title": "Totalcostusd",
+            "type": "number"
+          },
+          "eventCount": {
+            "default": 0,
+            "title": "Eventcount",
+            "type": "integer"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/UsageEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          }
+        },
+        "required": [
+          "meetingId"
+        ],
+        "title": "MeetingUsageResponse",
         "type": "object"
       },
       "BackupManifest": {
