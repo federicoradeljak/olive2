@@ -113,6 +113,21 @@ CREATE_TABLE_STATEMENTS: list[str] = [
     usage TEXT,
     created_at INTEGER NOT NULL
   )""",
+    """CREATE TABLE IF NOT EXISTS usage_events (
+    id TEXT PRIMARY KEY,
+    meeting_id TEXT REFERENCES meetings(id),
+    kind TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens INTEGER NOT NULL DEFAULT 0,
+    audio_seconds REAL,
+    cost_usd REAL,
+    source TEXT NOT NULL UNIQUE,
+    detail TEXT,
+    created_at INTEGER NOT NULL
+  )""",
     """CREATE TABLE IF NOT EXISTS alembic_version (
     version_num VARCHAR(32) NOT NULL,
     CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)
@@ -131,6 +146,8 @@ CREATE_INDEX_STATEMENTS: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_logs_category ON logs(category)",
     "CREATE INDEX IF NOT EXISTS idx_logs_meeting_id ON logs(meeting_id)",
     "CREATE INDEX IF NOT EXISTS idx_chat_messages_meeting_created ON chat_messages(meeting_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_usage_events_created ON usage_events(created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_usage_events_meeting ON usage_events(meeting_id)",
 ]
 
 ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [

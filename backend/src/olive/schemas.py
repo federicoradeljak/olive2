@@ -248,8 +248,7 @@ def coalesce_speaker_segments(
 ) -> list[TranscriptSegment]:
     """Merges consecutive segments from the same speaker if the silence gap between them is reasonable."""
     parsed = [
-        s if isinstance(s, TranscriptSegment) else TranscriptSegment.model_validate(s)
-        for s in segments
+        s if isinstance(s, TranscriptSegment) else TranscriptSegment.model_validate(s) for s in segments
     ]
     if len(parsed) <= 1:
         return parsed
@@ -501,3 +500,80 @@ class LogListResponse(CamelModel):
     logs: list[LogItem]
     pagination: LogPagination
     categories: list[str]
+
+
+UsageKind = Literal["transcription", "summary", "chat"]
+
+
+class UsageEvent(CamelModel):
+    id: str
+    meetingId: str | None = None
+    meetingTitle: str | None = None
+    kind: UsageKind
+    provider: str
+    model: str | None = None
+    inputTokens: int = 0
+    outputTokens: int = 0
+    totalTokens: int = 0
+    audioSeconds: float | None = None
+    costUsd: float | None = None
+    createdAt: int
+
+
+class UsageProviderBreakdown(CamelModel):
+    provider: str
+    kinds: list[UsageKind] = Field(default_factory=list)
+    audioSeconds: float = 0
+    inputTokens: int = 0
+    outputTokens: int = 0
+    totalTokens: int = 0
+    eventCount: int = 0
+    costUsd: float = 0
+
+
+class UsageMeetingBreakdown(CamelModel):
+    meetingId: str
+    meetingTitle: str | None = None
+    meetingStartTime: int | None = None
+    audioSeconds: float = 0
+    transcriptionCostUsd: float = 0
+    inputTokens: int = 0
+    outputTokens: int = 0
+    totalTokens: int = 0
+    llmCostUsd: float = 0
+    totalCostUsd: float = 0
+    eventCount: int = 0
+
+
+class UsageRates(CamelModel):
+    transcriptionUsdPerHour: dict[str, float] = Field(default_factory=dict)
+    llmUsdPerMTokensNote: str = "Per-model input/output rates per 1M tokens from the LLM catalog."
+
+
+class UsageSummary(CamelModel):
+    startAt: int | None = None
+    endAt: int | None = None
+    audioSeconds: float = 0
+    transcriptionCostUsd: float = 0
+    inputTokens: int = 0
+    outputTokens: int = 0
+    totalTokens: int = 0
+    llmCostUsd: float = 0
+    totalCostUsd: float = 0
+    eventCount: int = 0
+    byProvider: list[UsageProviderBreakdown] = Field(default_factory=list)
+    byMeeting: list[UsageMeetingBreakdown] = Field(default_factory=list)
+    rates: UsageRates | None = None
+
+
+class MeetingUsageResponse(CamelModel):
+    meetingId: str
+    audioSeconds: float = 0
+    transcriptionCostUsd: float = 0
+    inputTokens: int = 0
+    outputTokens: int = 0
+    totalTokens: int = 0
+    llmCostUsd: float = 0
+    totalCostUsd: float = 0
+    eventCount: int = 0
+    events: list[UsageEvent] = Field(default_factory=list)

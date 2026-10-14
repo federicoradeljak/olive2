@@ -2054,31 +2054,50 @@ class TranscriptionService:
             )
 
             if existing:
-                return existing["id"]
-
-            art_id = str(uuid.uuid4())
-            conn.execute(
-                text(
-                    """
+                art_id = str(existing["id"])
+            else:
+                art_id = str(uuid.uuid4())
+                conn.execute(
+                    text(
+                        """
                     INSERT INTO artifacts (
                       id, meeting_id, recording_id, kind, provider, format, path, created_at
                     ) VALUES (
                       :id, :mid, :rid, :kind, :prov, :fmt, :path, :now
                     )
                     """
-                ),
-                {
-                    "id": art_id,
-                    "mid": meeting_id,
-                    "rid": recording_id,
-                    "kind": kind,
-                    "prov": provider,
-                    "fmt": fmt,
-                    "path": relative_path,
-                    "now": self.now(),
-                },
-            )
-            return art_id
+                    ),
+                    {
+                        "id": art_id,
+                        "mid": meeting_id,
+                        "rid": recording_id,
+                        "kind": kind,
+                        "prov": provider,
+                        "fmt": fmt,
+                        "path": relative_path,
+                        "now": self.now(),
+                    },
+                )
+        if kind == "transcript" and fmt == "json":
+            # The JSON artifact is the canonical transcript record (a plain-text
+            # twin is saved alongside it); track spend once against it. The
+            # usage row is keyed by artifact id, so re-runs stay idempotent.
+            try:
+                from .usage import record_transcription_usage
+
+                record_transcription_usage(
+                    self.db,
+                    meeting_id=meeting_id,
+                    provider=provider,
+                    recording_id=recording_id,
+                    transcript_content=content,
+                    created_at=self.now(),
+                    source=f"transcript:{art_id}",
+                    detail={"artifactId": art_id, "recordingId": recording_id},
+                )
+            except Exception:
+                pass
+        return art_id
 
     async def _persist_local_discovered_speakers(
         self,

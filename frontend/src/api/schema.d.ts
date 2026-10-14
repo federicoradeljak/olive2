@@ -642,6 +642,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/usage/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Usage Summary Route */
+        get: operations["get_usage_summary_route_api_usage_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/meetings/{meeting_id}/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Meeting Usage Route */
+        get: operations["get_meeting_usage_route_api_meetings__meeting_id__usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/llm/config": {
         parameters: {
             query?: never;
@@ -1364,6 +1398,270 @@ export interface components {
             speakerCount: number;
             /** Templatecount */
             templateCount: number;
+        };
+        /** UsageEvent */
+        UsageEvent: {
+            /** Id */
+            id: string;
+            /**
+             * Meetingid
+             * @default null
+             */
+            meetingId: string | null;
+            /**
+             * Meetingtitle
+             * @default null
+             */
+            meetingTitle: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "transcription" | "summary" | "chat";
+            /** Provider */
+            provider: string;
+            /**
+             * Model
+             * @default null
+             */
+            model: string | null;
+            /**
+             * Inputtokens
+             * @default 0
+             */
+            inputTokens: number;
+            /**
+             * Outputtokens
+             * @default 0
+             */
+            outputTokens: number;
+            /**
+             * Totaltokens
+             * @default 0
+             */
+            totalTokens: number;
+            /**
+             * Audioseconds
+             * @default null
+             */
+            audioSeconds: number | null;
+            /**
+             * Costusd
+             * @default null
+             */
+            costUsd: number | null;
+            /** Createdat */
+            createdAt: number;
+        };
+        /** UsageProviderBreakdown */
+        UsageProviderBreakdown: {
+            /** Provider */
+            provider: string;
+            /** Kinds */
+            kinds?: ("transcription" | "summary" | "chat")[];
+            /**
+             * Audioseconds
+             * @default 0
+             */
+            audioSeconds: number;
+            /**
+             * Inputtokens
+             * @default 0
+             */
+            inputTokens: number;
+            /**
+             * Outputtokens
+             * @default 0
+             */
+            outputTokens: number;
+            /**
+             * Totaltokens
+             * @default 0
+             */
+            totalTokens: number;
+            /**
+             * Eventcount
+             * @default 0
+             */
+            eventCount: number;
+            /**
+             * Costusd
+             * @default 0
+             */
+            costUsd: number;
+        };
+        /** UsageMeetingBreakdown */
+        UsageMeetingBreakdown: {
+            /** Meetingid */
+            meetingId: string;
+            /**
+             * Meetingtitle
+             * @default null
+             */
+            meetingTitle: string | null;
+            /**
+             * Meetingstarttime
+             * @default null
+             */
+            meetingStartTime: number | null;
+            /**
+             * Audioseconds
+             * @default 0
+             */
+            audioSeconds: number;
+            /**
+             * Transcriptioncostusd
+             * @default 0
+             */
+            transcriptionCostUsd: number;
+            /**
+             * Inputtokens
+             * @default 0
+             */
+            inputTokens: number;
+            /**
+             * Outputtokens
+             * @default 0
+             */
+            outputTokens: number;
+            /**
+             * Totaltokens
+             * @default 0
+             */
+            totalTokens: number;
+            /**
+             * Llmcostusd
+             * @default 0
+             */
+            llmCostUsd: number;
+            /**
+             * Totalcostusd
+             * @default 0
+             */
+            totalCostUsd: number;
+            /**
+             * Eventcount
+             * @default 0
+             */
+            eventCount: number;
+        };
+        /** UsageRates */
+        UsageRates: {
+            /** Transcriptionusdperhour */
+            transcriptionUsdPerHour?: {
+                [key: string]: number;
+            };
+            /**
+             * Llmusdpermtokensnote
+             * @default Per-model input/output rates per 1M tokens from the LLM catalog.
+             */
+            llmUsdPerMTokensNote: string;
+        };
+        /** UsageSummary */
+        UsageSummary: {
+            /**
+             * Startat
+             * @default null
+             */
+            startAt: number | null;
+            /**
+             * Endat
+             * @default null
+             */
+            endAt: number | null;
+            /**
+             * Audioseconds
+             * @default 0
+             */
+            audioSeconds: number;
+            /**
+             * Transcriptioncostusd
+             * @default 0
+             */
+            transcriptionCostUsd: number;
+            /**
+             * Inputtokens
+             * @default 0
+             */
+            inputTokens: number;
+            /**
+             * Outputtokens
+             * @default 0
+             */
+            outputTokens: number;
+            /**
+             * Totaltokens
+             * @default 0
+             */
+            totalTokens: number;
+            /**
+             * Llmcostusd
+             * @default 0
+             */
+            llmCostUsd: number;
+            /**
+             * Totalcostusd
+             * @default 0
+             */
+            totalCostUsd: number;
+            /**
+             * Eventcount
+             * @default 0
+             */
+            eventCount: number;
+            /** Byprovider */
+            byProvider?: components["schemas"]["UsageProviderBreakdown"][];
+            /** Bymeeting */
+            byMeeting?: components["schemas"]["UsageMeetingBreakdown"][];
+            /** @default null */
+            rates: components["schemas"]["UsageRates"] | null;
+        };
+        /** MeetingUsageResponse */
+        MeetingUsageResponse: {
+            /** Meetingid */
+            meetingId: string;
+            /**
+             * Audioseconds
+             * @default 0
+             */
+            audioSeconds: number;
+            /**
+             * Transcriptioncostusd
+             * @default 0
+             */
+            transcriptionCostUsd: number;
+            /**
+             * Inputtokens
+             * @default 0
+             */
+            inputTokens: number;
+            /**
+             * Outputtokens
+             * @default 0
+             */
+            outputTokens: number;
+            /**
+             * Totaltokens
+             * @default 0
+             */
+            totalTokens: number;
+            /**
+             * Llmcostusd
+             * @default 0
+             */
+            llmCostUsd: number;
+            /**
+             * Totalcostusd
+             * @default 0
+             */
+            totalCostUsd: number;
+            /**
+             * Eventcount
+             * @default 0
+             */
+            eventCount: number;
+            /** Events */
+            events?: components["schemas"]["UsageEvent"][];
         };
         /** BackupManifest */
         BackupManifest: {
@@ -2733,6 +3031,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_usage_summary_route_api_usage_summary_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_meeting_usage_route_api_meetings__meeting_id__usage_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                meeting_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
