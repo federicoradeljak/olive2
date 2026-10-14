@@ -7,7 +7,8 @@ WORKDIR /frontend
 RUN corepack enable && corepack prepare pnpm@10.10.0 --activate
 
 COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
-RUN pnpm install --frozen-lockfile
+RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile
 
 COPY frontend/ ./
 RUN pnpm run build
@@ -25,17 +26,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
+# Dependencies first: this layer (incl. the compiled ctc-forced-aligner sdist)
+# stays cached across source-only changes.
 COPY backend/pyproject.toml backend/uv.lock backend/.python-version ./backend/
-COPY backend/src ./backend/src
-COPY backend/alembic.ini ./backend/alembic.ini
-COPY backend/migrations ./backend/migrations
-
 WORKDIR /app/backend
-# ctc-forced-aligner ships only an sdist that compiles a C++ extension; build tools are removed in the same layer.
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
-    && uv sync --frozen --no-dev \
+RUN --mount=type=cache,id=uv,target=/root/.cache/uv \
+    apt-get update && apt-get install -y --no-install-recommends build-essential \
+    && uv sync --frozen --no-dev --no-install-project \
     && apt-get purge -y build-essential && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
+
+COPY backend/src ./src
+COPY backend/alembic.ini ./alembic.ini
+COPY backend/migrations ./migrations
+RUN --mount=type=cache,id=uv,target=/root/.cache/uv \
+    uv sync --frozen --no-dev
 
 COPY --from=web-builder /frontend/dist /app/frontend/dist
 
