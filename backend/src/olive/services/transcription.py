@@ -37,6 +37,7 @@ from ..providers.speechmatics import (
 from ..schemas import EnrolledSpeaker, Transcript, TranscriptionProgressUpdate
 from ..workflows import (
     QUEUE_SUMMARIZE,
+    cancel_dbos_workflows_for_meeting,
     enqueue_stage_job,
     ensure_dbos_launched_async,
     get_dbos_active_progress_map,
@@ -339,6 +340,21 @@ class TranscriptionService:
                         "Failed to delete Speechmatics job during cancellation",
                         {"jobId": active.job_id, "error": str(exc)},
                     )
+
+        # Staged local jobs run as DBOS workflows; aborting the in-memory
+        # job alone leaves them running, so cancel them explicitly.
+        try:
+            await cancel_dbos_workflows_for_meeting(
+                meeting_id,
+                db=self.db,
+                config_dir=self.config_dir,
+                meetings_dir=self.meetings_dir,
+            )
+        except Exception as exc:
+            self.logger.warn(
+                "Failed to cancel DBOS workflows during cancellation",
+                {"meetingId": meeting_id, "error": str(exc)},
+            )
 
         cancel_time = self.now()
         self.emit_progress(
