@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import numpy as np
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
@@ -14,6 +16,7 @@ from olive.db import create_db
 from olive.layout import meeting_paths
 from olive.ml import (
     AbortController,
+    LocalSpeakerSegment,
     LocalTranscriptionPipeline,
     MockLocalAsrEngine,
     PyannoteSpeakerDiarizer,
@@ -23,6 +26,7 @@ from olive.ml import (
     encode_wav,
     load_audio_samples,
     merge_weighted_voiceprint_vectors,
+    proportional_word_timestamps,
     resample,
     score_against_trusted_vectors,
 )
@@ -38,10 +42,87 @@ def create_single_voice_wav(
 ) -> bytes:
     num_samples = int(sample_rate * duration_sec)
     t = np.arange(num_samples, dtype=np.float32) / float(sample_rate)
-    samples = 0.5 * np.sin(2.0 * np.pi * freq_hz * t) + 0.2 * np.sin(
-        2.0 * np.pi * (freq_hz * 2.0) * t
-    )
+    samples = 0.5 * np.sin(2.0 * np.pi * freq_hz * t) + 0.2 * np.sin(2.0 * np.pi * (freq_hz * 2.0) * t)
     return encode_wav(samples, sample_rate)
+
+
+class _FakeEmbeddingExtractor:
+    """Deterministic stand-in for WeSpeakerEmbeddingExtractor (no model download)."""
+
+    dim = 256
+
+    async def extract(self, samples: np.ndarray, sample_rate: int = 16000) -> list[float]:
+        rng = np.random.default_rng(1234)
+        vec = rng.standard_normal(self.dim)
+        norm = float(np.linalg.norm(vec)) or 1.0
+        return [float(v) / norm for v in vec]
+
+    def release(self) -> None:
+        pass
+
+
+class _FakeDiarizer:
+    """Single-turn stand-in for PyannoteSpeakerDiarizer (no pipeline download)."""
+
+    def __init__(self, extractor: Any | None = None) -> None:
+        self._extractor = extractor or _FakeEmbeddingExtractor()
+
+    async def diarize(
+        self,
+        samples: np.ndarray,
+        sample_rate: int = 16000,
+        clustering_threshold_override: float | None = None,
+        expected_speaker_count: int | None = None,
+        **kwargs: Any,
+    ) -> list[LocalSpeakerSegment]:
+        arr = np.asarray(samples, dtype=np.float32)
+        duration_ms = int(round(len(arr) / float(sample_rate) * 1000))
+        embedding = await self._extractor.extract(arr, sample_rate)
+        return [
+            LocalSpeakerSegment(
+                startMs=0,
+                endMs=duration_ms,
+                speakerId="SPEAKER_00",
+                samples=arr,
+                embedding=embedding,
+            )
+        ]
+
+    def release(self) -> None:
+        pass
+
+
+class _FakeAligner:
+    """Proportional-timestamp stand-in for CtcForcedAligner (no model download)."""
+
+    async def align(
+        self,
+        samples: np.ndarray,
+        sample_rate: int,
+        text: str,
+        language: str = "en",
+        offset_ms: int = 0,
+    ) -> Any:
+        arr = np.asarray(samples, dtype=np.float32)
+        duration_ms = int(round(len(arr) / float(sample_rate) * 1000))
+        return proportional_word_timestamps(text, offset_ms, max(1, duration_ms))
+
+    def release(self) -> None:
+        pass
+
+
+def _make_fake_pipeline(
+    options: dict[str, Any] | None = None, asr_engine: Any | None = None
+) -> LocalTranscriptionPipeline:
+    """Build a LocalTranscriptionPipeline with no real ML models."""
+    extractor = _FakeEmbeddingExtractor()
+    return LocalTranscriptionPipeline(
+        options or {},
+        _FakeDiarizer(extractor),
+        extractor,
+        asr_engine or MockLocalAsrEngine(),
+        _FakeAligner(),
+    )
 
 
 def test_wav_codec_roundtrip_and_resampling() -> None:
@@ -58,6 +139,7 @@ def test_wav_codec_roundtrip_and_resampling() -> None:
     assert len(resampled) == round(len(original) / 2)
 
 
+@pytest.mark.live
 async def test_wespeaker_neural_embedding_extractor_and_separation_gate() -> None:
     extractor = WeSpeakerEmbeddingExtractor()
     dec_sm = decode_wav(FIXTURE_SPEECHMATICS_PATH.read_bytes())
@@ -99,6 +181,7 @@ async def test_wespeaker_neural_embedding_extractor_and_separation_gate() -> Non
     assert cosine_similarity(weighted_centroid, emb1_a) > 0.85
 
 
+@pytest.mark.live
 async def test_pyannote_neural_diarizer_splits_multi_speaker_audio() -> None:
     extractor = WeSpeakerEmbeddingExtractor()
     diarizer = PyannoteSpeakerDiarizer(extractor, {"clusteringThreshold": 0.50})
@@ -116,23 +199,14 @@ async def test_pyannote_neural_diarizer_splits_multi_speaker_audio() -> None:
 
 
 async def test_local_pipeline_transcribes_with_candidate_roster_and_decision_margin() -> None:
-    extractor = WeSpeakerEmbeddingExtractor()
-    diarizer = PyannoteSpeakerDiarizer(extractor, {"clusteringThreshold": 0.50})
-    asr_engine = MockLocalAsrEngine(
-        ["Welcome to the team sync meeting.", "Thanks, happy to be here."]
-    )
+    extractor = _FakeEmbeddingExtractor()
+    asr_engine = MockLocalAsrEngine(["Welcome to the team sync meeting.", "Thanks, happy to be here."])
 
-    pipeline = LocalTranscriptionPipeline(
-        {"voiceprintConfig": {"similarityThreshold": 0.45}},
-        diarizer,
-        extractor,
-        asr_engine,
-    )
+    pipeline = _make_fake_pipeline({"voiceprintConfig": {"similarityThreshold": 0.45}}, asr_engine)
 
-    buf_sm = FIXTURE_SPEECHMATICS_PATH.read_bytes()
-    dec_sm = await load_audio_samples({"audioBytes": buf_sm, "enhance": False}, 16000)
-    spk1_sample = dec_sm.samples[: 16000 * 6]
-    spk1_embedding = await extractor.extract(spk1_sample, 16000)
+    audio_bytes = create_single_voice_wav(220.0, 6.0)
+    decoded = await load_audio_samples({"audioBytes": audio_bytes, "enhance": False}, 16000)
+    spk1_embedding = await extractor.extract(decoded.samples[: 16000 * 6], 16000)
 
     enrolled_alice = {
         "id": "spk-alice-uuid",
@@ -142,7 +216,7 @@ async def test_local_pipeline_transcribes_with_candidate_roster_and_decision_mar
 
     result = await pipeline.transcribe(
         {
-            "audioBytes": buf_sm,
+            "audioBytes": audio_bytes,
             "language": "en",
             "enrolledSpeakers": [enrolled_alice],
             "candidateSpeakers": ["Alice Smith"],
@@ -206,7 +280,7 @@ async def test_end_to_end_meeting_transcription_using_local_provider(tmp_path: P
     mock_asr = MockLocalAsrEngine(
         ["Let's review the local ASR engine.", "The neural diarization works seamlessly."]
     )
-    local_pipeline = LocalTranscriptionPipeline({}, None, None, mock_asr)
+    local_pipeline = _make_fake_pipeline({}, mock_asr)
     service = TranscriptionService(
         {
             "db": handle.engine,
@@ -223,10 +297,14 @@ async def test_end_to_end_meeting_transcription_using_local_provider(tmp_path: P
     assert result["transcriptArtifactId"]
 
     with handle.engine.connect() as conn:
-        stage_run = conn.execute(
-            text("SELECT * FROM stage_runs WHERE meeting_id = :mid AND stage = :st"),
-            {"mid": meeting_id, "st": STAGE_LOCAL_TRANSCRIBE},
-        ).mappings().one()
+        stage_run = (
+            conn.execute(
+                text("SELECT * FROM stage_runs WHERE meeting_id = :mid AND stage = :st"),
+                {"mid": meeting_id, "st": STAGE_LOCAL_TRANSCRIBE},
+            )
+            .mappings()
+            .one()
+        )
         assert stage_run["status"] == "done"
 
     handle.engine.dispose()
@@ -275,7 +353,7 @@ async def test_cancel_inflight_local_transcription_via_service_and_api(tmp_path:
             {"mid": meeting_id, "sz": len(audio_bytes), "now": now},
         )
 
-    local_pipeline = LocalTranscriptionPipeline({}, None, None, MockLocalAsrEngine())
+    local_pipeline = _make_fake_pipeline({})
     service = TranscriptionService(
         {
             "db": handle.engine,
@@ -295,10 +373,14 @@ async def test_cancel_inflight_local_transcription_via_service_and_api(tmp_path:
     assert result["status"] == "cancelled"
 
     with handle.engine.connect() as conn:
-        stage_run = conn.execute(
-            text("SELECT * FROM stage_runs WHERE meeting_id = :mid"),
-            {"mid": meeting_id},
-        ).mappings().first()
+        stage_run = (
+            conn.execute(
+                text("SELECT * FROM stage_runs WHERE meeting_id = :mid"),
+                {"mid": meeting_id},
+            )
+            .mappings()
+            .first()
+        )
         assert stage_run is not None
         assert stage_run["status"] == "cancelled"
 
