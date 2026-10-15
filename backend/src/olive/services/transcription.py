@@ -39,6 +39,7 @@ from ..schemas import (
     SpeakerReidentificationStatus,
     Transcript,
     TranscriptionProgressUpdate,
+    TranscriptSegment,
 )
 from ..speaker_labels import is_generic_speaker_label
 from ..workflows import (
@@ -136,6 +137,54 @@ def _speaker_has_local_voiceprint_vectors(speaker: EnrolledSpeaker) -> bool:
 
 def _is_placeholder_speaker_name(name: str) -> bool:
     return is_generic_speaker_label(name)
+
+
+def _parse_stored_transcript(raw: Any, duration_ms: int | float | None = None) -> Transcript:
+    """Parse a persisted transcript JSON artifact in any known shape.
+
+    Canonical artifacts are ``{"segments": [...]}`` objects, but speaker
+    identification rewrites Plaud transcripts in place preserving their
+    bare-array shape (``transcripts/plaud.json`` must stay a list for the
+    Plaud poller), and not-yet-identified Plaud payloads use raw
+    ``{start_time, end_time, speaker, content}`` dicts. Accept all three so
+    re-identification works regardless of which shape is on disk.
+
+    Raises ``ValueError`` when nothing usable remains.
+    """
+    if isinstance(raw, dict):
+        return Transcript.model_validate(raw)
+    if isinstance(raw, list) and raw:
+        first = next((item for item in raw if isinstance(item, dict)), None)
+        if first is not None and ("start_time" in first or "end_time" in first or "content" in first):
+            from ..plaud.poller import plaud_segments_to_transcript
+
+            converted = plaud_segments_to_transcript(raw, duration_ms)
+            if converted is not None:
+                return converted
+        segments: list[TranscriptSegment] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            text_value = str(item.get("text") or item.get("content") or "")
+            if not text_value.strip():
+                continue
+            try:
+                start = int(item.get("startMs") or item.get("start_time") or 0)
+                end = int(item.get("endMs") or item.get("end_time") or 0)
+            except (TypeError, ValueError):
+                continue
+            segments.append(
+                TranscriptSegment(
+                    startMs=start,
+                    endMs=end,
+                    speaker=str(item.get("speaker") or "Speaker"),
+                    text=text_value,
+                    verified=bool(item.get("verified")),
+                )
+            )
+        if segments:
+            return Transcript(segments=segments)
+    raise ValueError("unrecognized transcript shape")
 
 
 @dataclass
@@ -624,7 +673,9 @@ class TranscriptionService:
         if not transcript_file.exists():
             raise ValueError(f"Transcript file is missing for meeting {meeting_id}")
         try:
-            transcript = Transcript.model_validate(json.loads(transcript_file.read_text(encoding="utf-8")))
+            raw = json.loads(transcript_file.read_text(encoding="utf-8"))
+            duration_ms = (recording.get("duration_ms") if recording else None) or None
+            transcript = _parse_stored_transcript(raw, duration_ms)
         except Exception:
             raise ValueError(f"Stored transcript for meeting {meeting_id} could not be parsed") from None
         if not transcript.segments:

@@ -33,6 +33,9 @@ Olive is currently pre-1.0 (`0.2.0`); everything below shipped as part of the
   reassigning a voice, or rapid-enrolling checked samples now trains the
   voiceprint even when the clip scores below the outlier threshold; a low
   score expands the voiceprint instead of rejecting your confirmation.
+- **Speaker re-identification works on Plaud transcripts** — re-running
+  speaker matching no longer fails with "could not be parsed" on meetings
+  whose transcript was already rewritten in Plaud's list format.
 
 ## [0.2.0] — 2026-10-14
 

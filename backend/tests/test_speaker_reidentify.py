@@ -444,3 +444,104 @@ async def test_cancel_marks_status_cancelled(tmp_path: Path, monkeypatch: Any) -
     assert res["success"] is True
     status = service.get_speaker_reidentification_status(meeting_id)
     assert status is not None and status.stage == "cancelled"
+
+
+def _overwrite_transcript_file(folder: str, provider: str, payload: Any) -> None:
+    (Path(folder) / f"transcripts/{provider}.json").write_text(
+        f"{json.dumps(payload, indent=2)}\n", encoding="utf-8"
+    )
+
+
+async def test_reidentify_targets_parses_bare_segment_array(tmp_path: Path) -> None:
+    """Plaud transcripts rewritten by speaker identification stay bare lists."""
+    _handle, service, meeting_id, folder, _art = _seed_reidentify_meeting(tmp_path, provider="plaud")
+    _overwrite_transcript_file(
+        folder,
+        "plaud",
+        [
+            {
+                "startMs": 5420,
+                "endMs": 20860,
+                "speaker": "Kenneth Truong",
+                "text": "Yeah, just finishing off the video.",
+                "verified": True,
+                "words": [],
+            },
+            {
+                "startMs": 20860,
+                "endMs": 28060,
+                "speaker": "Yogitha",
+                "text": "That we can try is.",
+                "verified": True,
+                "words": [],
+            },
+        ],
+    )
+    targets = service._reidentify_targets(meeting_id)
+    assert [s.speaker for s in targets["transcript"].segments] == ["Kenneth Truong", "Yogitha"]
+    assert targets["transcript"].segments[0].startMs == 5420
+
+
+async def test_reidentify_targets_parses_raw_plaud_shape(tmp_path: Path) -> None:
+    """Not-yet-identified Plaud payloads use start_time/end_time/content keys."""
+    _handle, service, meeting_id, folder, _art = _seed_reidentify_meeting(tmp_path, provider="plaud")
+    _overwrite_transcript_file(
+        folder,
+        "plaud",
+        [
+            {"start_time": 5420.0, "end_time": 20860.0, "speaker": "Kenneth", "content": "Hello."},
+            {"start_time": 20860.0, "end_time": 28060.0, "speaker": None, "content": ""},
+            {"start_time": 28060.0, "end_time": 55950.0, "speaker": "Yogitha", "content": "Hi."},
+        ],
+    )
+    targets = service._reidentify_targets(meeting_id)
+    assert [s.speaker for s in targets["transcript"].segments] == ["Kenneth", "UU", "Yogitha"]
+
+
+async def test_request_plaud_with_array_transcript_delegates_to_poller(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Regression: re-identify on an identified Plaud meeting must not raise
+    "Stored transcript ... could not be parsed"."""
+    import olive.services.transcription as tx_mod
+
+    _handle, service, meeting_id, folder, _art = _seed_reidentify_meeting(tmp_path, provider="plaud")
+    _overwrite_transcript_file(
+        folder,
+        "plaud",
+        [
+            {
+                "startMs": 5420,
+                "endMs": 20860,
+                "speaker": "Kenneth Truong",
+                "text": "Yeah, just finishing off the video.",
+                "verified": True,
+                "words": [],
+            },
+        ],
+    )
+
+    async def _fake_ensure(**_kwargs: Any) -> str:
+        return "dbos://fake"
+
+    async def _fake_enqueue(queue_name: str, _fn: Any, **kwargs: Any) -> Any:
+        return object()
+
+    monkeypatch.setattr(tx_mod, "ensure_dbos_launched_async", _fake_ensure)
+    monkeypatch.setattr(tx_mod, "enqueue_stage_job", _fake_enqueue)
+
+    class _FakePoller:
+        async def run_plaud_speaker_identification(self, mid: str) -> dict[str, Any]:
+            return {"meetingId": mid, "status": "renamed"}
+
+    service.set_plaud_poller(_FakePoller())
+    res = await service.request_speaker_reidentification(meeting_id)
+    assert res["status"] == "queued"
+    assert res["provider"] == "plaud"
+
+
+async def test_reidentify_targets_still_rejects_garbage(tmp_path: Path) -> None:
+    _handle, service, meeting_id, folder, _art = _seed_reidentify_meeting(tmp_path, provider="plaud")
+    (Path(folder) / "transcripts/plaud.json").write_text("this is not json{{{\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="could not be parsed"):
+        service._reidentify_targets(meeting_id)
