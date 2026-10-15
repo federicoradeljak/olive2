@@ -1159,6 +1159,14 @@ class TranscriptionService:
         else:
             target_ids = self._resolve_bulk_meeting_ids(
                 search=search,
+                tags=filters.get("tags", opts.get("tags")),
+                status=filters.get("status", opts.get("status")),
+                speaker_id=filters.get("speakerId", filters.get("speaker_id", opts.get("speakerId"))),
+                has_summary=filters.get("hasSummary", filters.get("has_summary", opts.get("hasSummary"))),
+                has_transcript=filters.get(
+                    "hasTranscript",
+                    filters.get("has_transcript", opts.get("hasTranscript")),
+                ),
                 start_time=start_time,
                 end_time=end_time,
                 current_provider=current_provider,
@@ -1236,15 +1244,48 @@ class TranscriptionService:
         self,
         *,
         search: Any = None,
+        tags: Any = None,
+        status: Any = None,
+        speaker_id: Any = None,
+        has_summary: Any = None,
+        has_transcript: Any = None,
         start_time: Any = None,
         end_time: Any = None,
         current_provider: str | None = None,
     ) -> list[str]:
+        from .meetings import normalize_tag_list, parse_bool_filter
+
         clauses: list[str] = []
         params: dict[str, Any] = {}
         if search is not None and str(search).strip():
             clauses.append("(title LIKE :search OR tags LIKE :search)")
             params["search"] = f"%{str(search).strip()}%"
+        for idx, tag in enumerate(normalize_tag_list(tags)):
+            pname = f"tag_{idx}"
+            clauses.append(
+                f"EXISTS (SELECT 1 FROM json_each(meetings.tags) WHERE lower(value) = lower(:{pname}))"
+            )
+            params[pname] = tag
+        if status is not None and str(status).strip():
+            clauses.append("status = :status")
+            params["status"] = str(status).strip()
+        if speaker_id is not None and str(speaker_id).strip():
+            clauses.append(
+                "EXISTS (SELECT 1 FROM meeting_speakers "
+                "WHERE meeting_speakers.meeting_id = meetings.id "
+                "AND meeting_speakers.speaker_id = :speaker_id)"
+            )
+            params["speaker_id"] = str(speaker_id).strip()
+        summary_flag = parse_bool_filter(has_summary)
+        if summary_flag is True:
+            clauses.append("primary_summary_artifact_id IS NOT NULL")
+        elif summary_flag is False:
+            clauses.append("primary_summary_artifact_id IS NULL")
+        transcript_flag = parse_bool_filter(has_transcript)
+        if transcript_flag is True:
+            clauses.append("primary_transcript_artifact_id IS NOT NULL")
+        elif transcript_flag is False:
+            clauses.append("primary_transcript_artifact_id IS NULL")
         try:
             start_ms = (
                 int(float(start_time)) if start_time is not None and str(start_time).strip() != "" else None

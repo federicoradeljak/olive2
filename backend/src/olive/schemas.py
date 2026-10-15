@@ -244,6 +244,11 @@ class TranscriptionProgressUpdate(CamelModel):
 
 class BulkTranscribeFilters(CamelModel):
     search: str | None = None
+    tags: list[str] | None = None
+    status: str | None = None
+    speakerId: str | None = None
+    hasSummary: bool | None = None
+    hasTranscript: bool | None = None
     startTime: int | None = None
     endTime: int | None = None
     currentProvider: str | None = None

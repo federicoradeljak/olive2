@@ -15,7 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from .layout import meeting_paths
-from .services.meetings import get_meeting, list_meetings
+from .services.meetings import get_meeting, list_meetings, list_tags
 
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
 
@@ -47,31 +47,29 @@ def _parse_summary_action_items(summary: str | None) -> list[dict[str, Any]]:
     return out
 
 
-def _load_transcript_text(
-    db: Engine, meetings_dir: str, meeting: dict[str, Any]
-) -> str:
+def _load_transcript_text(db: Engine, meetings_dir: str, meeting: dict[str, Any]) -> str:
     with db.connect() as conn:
-        artifacts = conn.execute(
-            text(
-                """
+        artifacts = (
+            conn.execute(
+                text(
+                    """
                 SELECT path, format FROM artifacts
                 WHERE meeting_id = :mid AND kind = 'transcript'
                 ORDER BY created_at DESC
                 """
-            ),
-            {"mid": meeting["id"]},
-        ).mappings().all()
+                ),
+                {"mid": meeting["id"]},
+            )
+            .mappings()
+            .all()
+        )
 
-    art = next((a for a in artifacts if a["format"] == "txt"), None) or (
-        artifacts[0] if artifacts else None
-    )
+    art = next((a for a in artifacts if a["format"] == "txt"), None) or (artifacts[0] if artifacts else None)
     if not art:
         return ""
     try:
         folder = Path(
-            meeting_paths(
-                meetings_dir, int(meeting["startTime"]), meeting["title"], meeting["id"]
-            ).folder
+            meeting_paths(meetings_dir, int(meeting["startTime"]), meeting["title"], meeting["id"]).folder
         )
         return (folder / art["path"]).read_text(encoding="utf-8")
     except Exception:
@@ -89,9 +87,7 @@ def _transcript_snippet(text_content: str, query: str) -> str | None:
     return f"{prefix}{text_content[start:end].strip()}{suffix}"
 
 
-def _list_all_meetings(
-    db: Engine, meetings_dir: str, query: dict[str, Any]
-) -> list[dict[str, Any]]:
+def _list_all_meetings(db: Engine, meetings_dir: str, query: dict[str, Any]) -> list[dict[str, Any]]:
     meetings: list[dict[str, Any]] = []
     offset = 0
     while True:
@@ -105,21 +101,63 @@ def _list_all_meetings(
     return meetings
 
 
+_MEETING_FILTER_PROPERTIES: dict[str, Any] = {
+    "search": {"type": "string", "description": "Search meeting titles, tags, transcripts, and summaries"},
+    "tags": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Exact tag match (case-insensitive, AND-combined). Unlike search, never matches transcript text.",
+    },
+    "source": {"type": "string", "enum": ["plaud", "upload", "ios-shortcut"]},
+    "status": {"type": "string", "description": "Meeting status (e.g. ready, processing, error)"},
+    "speakerId": {"type": "string", "description": "Only meetings linked to this speaker"},
+    "hasSummary": {"type": "boolean", "description": "Only meetings with/without a summary"},
+    "hasTranscript": {"type": "boolean", "description": "Only meetings with/without a transcript"},
+    "startTime": {"type": "number"},
+    "endTime": {"type": "number"},
+    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+    "offset": {"type": "integer", "minimum": 0},
+}
+
+
+# `search_transcripts` already has `query` and `get_action_items` scopes by
+# meeting selection: giving them a second free-text `search` field would leave
+# agents guessing which one scopes what, so both tools get every meeting
+# filter EXCEPT `search`. `list_meetings` keeps the full set.
+_MEETING_FILTER_PROPERTIES_NO_SEARCH: dict[str, Any] = {
+    k: v for k, v in _MEETING_FILTER_PROPERTIES.items() if k != "search"
+}
+
+
+def _meeting_filter_args(arguments: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "search": arguments.get("search"),
+        "tags": arguments.get("tags"),
+        "source": arguments.get("source"),
+        "status": arguments.get("status"),
+        "speakerId": arguments.get("speakerId"),
+        "hasSummary": arguments.get("hasSummary"),
+        "hasTranscript": arguments.get("hasTranscript"),
+        "startTime": arguments.get("startTime"),
+        "endTime": arguments.get("endTime"),
+        "limit": arguments.get("limit"),
+        "offset": arguments.get("offset"),
+    }
+
+
 MCP_TOOLS_SPEC: list[dict[str, Any]] = [
     {
         "name": "list_meetings",
-        "description": "List Olive meetings with optional text, source, and date filters.",
+        "description": "List Olive meetings with optional text, tag, speaker, status, and date filters.",
         "inputSchema": {
             "type": "object",
-            "properties": {
-                "search": {"type": "string", "description": "Search meeting titles, tags, transcripts, and summaries"},
-                "source": {"type": "string", "enum": ["plaud", "upload", "ios-shortcut"]},
-                "startTime": {"type": "number"},
-                "endTime": {"type": "number"},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-                "offset": {"type": "integer", "minimum": 0},
-            },
+            "properties": _MEETING_FILTER_PROPERTIES,
         },
+    },
+    {
+        "name": "list_tags",
+        "description": "List distinct meeting tags with meeting counts.",
+        "inputSchema": {"type": "object", "properties": {}},
     },
     {
         "name": "get_meeting",
@@ -140,11 +178,7 @@ MCP_TOOLS_SPEC: list[dict[str, Any]] = [
             "required": ["query"],
             "properties": {
                 "query": {"type": "string", "description": "Text to search for"},
-                "source": {"type": "string", "enum": ["plaud", "upload", "ios-shortcut"]},
-                "startTime": {"type": "number"},
-                "endTime": {"type": "number"},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-                "offset": {"type": "integer", "minimum": 0},
+                **_MEETING_FILTER_PROPERTIES_NO_SEARCH,
             },
         },
     },
@@ -156,11 +190,7 @@ MCP_TOOLS_SPEC: list[dict[str, Any]] = [
             "properties": {
                 "meetingId": {"type": "string"},
                 "includeCompleted": {"type": "boolean", "default": True},
-                "source": {"type": "string", "enum": ["plaud", "upload", "ios-shortcut"]},
-                "startTime": {"type": "number"},
-                "endTime": {"type": "number"},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-                "offset": {"type": "integer", "minimum": 0},
+                **_MEETING_FILTER_PROPERTIES_NO_SEARCH,
             },
         },
     },
@@ -193,19 +223,11 @@ async def execute_mcp_tool(
 ) -> dict[str, Any]:
     try:
         if tool_name == "list_meetings":
-            resp = list_meetings(
-                db,
-                {
-                    "search": arguments.get("search"),
-                    "source": arguments.get("source"),
-                    "startTime": arguments.get("startTime"),
-                    "endTime": arguments.get("endTime"),
-                    "limit": arguments.get("limit"),
-                    "offset": arguments.get("offset"),
-                },
-                meetings_dir,
-            )
+            resp = list_meetings(db, _meeting_filter_args(arguments), meetings_dir)
             return _text_result({"meetings": resp["meetings"], "pagination": resp["pagination"]})
+
+        if tool_name == "list_tags":
+            return _text_result({"tags": list_tags(db)})
 
         if tool_name == "get_meeting":
             meeting_id = str(arguments.get("meetingId") or "")
@@ -223,11 +245,7 @@ async def execute_mcp_tool(
             candidates = _list_all_meetings(
                 db,
                 meetings_dir,
-                {
-                    "source": arguments.get("source"),
-                    "startTime": arguments.get("startTime"),
-                    "endTime": arguments.get("endTime"),
-                },
+                {**_meeting_filter_args(arguments), "limit": None, "offset": None},
             )
             matches: list[dict[str, Any]] = []
             for m in candidates:
@@ -256,11 +274,7 @@ async def execute_mcp_tool(
                 meetings_list = _list_all_meetings(
                     db,
                     meetings_dir,
-                    {
-                        "source": arguments.get("source"),
-                        "startTime": arguments.get("startTime"),
-                        "endTime": arguments.get("endTime"),
-                    },
+                    {**_meeting_filter_args(arguments), "limit": None, "offset": None},
                 )
             action_items: list[dict[str, Any]] = []
             for m in meetings_list:
@@ -375,9 +389,7 @@ async def handle_mcp_request(
         return Response(status_code=202)
 
     if method == "tools/list":
-        return JSONResponse(
-            {"jsonrpc": "2.0", "id": rpc_id, "result": {"tools": MCP_TOOLS_SPEC}}
-        )
+        return JSONResponse({"jsonrpc": "2.0", "id": rpc_id, "result": {"tools": MCP_TOOLS_SPEC}})
 
     if method == "tools/call":
         tool_name = str(params.get("name") or "")

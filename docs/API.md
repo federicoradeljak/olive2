@@ -60,10 +60,30 @@ Returns HTTP 200 with:
 {"status":"ok"}
 ```
 
-## `GET /api/meetings?limit&offset&search`
+## `GET /api/meetings?limit&offset&search&tags&status&speakerId&hasSummary&hasTranscript`
 
 Returns HTTP 200 with a stable envelope. `meetings` is always an array, including when the
 database is empty. `limit` defaults to `50` and is capped at `100`; `offset` defaults to `0`.
+
+* `tags`: exact tag match (case-insensitive), repeatable (`?tags=acme&tags=q3`, AND semantics)
+  or comma-separated (`?tags=acme,q3`). Unlike `search`, never matches transcript text —
+  use it to scope to a tagged subset (e.g. all calls for one client).
+* `status`: exact meeting status (`ready`, `processing`, `error`, …).
+* `speakerId`: only meetings linked to this speaker.
+* `hasSummary` / `hasTranscript`: `true` / `false`.
+* All filters compose as AND with `search`, `source`, `startTime`, `endTime`.
+
+## `GET /api/tags`
+
+Returns distinct meeting tags with meeting counts, sorted alphabetically:
+
+```json
+{
+  "tags": [
+    { "tag": "acme", "meetingCount": 4 }
+  ]
+}
+```
 
 ```json
 {
@@ -93,7 +113,36 @@ database is empty. `limit` defaults to `50` and is capped at `100`; `offset` def
 
 ## `/mcp`
 
-Provides Olive's read-only Model Context Protocol endpoint on the same port as the HTTP API. It supports `list_meetings`, `get_meeting`, `search_transcripts`, `get_action_items`, `list_speakers`, and `get_speaker_profile`.
+Provides Olive's read-only Model Context Protocol endpoint on the same port as the HTTP API. It supports `list_meetings`, `list_tags`, `get_meeting`, `search_transcripts`, `get_action_items`, `list_speakers`, and `get_speaker_profile`.
+
+`list_meetings` accepts `search` plus the meeting filters: `tags` (exact,
+AND-combined), `source`, `status`, `speakerId`, `hasSummary`,
+`hasTranscript`, `startTime`, `endTime`, plus `limit` / `offset`.
+`search_transcripts` takes `query` (the transcript text to find) plus the same
+filters *except* `search`, and `get_action_items` takes the same filters
+*except* `search` — one free-text field per tool, so agents never have to
+guess which one scopes what. Point an agent at a tagged subset (e.g.
+`{"tags": ["acme"]}`) to review one client or project without keyword
+collisions from transcript text.
+
+### MCP search: future considerations (deferred)
+
+Deliberately out of scope for the tag-filtering work above; noted here so the
+trade-offs are recorded:
+
+* **Richer structured facets (cheap, SQL-only):** `provider`/engine (from
+  `recordings` / `artifacts` / `stage_runs`), duration range (from
+  `recordings.duration_ms`), stage state (from `stage_runs`), and chat
+  presence (from `chat_messages`) are all queryable today and can be added
+  as filters if agent workflows ask for them.
+* **Segment-level transcript search (expensive):** `search_transcripts`
+  currently scans transcript files per call and returns a plain-text window
+  with no timestamps or speaker attribution. Returning per-segment hits
+  (`startMs` / `endMs`, speaker, snippet, hit counts) requires parsing
+  segments on scan; a persistent FTS5 segment index would be the step after
+  that if libraries grow large enough for scan cost to matter.
+* **Beyond FTS:** semantic/embedding search. Not recommended until filtered
+exact + full-text search proves insufficient.
 
 Authentication uses `Authorization: Bearer <OLIVE_MCP_TOKEN>`. If `OLIVE_MCP_TOKEN` is unset, `OLIVE_INGEST_TOKEN` is used as a fallback. When Olive binds to loopback, the endpoint may be used without a token; non-loopback binds require one.
 

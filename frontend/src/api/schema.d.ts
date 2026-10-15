@@ -38,6 +38,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Tags Route */
+        get: operations["get_tags_route_api_tags_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/ingest": {
         parameters: {
             query?: never;
@@ -1567,6 +1584,31 @@ export interface components {
              */
             search: string | null;
             /**
+             * Tags
+             * @default null
+             */
+            tags: string[] | null;
+            /**
+             * Status
+             * @default null
+             */
+            status: string | null;
+            /**
+             * Speakerid
+             * @default null
+             */
+            speakerId: string | null;
+            /**
+             * Hassummary
+             * @default null
+             */
+            hasSummary: boolean | null;
+            /**
+             * Hastranscript
+             * @default null
+             */
+            hasTranscript: boolean | null;
+            /**
              * Starttime
              * @default null
              */
@@ -2263,6 +2305,26 @@ export interface operations {
         };
     };
     get_meetings_route_api_meetings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_tags_route_api_tags_get: {
         parameters: {
             query?: never;
             header?: never;

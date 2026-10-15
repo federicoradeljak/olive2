@@ -28,6 +28,37 @@ DEFAULT_LIMIT = 50
 MAX_LIMIT = 100
 
 
+def normalize_tag_list(value: Any) -> list[str]:
+    """Normalize a tags filter value to a deduped list of non-empty strings.
+
+    Accepts a list/tuple (MCP JSON array) or a comma-separated string
+    (REST convenience). Matching callers perform case-insensitively.
+    """
+    if value is None:
+        return []
+    items: list[Any] = list(value) if isinstance(value, (list, tuple)) else str(value).split(",")
+    seen: list[str] = []
+    for item in items:
+        s = str(item).strip()
+        if s and s not in seen:
+            seen.append(s)
+    return seen
+
+
+def parse_bool_filter(value: Any) -> bool | None:
+    """Parse an optional boolean filter (REST strings or MCP booleans)."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    s = str(value).strip().lower()
+    if s in ("true", "1", "yes"):
+        return True
+    if s in ("false", "0", "no"):
+        return False
+    return None
+
+
 def parse_tags(value: str | None) -> list[str]:
     if not value:
         return []
@@ -119,6 +150,15 @@ def list_meetings(
     source = q.get("source")
     start_time = q.get("startTime") if q.get("startTime") is not None else q.get("start_time")
     end_time = q.get("endTime") if q.get("endTime") is not None else q.get("end_time")
+    tags = normalize_tag_list(q.get("tags"))
+    status = q.get("status")
+    speaker_id = q.get("speakerId") if q.get("speakerId") is not None else q.get("speaker_id")
+    has_summary = parse_bool_filter(
+        q.get("hasSummary") if q.get("hasSummary") is not None else q.get("has_summary")
+    )
+    has_transcript = parse_bool_filter(
+        q.get("hasTranscript") if q.get("hasTranscript") is not None else q.get("has_transcript")
+    )
 
     matching_ids: set[str] | None = None
 
@@ -183,9 +223,39 @@ def list_meetings(
                     params[pname] = mid
                 where_clauses.append(f"id IN ({', '.join(id_placeholders)})")
 
+        for idx, tag in enumerate(tags):
+            # Exact tag membership (case-insensitive), AND-combined across
+            # multiple tags. Deliberately NOT a LIKE substring: `search`
+            # already covers fuzzy matching, while `tags` scopes precisely
+            # (e.g. tag `acme` must not match a transcript that mentions
+            # "acme" in passing).
+            pname = f"tag_{idx}"
+            where_clauses.append(
+                f"EXISTS (SELECT 1 FROM json_each(meetings.tags) WHERE lower(value) = lower(:{pname}))"
+            )
+            params[pname] = tag
+
         if source:
             where_clauses.append("source = :source")
             params["source"] = source
+        if status:
+            where_clauses.append("status = :status")
+            params["status"] = status
+        if speaker_id:
+            where_clauses.append(
+                "EXISTS (SELECT 1 FROM meeting_speakers "
+                "WHERE meeting_speakers.meeting_id = meetings.id "
+                "AND meeting_speakers.speaker_id = :speaker_id)"
+            )
+            params["speaker_id"] = speaker_id
+        if has_summary is True:
+            where_clauses.append("primary_summary_artifact_id IS NOT NULL")
+        elif has_summary is False:
+            where_clauses.append("primary_summary_artifact_id IS NULL")
+        if has_transcript is True:
+            where_clauses.append("primary_transcript_artifact_id IS NOT NULL")
+        elif has_transcript is False:
+            where_clauses.append("primary_transcript_artifact_id IS NULL")
         if start_time is not None:
             where_clauses.append("start_time >= :start_time")
             params["start_time"] = int(start_time)
@@ -219,6 +289,29 @@ def list_meetings(
             "total": int(total or 0),
         },
     }
+
+
+def list_tags(db: Engine) -> list[dict[str, Any]]:
+    """Return distinct meeting tags with meeting counts.
+
+    Grouped case-insensitively ("Acme" and "acme" count together) while
+    preserving the first-seen display form; sorted alphabetically.
+    """
+    counts: dict[str, int] = {}
+    display: dict[str, str] = {}
+    with db.connect() as conn:
+        rows = conn.execute(text("SELECT tags FROM meetings")).mappings().all()
+    for row in rows:
+        for tag in parse_tags(row.get("tags")):
+            key = tag.strip().lower()
+            if not key:
+                continue
+            if key not in display:
+                display[key] = tag.strip()
+            counts[key] = counts.get(key, 0) + 1
+    return [
+        {"tag": display[key], "meetingCount": counts[key]} for key in sorted(display, key=lambda k: k.lower())
+    ]
 
 
 def update_meeting_tags(db: Engine, meeting_id: str, tags: list[str]) -> MeetingListItem | None:

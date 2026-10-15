@@ -65,6 +65,7 @@ def test_mcp_is_available_without_token_on_loopback_and_lists_tools(tmp_path: Pa
     tool_names = [t["name"] for t in tools_body["result"]["tools"]]
     assert tool_names == [
         "list_meetings",
+        "list_tags",
         "get_meeting",
         "search_transcripts",
         "get_action_items",

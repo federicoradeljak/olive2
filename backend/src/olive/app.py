@@ -26,6 +26,7 @@ from .services.meetings import (
     delete_meeting,
     get_meeting,
     list_meetings,
+    list_tags,
     parse_json_field,
     update_meeting_start_time,
     update_meeting_tags,
@@ -523,19 +524,33 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
     @app.get("/api/meetings")
     async def get_meetings_route(request: Request) -> JSONResponse:
         q = request.query_params
+        # `tags` accepts repeatable params (?tags=a&tags=b, AND semantics)
+        # as well as a single comma-separated value (?tags=a,b).
+        raw_tags: list[str] = []
+        for entry in q.getlist("tags"):
+            raw_tags.extend(str(entry).split(","))
         resp = list_meetings(
             db,
             {
                 "limit": _numeric_query_param(q.get("limit")),
                 "offset": _numeric_query_param(q.get("offset")),
                 "search": q.get("search"),
+                "tags": raw_tags,
                 "source": q.get("source"),
+                "status": q.get("status"),
+                "speakerId": q.get("speakerId"),
+                "hasSummary": q.get("hasSummary"),
+                "hasTranscript": q.get("hasTranscript"),
                 "startTime": _numeric_query_param(q.get("startTime")),
                 "endTime": _numeric_query_param(q.get("endTime")),
             },
             meetings_dir,
         )
         return JSONResponse(resp)
+
+    @app.get("/api/tags")
+    async def get_tags_route() -> JSONResponse:
+        return JSONResponse({"tags": list_tags(db)})
 
     @app.post("/api/ingest")
     async def post_ingest_route(request: Request) -> JSONResponse:
