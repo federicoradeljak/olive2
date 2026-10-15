@@ -130,6 +130,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
     speaker_service = opts.get("speakerService") or opts.get("speaker_service")
     llm_service = opts.get("llmService") or opts.get("llm_service")
     summary_service = opts.get("summaryService") or opts.get("summary_service")
+    title_service = opts.get("titleService") or opts.get("title_service")
     chat_service = opts.get("chatService") or opts.get("chat_service")
     backup_service = opts.get("backupService") or opts.get("backup_service")
     plaud_poller = opts.get("plaudPoller") or opts.get("plaud_poller")
@@ -173,6 +174,18 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                 template_service=template_service,
             )
         return summary_service
+
+    def get_title_service() -> Any:
+        nonlocal title_service
+        if title_service is None:
+            from .services.titles import TitleService
+
+            title_service = TitleService(
+                db=db,
+                meetings_dir=meetings_dir,
+                llm_service=get_llm_service(),
+            )
+        return title_service
 
     def get_chat_service() -> Any:
         nonlocal chat_service
@@ -546,6 +559,36 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             if not updated:
                 return JSONResponse({"error": "Meeting not found"}, status_code=404)
             return JSONResponse({"meeting": updated.model_dump()})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+    @app.post("/api/meetings/{meeting_id}/auto-title")
+    async def post_auto_title_route(meeting_id: str, request: Request) -> JSONResponse:
+        body: dict[str, Any] = {}
+        try:
+            parsed = await request.json()
+            if isinstance(parsed, dict):
+                body = parsed
+        except Exception:
+            pass
+
+        try:
+            svc = get_title_service()
+            generate_fn = getattr(svc, "generate_and_apply", None) or getattr(svc, "generateAndApply", None)
+            if not callable(generate_fn):
+                raise RuntimeError("Title service is not configured")
+            res = generate_fn(
+                meeting_id,
+                provider=body.get("provider"),
+                model=body.get("model"),
+            )
+            if asyncio.iscoroutine(res) or isinstance(res, asyncio.Future):
+                res = await res
+            return JSONResponse(res)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except RuntimeError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=500)
 

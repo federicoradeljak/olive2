@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import type { ReactElement, ReactNode } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
+import { Sparkles } from "lucide-react";
 import {
   AssistantRuntimeProvider,
   ComposerPrimitive,
@@ -1572,6 +1573,7 @@ function MeetingDetailView({
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleInput, setTitleInput] = useState("");
   const [savingTitle, setSavingTitle] = useState(false);
+  const [autoTitling, setAutoTitling] = useState(false);
   const [newTagInput, setNewTagInput] = useState("");
   const [savingTags, setSavingTags] = useState(false);
   const [mobileSection, setMobileSection] = useState<"summary" | "transcript" | null>(null);
@@ -1606,6 +1608,27 @@ function MeetingDetailView({
       setError(err instanceof Error ? err.message : "Failed to rename meeting");
     } finally {
       setSavingTitle(false);
+    }
+  };
+
+  const handleAutoTitle = async () => {
+    if (autoTitling || savingTitle || editingTitle) return;
+    setAutoTitling(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/meetings/${meetingId}/auto-title`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      });
+      const data = (await res.json().catch(() => ({}))) as { error?: string; meeting?: MeetingListItem };
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (!data.meeting) throw new Error("Auto-title returned no meeting");
+      setDetail((prev) => (prev ? { ...prev, meeting: { ...prev.meeting, title: data.meeting!.title } } : prev));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to auto-generate title");
+    } finally {
+      setAutoTitling(false);
     }
   };
 
@@ -2195,15 +2218,28 @@ function MeetingDetailView({
               ) : (
                 <>
                   <h1 className="text-2xl sm:text-3xl font-bold tracking-tight break-words">{detail.meeting.title}</h1>
-                  <button
-                    type="button"
-                    onClick={startRename}
-                    className="mt-2 rounded-md px-1.5 py-1 text-stone-500 transition hover:bg-stone-800 hover:text-lime-300"
-                    aria-label="Rename meeting"
-                    title="Rename meeting"
-                  >
-                    ✎
-                  </button>
+                  <div className="mt-2 flex flex-wrap items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={startRename}
+                      className="rounded-md px-1.5 py-1 text-stone-500 transition hover:bg-stone-800 hover:text-lime-300"
+                      aria-label="Rename meeting"
+                      title="Rename meeting"
+                    >
+                      ✎
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleAutoTitle()}
+                      disabled={autoTitling || savingTitle}
+                      className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-stone-500 transition hover:bg-stone-800 hover:text-lime-300 disabled:opacity-50"
+                      aria-label="Auto-generate meeting title with default LLM"
+                      title="Auto-generate title with default LLM"
+                    >
+                      <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                      {autoTitling ? "Titling…" : "Auto-title"}
+                    </button>
+                  </div>
                 </>
               )}
             </div>

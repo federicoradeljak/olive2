@@ -168,6 +168,43 @@
         }
       }
     },
+    "/api/meetings/{meeting_id}/auto-title": {
+      "post": {
+        "summary": "Post Auto Title Route",
+        "operationId": "post_auto_title_route_api_meetings__meeting_id__auto_title_post",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/meetings/{meeting_id}/tags": {
       "put": {
         "summary": "Put Meeting Tags Route",
@@ -3483,7 +3520,8 @@
             "enum": [
               "transcription",
               "summary",
-              "chat"
+              "chat",
+              "title"
             ],
             "title": "Kind",
             "type": "string"
@@ -3568,7 +3606,8 @@
               "enum": [
                 "transcription",
                 "summary",
-                "chat"
+                "chat",
+                "title"
               ],
               "type": "string"
             },

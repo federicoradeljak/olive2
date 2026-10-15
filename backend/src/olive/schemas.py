@@ -595,7 +595,7 @@ class LogListResponse(CamelModel):
     categories: list[str]
 
 
-UsageKind = Literal["transcription", "summary", "chat"]
+UsageKind = Literal["transcription", "summary", "chat", "title"]
 
 
 class UsageEvent(CamelModel):
