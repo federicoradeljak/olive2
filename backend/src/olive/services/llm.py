@@ -71,6 +71,12 @@ DEFAULT_PROVIDER_BASE_URL: dict[str, str] = {
     "xai": "https://api.x.ai/v1",
 }
 
+WEB_CATALOG_URL = "https://models.dev/api.json"
+WEB_CATALOG_CACHE_FILENAME = "models-web-cache.json"
+# Fresh installs have no cache, so the first boot fetches the live catalog.
+# Subsequent boots skip the network call while the cache is younger than this.
+WEB_CATALOG_STALE_AFTER_SECONDS = 24 * 3600
+
 _ENDPOINT_SUFFIX_RE = re.compile(
     r"(?:/v1/chat/completions|/chat/completions|/v1/messages|/messages|/v1/responses|/responses|/v1beta/models|/v1beta1|/v1beta|/v1alpha|/v1)+$",
     re.IGNORECASE,
@@ -662,9 +668,12 @@ class LlmService:
         self.web_catalog: dict[str, LlmModelCatalogItem] = {}
         self._load_cached_web_catalog()
 
+    def _web_catalog_cache_path(self) -> Path:
+        return Path(self.config_dir) / WEB_CATALOG_CACHE_FILENAME
+
     def _load_cached_web_catalog(self) -> None:
         try:
-            cache_path = Path(self.config_dir) / "models-web-cache.json"
+            cache_path = self._web_catalog_cache_path()
             if cache_path.exists():
                 raw = json.loads(cache_path.read_text(encoding="utf-8"))
                 if isinstance(raw, list):
@@ -674,10 +683,33 @@ class LlmService:
         except Exception:
             pass
 
+    def is_web_catalog_stale(self, max_age_seconds: float = WEB_CATALOG_STALE_AFTER_SECONDS) -> bool:
+        """True when the cached web catalog is missing, empty, or older than *max_age_seconds*."""
+        if not self.web_catalog:
+            return True
+        try:
+            mtime = self._web_catalog_cache_path().stat().st_mtime
+        except OSError:
+            return True
+        return (time.time() - mtime) > max_age_seconds
+
+    async def refresh_catalog_if_stale(
+        self, max_age_seconds: float = WEB_CATALOG_STALE_AFTER_SECONDS
+    ) -> dict[str, int]:
+        """Refresh the web catalog only when the on-disk cache is missing or stale.
+
+        Returns ``{"count": n, "refreshed": bool}`` so callers (e.g. server
+        startup) can skip the models.dev network call on every boot.
+        """
+        if not self.is_web_catalog_stale(max_age_seconds):
+            return {"count": len(self.web_catalog), "refreshed": False}
+        result = await self.refresh_catalog()
+        return {"count": result.get("count", len(self.web_catalog)), "refreshed": True}
+
     def _save_web_catalog(self) -> None:
         try:
             Path(self.config_dir).mkdir(parents=True, exist_ok=True)
-            cache_path = Path(self.config_dir) / "models-web-cache.json"
+            cache_path = self._web_catalog_cache_path()
             items = [item.model_dump(exclude_none=True) for item in self.web_catalog.values()]
             cache_path.write_text(json.dumps(items, indent=2), encoding="utf-8")
         except Exception as exc:
@@ -803,7 +835,7 @@ class LlmService:
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 res = await client.get(
-                    "https://models.dev/api.json",
+                    WEB_CATALOG_URL,
                     headers={"User-Agent": "Olive/0.2"},
                 )
                 if res.status_code == 200:
@@ -856,6 +888,9 @@ class LlmService:
         return {"count": len(self.web_catalog)}
 
     refreshCatalog = refresh_catalog
+
+    refreshCatalogIfStale = refresh_catalog_if_stale
+    isWebCatalogStale = is_web_catalog_stale
 
     def get_model_supported_thinking_levels(
         self, model_info: dict[str, Any] | LlmModelCatalogItem
