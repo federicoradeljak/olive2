@@ -1,4 +1,5 @@
-.agents/skills/
+.agents/skills/*
+!.agents/skills/release/
 .env
 mise.local.toml
 *.local.toml

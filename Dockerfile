@@ -1,8 +1,10 @@
 # syntax=docker/dockerfile:1
 
-# Build identity (commit hash + UTC date) shown in-app instead of a version
-# number. The image contains no .git checkout, so CI / deploy scripts must
+# Build identity (release tag + commit hash + UTC date) shown in-app.
+# The image contains no .git checkout, so CI / deploy scripts must
 # pass these args — see docker-publish.yml and scripts/deploy_staging.py.
+# OLIVE_BUILD_TAG is only set for release builds cut from a CalVer tag.
+ARG OLIVE_BUILD_TAG=""
 ARG OLIVE_BUILD_SHA=""
 ARG OLIVE_BUILD_DATE=""
 
@@ -52,10 +54,12 @@ COPY --from=web-builder /frontend/dist /app/frontend/dist
 COPY CHANGELOG.md /app/CHANGELOG.md
 
 # Re-declare (no defaults) to bring the global build-arg values into this stage.
+ARG OLIVE_BUILD_TAG
 ARG OLIVE_BUILD_SHA
 ARG OLIVE_BUILD_DATE
 
 ENV PORT=4470 \
+    OLIVE_BUILD_TAG=${OLIVE_BUILD_TAG} \
     OLIVE_BUILD_SHA=${OLIVE_BUILD_SHA} \
     OLIVE_BUILD_DATE=${OLIVE_BUILD_DATE} \
     OLIVE_DOCKER=1 \

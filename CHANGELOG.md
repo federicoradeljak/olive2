@@ -2,9 +2,11 @@
 
 All notable changes to Olive are documented in this file, newest first.
 
-Olive ships continuously — there are no releases. Each section is dated with
-the UTC day its changes merged (`## [YYYY-MM-DD]`), with entries grouped
-under `Added` / `Changed` / `Fixed`.
+Olive releases are CalVer-tagged Docker images (`YYYY.MM.DD`, with an
+optional `.N` same-day counter). Each section below is dated with the UTC
+day its changes merged (`## [YYYY-MM-DD]`), with entries grouped under
+`Added` / `Changed` / `Fixed` — pushing a tag publishes the image and turns
+every section newer than the previous tag into the GitHub release notes.
 
 ## [2026-10-15]
 
@@ -40,6 +42,12 @@ under `Added` / `Changed` / `Fixed`.
   be changed via an edit button next to it. The duration is preserved
   (end time shifts with the start) and the on-disk folder is moved when
   the UTC date stamp changes, so shifted imports can be corrected in place.
+- **CalVer releases** — pushing a `YYYY.MM.DD` tag (`.N` suffix for same-day
+  follow-ups, no `v` prefix) runs CI, publishes the multi-arch image to GHCR
+  pinned to that tag (plus `:latest`), and creates a GitHub release whose
+  notes are the changelog sections since the previous tag. Release builds
+  also stamp the tag into the image, so What's New shows e.g.
+  `2026.10.15 · 4d5ea70` instead of just the build date and commit.
 
 ### Changed
 

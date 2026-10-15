@@ -2482,8 +2482,9 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         try:
             changelog_path = _resolve_changelog_path()
             markdown = changelog_path.read_text(encoding="utf-8") if changelog_path else ""
-            # "version" is the build identity (date/time/commit hash), not a
-            # release number — Olive ships continuously. See build_info.py.
+            # "version" is the build identity: the CalVer release tag plus
+            # commit hash when built from a tag, else date/time/commit hash.
+            # See build_info.py.
             return JSONResponse({"version": get_build_display(), "markdown": markdown})
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=500)

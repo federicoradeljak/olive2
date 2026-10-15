@@ -1,6 +1,12 @@
 name: Build and Publish Docker Image
 
 on:
+  push:
+    # CalVer release tags (YYYY.MM.DD, optional .N same-day counter, no prefix).
+    # Pushing one runs CI (ci.yml), publishes the image tagged with the CalVer
+    # tag + :latest, and creates the GitHub release. Strict format validation
+    # happens in the validate job — non-CalVer 4-digit tags fail fast there.
+    tags: ["[0-9][0-9][0-9][0-9].*"]
   workflow_dispatch:
     inputs:
       tag:
@@ -14,8 +20,37 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    outputs:
+      build_tag: ${{ steps.resolve.outputs.build_tag }}
+    steps:
+      - name: Resolve and validate build tag
+        id: resolve
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            TAG="${GITHUB_REF_NAME}"
+            if ! [[ "${TAG}" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}(\.[0-9]+)?$ ]]; then
+              echo "::error::Tag '${TAG}' is not CalVer — expected YYYY.MM.DD with an optional .N same-day counter (e.g. 2026.10.15 or 2026.10.15.1, no 'v' prefix). Delete the tag and push a corrected one."
+              exit 1
+            fi
+            echo "Release build for CalVer tag ${TAG}"
+            echo "build_tag=${TAG}" >> "${GITHUB_OUTPUT}"
+          else
+            INPUT="${{ inputs.tag || 'latest' }}"
+            if [[ "${INPUT}" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}(\.[0-9]+)?$ ]]; then
+              echo "Manual build for CalVer tag ${INPUT}"
+              echo "build_tag=${INPUT}" >> "${GITHUB_OUTPUT}"
+            else
+              echo "Manual build for non-release tag '${INPUT}' (no build tag baked in)"
+              echo "build_tag=" >> "${GITHUB_OUTPUT}"
+            fi
+          fi
+
   build:
     name: Build (${{ matrix.arch }})
+    needs: validate
     strategy:
       fail-fast: false
       matrix:
@@ -35,8 +70,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Resolve build identity (commit hash + UTC date for in-app display)
+      - name: Resolve build identity (release tag + commit hash + UTC date for in-app display)
         run: |
+          echo "OLIVE_BUILD_TAG=${{ needs.validate.outputs.build_tag }}" >> "${GITHUB_ENV}"
           echo "OLIVE_BUILD_SHA=${GITHUB_SHA}" >> "${GITHUB_ENV}"
           echo "OLIVE_BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_ENV}"
 
@@ -65,6 +101,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
+            OLIVE_BUILD_TAG=${{ env.OLIVE_BUILD_TAG }}
             OLIVE_BUILD_SHA=${{ env.OLIVE_BUILD_SHA }}
             OLIVE_BUILD_DATE=${{ env.OLIVE_BUILD_DATE }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
@@ -117,7 +154,9 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=${{ inputs.tag || 'latest' }}
+            type=raw,value=${{ inputs.tag || 'latest' }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=ref,event=tag
+            type=raw,value=latest,enable=${{ github.event_name == 'push' }}
             type=sha,format=short
 
       - name: Create manifest list and push
@@ -129,3 +168,47 @@ jobs:
       - name: Inspect image
         run: |
           docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+
+  release:
+    name: Create GitHub release
+    runs-on: ubuntu-latest
+    needs: merge
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository (full history for changelog diff)
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve previous CalVer tag
+        id: prev
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          mapfile -t CALVER_TAGS < <(git tag --list | grep -E '^[0-9]{4}\.[0-9]{2}\.[0-9]{2}(\.[0-9]+)?$' || true)
+          if [ "${#CALVER_TAGS[@]}" -gt 0 ]; then
+            PREV=$(printf '%s\n' "${CALVER_TAGS[@]}" | sort -V | awk -v tag="${TAG}" '{ if ($0 == tag) { print prev; exit } prev = $0 }')
+          else
+            PREV=""
+          fi
+          echo "Current tag: ${TAG}, previous CalVer tag: '${PREV:-<none — first release>}'"
+          echo "prev_tag=${PREV}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build release notes from CHANGELOG.md
+        run: |
+          ARGS=(--tag "${GITHUB_REF_NAME}" --image "${REGISTRY}/${IMAGE_NAME}" --output RELEASE_NOTES.md)
+          if [ -n "${{ steps.prev.outputs.prev_tag }}" ]; then
+            ARGS+=(--prev-tag "${{ steps.prev.outputs.prev_tag }}")
+          fi
+          python3 scripts/release_notes.py "${ARGS[@]}"
+          echo "--- RELEASE_NOTES.md ---"
+          cat RELEASE_NOTES.md
+
+      - name: Create GitHub release (no artifacts — points at the GHCR image)
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: RELEASE_NOTES.md
+          make_latest: "true"

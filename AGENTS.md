@@ -76,11 +76,12 @@ Run the cheapest check that covers the change — never all checks reflexively.
 
 ## Changelog policy
 
-`CHANGELOG.md` (repo root) is user-facing and served in-app via `GET /api/changelog` + the header "What's New" button. Olive ships continuously — there are no releases and no versioned sections. Keep it up to date:
+`CHANGELOG.md` (repo root) is user-facing and served in-app via `GET /api/changelog` + the header "What's New" button. It is also the source of GitHub release notes. Keep it up to date:
 - Every user-visible change (feature, fix, behavior change) gets an entry in the same commit/PR, under a `## [YYYY-MM-DD]` heading for the UTC merge date (newest date first — create today's heading if missing), grouped under `Added`, `Changed`, or `Fixed`. One bullet per change, user-facing language, no commit SHAs.
 - Infra-only, chore, and docs changes: add an entry only if they affect users/operators (Docker, deploy, backup, models); otherwise skip.
 - Never create `Unreleased` or versioned sections, and never bump versions as part of a changelog update. The Dockerfile already bundles `CHANGELOG.md` into the image — no packaging change needed.
-- Version display is the build identity (UTC date/time + commit hash), computed in `backend/src/olive/build_info.py` from `OLIVE_BUILD_SHA` / `OLIVE_BUILD_DATE` env (baked via Docker build args) with a git `HEAD` fallback in dev. Docker builds (GH publish workflow, staging deploy) must keep passing those build args.
+- Releases are CalVer tags (`YYYY.MM.DD`, optional `.N` same-day counter, no `v` prefix). Pushing one runs CI, publishes the GHCR image (`:<tag>` + `:latest`), and creates a GitHub release whose notes are every changelog section newer than the previous tag (`scripts/release_notes.py`, tested in `backend/tests/test_release_notes.py`). Never hand-edit release notes — fix the changelog and re-cut the tag. Runbook (preflight/cut/preview scripts + fix-forward policy): `.agents/skills/release/SKILL.md`.
+- Build identity is the release tag plus commit hash when built from a tag (e.g. `2026.10.15 · 4d5ea70`), else UTC date/time + commit hash, computed in `backend/src/olive/build_info.py` from `OLIVE_BUILD_TAG` / `OLIVE_BUILD_SHA` / `OLIVE_BUILD_DATE` env (baked via Docker build args) with a git `HEAD` fallback in dev. Docker builds (GH publish workflow, staging deploy) must keep passing those build args.
 
 ## Invariants & rules
 

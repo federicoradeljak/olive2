@@ -27,6 +27,7 @@ def test_changelog_api_returns_build_display_and_markdown() -> None:
 
 
 def test_build_display_prefers_env_override(monkeypatch) -> None:
+    monkeypatch.delenv("OLIVE_BUILD_TAG", raising=False)
     monkeypatch.setenv("OLIVE_BUILD_SHA", "abc123def456789")
     monkeypatch.setenv("OLIVE_BUILD_DATE", "2026-10-15T14:32:11+00:00")
     build_info.get_build_info.cache_clear()
@@ -36,7 +37,20 @@ def test_build_display_prefers_env_override(monkeypatch) -> None:
         build_info.get_build_info.cache_clear()
 
 
+def test_build_display_prefers_release_tag(monkeypatch) -> None:
+    monkeypatch.setenv("OLIVE_BUILD_TAG", "2026.10.15")
+    monkeypatch.setenv("OLIVE_BUILD_SHA", "abc123def456789")
+    monkeypatch.setenv("OLIVE_BUILD_DATE", "2026-10-15T14:32:11+00:00")
+    build_info.get_build_info.cache_clear()
+    try:
+        assert build_info.get_build_display() == "2026.10.15 · abc123d"
+    finally:
+        build_info.get_build_info.cache_clear()
+        monkeypatch.delenv("OLIVE_BUILD_TAG", raising=False)
+
+
 def test_build_display_falls_back_to_unknown(monkeypatch) -> None:
+    monkeypatch.delenv("OLIVE_BUILD_TAG", raising=False)
     monkeypatch.delenv("OLIVE_BUILD_SHA", raising=False)
     monkeypatch.delenv("OLIVE_BUILD_DATE", raising=False)
     monkeypatch.setattr(build_info, "_git_output", lambda *args: None)

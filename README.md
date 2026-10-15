@@ -172,6 +172,10 @@ Open **`http://localhost:4471`**. Follow the logs on first start (`docker logs -
 
 The server **refuses to start** if `/app/models` is not a mounted, writable volume, or if a model cannot be downloaded — the error message says why. Do not skip the `olive2_models` mount: without it, every upgrade would re-download gigabytes of models.
 
+### Pinned releases
+
+Every release is also published under a CalVer tag (`YYYY.MM.DD`, e.g. `ghcr.io/mcowger/olive2:2026.10.15`, with a `.N` suffix for same-day follow-ups) alongside a GitHub release carrying the changelog notes — no artifacts, the release points at the GHCR image. Pin the image tag in `compose.yml` (or your `docker run` command) to hold an upgrade until you're ready; `:latest` tracks the newest release.
+
 ### Local installation (advanced)
 
 Requires [uv](https://docs.astral.sh/uv/) (Python 3.12+), [pnpm](https://pnpm.io/) (Node.js 22+), `ffmpeg`, and `libsndfile1`.

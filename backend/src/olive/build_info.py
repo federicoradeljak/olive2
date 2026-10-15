@@ -1,12 +1,16 @@
-"""Runtime build identity (date/time/commit hash) shown instead of a version number.
+"""Runtime build identity (release tag or date/commit hash) shown in-app.
 
-Olive ships continuously with no releases, so a static version is meaningless.
-The What's New modal and ``GET /api/changelog`` show when the running server
-was built and from what commit, e.g. ``2026-10-15 14:32 UTC · 4d5ea70``.
+Olive releases are CalVer-tagged Docker images (``2026.10.15``, optional
+``.N`` same-day counter). The What's New modal and ``GET /api/changelog``
+show the release tag when the build has one, e.g. ``2026.10.15 · 4d5ea70``.
+Untagged builds (dev checkouts, manual images) fall back to the build's UTC
+date/time and commit hash, e.g. ``2026-10-15 14:32 UTC · 4d5ea70``.
 
 Resolution order:
-1. ``OLIVE_BUILD_SHA`` / ``OLIVE_BUILD_DATE`` environment variables, baked
-   into the Docker image via build args (the image contains no ``.git``).
+1. ``OLIVE_BUILD_TAG`` / ``OLIVE_BUILD_SHA`` / ``OLIVE_BUILD_DATE``
+environment variables, baked into the Docker image via build args (the
+image contains no ``.git``). ``OLIVE_BUILD_TAG`` is only set for release
+builds cut from a CalVer tag — see docker-publish.yml.
 2. Local git ``HEAD`` (dev checkouts, tests).
 3. ``"unknown build"`` fallback — never raises, so startup can't fail on this.
 """
@@ -60,18 +64,28 @@ def _format_date(raw: str) -> str:
 
 @lru_cache(maxsize=1)
 def get_build_info() -> dict[str, str | None]:
-    """Return ``{"sha": ..., "date": ...}`` for the running build."""
+    """Return ``{"tag": ..., "sha": ..., "date": ...}`` for the running build."""
+    tag = _env("OLIVE_BUILD_TAG")
     sha = _env("OLIVE_BUILD_SHA") or _git_output(["rev-parse", "HEAD"])
     raw_date = _env("OLIVE_BUILD_DATE") or _git_output(["log", "-1", "--format=%cI"])
-    return {"sha": sha, "date": _format_date(raw_date) if raw_date else None}
+    return {
+        "tag": tag,
+        "sha": sha,
+        "date": _format_date(raw_date) if raw_date else None,
+    }
 
 
 def get_build_display() -> str:
-    """Human-readable build identity, e.g. ``2026-10-15 14:32 UTC · 4d5ea70``."""
+    """Human-readable build identity, e.g. ``2026.10.15 · 4d5ea70``."""
     info = get_build_info()
+    tag = (info["tag"] or "").strip()
     sha = (info["sha"] or "").strip()
     short_sha = sha[:7] if len(sha) > 7 else sha
     date = (info["date"] or "").strip()
+    if tag and short_sha:
+        return f"{tag} · {short_sha}"
+    if tag:
+        return tag
     if date and short_sha:
         return f"{date} · {short_sha}"
     return short_sha or date or "unknown build"
