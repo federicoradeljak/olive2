@@ -305,6 +305,36 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                 from .logging_db import logger as _lifespan_logger
 
                 _lifespan_logger.warn("Failed to start Plaud poller", {"error": str(exc)})
+
+        # Best-effort LLM web-catalog refresh so fresh installs see current
+        # models without a manual "Sync Web Catalog". Skipped while the
+        # on-disk cache is fresh; fire-and-forget so a slow/offline
+        # models.dev never delays startup. This is lightweight scheduling
+        # glue (single HTTP fetch + file write), not durable queue work.
+        # Opt out with OLIVE_LLM_CATALOG_AUTO_REFRESH=0 or
+        # llmCatalogAutoRefresh=False.
+        async def _refresh_llm_catalog_on_startup() -> None:
+            try:
+                await get_llm_service().refresh_catalog_if_stale()
+            except Exception as exc:
+                from .logging_db import logger as _lifespan_logger
+
+                _lifespan_logger.warn("LLM catalog auto-refresh failed", {"error": str(exc)})
+
+        auto_refresh_opt = opts.get("llmCatalogAutoRefresh", opts.get("llm_catalog_auto_refresh", None))
+        auto_refresh_env = os.environ.get("OLIVE_LLM_CATALOG_AUTO_REFRESH", "")
+        auto_refresh_disabled = auto_refresh_opt is False or auto_refresh_env.strip().lower() in (
+            "0",
+            "false",
+            "off",
+            "no",
+        )
+        if not auto_refresh_disabled:
+            try:
+                if get_llm_service().is_web_catalog_stale():
+                    asyncio.create_task(_refresh_llm_catalog_on_startup())
+            except Exception:
+                pass
         try:
             yield
         finally:
