@@ -15,6 +15,15 @@ MUSE_SAMPLE_RATE = 24000
 # 9-minute chunks: headroom under the 10-minute server cap.
 MUSE_MAX_CHUNK_MS = 9 * 60 * 1000
 
+# FUTURE: silence-aware split points. Chunks currently cut on hard wall-clock
+# boundaries, which can slice an utterance mid-word (one ragged boundary turn
+# per chunk). Prefer cutting at the nearest >=1.5s silence within ~90s before
+# the cap (ffmpeg silencedetect + fallback to the hard cut when a window has
+# no usable silence, e.g. heated debate). Deliberately NOT overlap-and-stitch:
+# the same audio transcribed as a chunk tail vs. head yields different wording,
+# so stitching needs fuzzy matching whose failures silently duplicate or drop
+# sentences — plus ~10% re-transcription overhead per chunk.
+
 
 def _chunk_duration_ms(chunk_path: Path) -> int:
     import soundfile as sf
