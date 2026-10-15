@@ -43,8 +43,14 @@ def test_download_failure_names_the_model(monkeypatch: pytest.MonkeyPatch, tmp_p
 
     import huggingface_hub
 
+    from olive.ml.model_store import WESPEAKER_MIN_SIZE
+
     def fake_hf_download(**_kwargs: object) -> str:
-        return str(tmp_path / "wespeaker.onnx")
+        # A complete cached file: the local-only fast path accepts it with no network.
+        p = tmp_path / "wespeaker.onnx"
+        if not p.is_file():
+            p.write_bytes(b"x" * (WESPEAKER_MIN_SIZE + 1))
+        return str(p)
 
     def offline(_models_dir: Path) -> None:
         raise ConnectionError("network unreachable")
@@ -103,6 +109,88 @@ def test_cohere_stage_skips_hub_calls_when_complete(monkeypatch: pytest.MonkeyPa
     assert stage_cohere_int8_model_dir(None) == cohere_dir
 
 
+def test_wespeaker_uses_local_cache_without_network(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import huggingface_hub
+
+    from olive.ml.model_store import WESPEAKER_MIN_SIZE, _download_wespeaker
+
+    cached = tmp_path / "wespeaker.onnx"
+    cached.write_bytes(b"x" * (WESPEAKER_MIN_SIZE + 1))
+    calls: list[bool] = []
+
+    def fake_hf_download(**kwargs: object) -> str:
+        local_only = bool(kwargs.get("local_files_only"))
+        calls.append(local_only)
+        if not local_only:
+            raise AssertionError("network hf_hub_download must not run when cached")
+        return str(cached)
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake_hf_download)
+    _download_wespeaker(None)
+    assert calls == [True]
+
+
+def test_wespeaker_falls_back_to_network_when_cache_misses(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import huggingface_hub
+
+    from olive.ml.model_store import _download_wespeaker
+
+    calls: list[bool] = []
+
+    def fake_hf_download(**kwargs: object) -> str:
+        local_only = bool(kwargs.get("local_files_only"))
+        calls.append(local_only)
+        if local_only:
+            raise FileNotFoundError("not cached")
+        fetched = tmp_path / "wespeaker.onnx"
+        fetched.write_bytes(b"x" * 1024)
+        return str(fetched)
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake_hf_download)
+    _download_wespeaker(None)
+    assert calls == [True, False]
+
+
+def test_pyannote_uses_local_snapshot_without_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    import huggingface_hub
+
+    from olive.ml.model_store import _download_pyannote
+
+    calls: list[bool] = []
+
+    def fake_snapshot(**kwargs: object) -> str:
+        local_only = bool(kwargs.get("local_files_only"))
+        calls.append(local_only)
+        if not local_only:
+            raise AssertionError("network snapshot_download must not run when cached")
+        return "/cache/pyannote"
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", fake_snapshot)
+    _download_pyannote(None)
+    assert calls == [True]
+
+
+def test_cohere_warm_path_avoids_transformers_import(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import sys
+
+    import huggingface_hub
+
+    from olive.ml.asr_cohere import _COHERE_STAGED_MIN_SIZES
+    from olive.ml.model_store import _download_cohere
+
+    monkeypatch.setenv("OLIVE_MODELS_DIR", str(tmp_path))
+    cohere_dir = tmp_path / "cohere-int8"
+    cohere_dir.mkdir(parents=True)
+    for name, min_size in _COHERE_STAGED_MIN_SIZES:
+        (cohere_dir / name).write_bytes(b"x" * min_size)
+    monkeypatch.setattr(huggingface_hub, "try_to_load_from_cache", lambda _repo, _f: "/cache/config.json")
+    # Any transformers import on the warm path fails the test.
+    monkeypatch.setitem(sys.modules, "transformers", None)
+    _download_cohere(None)
+
+
 def test_download_runs_all_steps_despite_one_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("OLIVE_MODELS_DIR", str(tmp_path))
     called: list[str] = []
@@ -120,7 +208,16 @@ def test_download_runs_all_steps_despite_one_failure(monkeypatch: pytest.MonkeyP
 
     import huggingface_hub
 
-    monkeypatch.setattr(huggingface_hub, "hf_hub_download", lambda **_k: ok("wespeaker"))
+    from olive.ml.model_store import WESPEAKER_MIN_SIZE
+
+    wespeaker_file = tmp_path / "wespeaker.onnx"
+    wespeaker_file.write_bytes(b"x" * (WESPEAKER_MIN_SIZE + 1))
+
+    def fake_wespeaker(**_kwargs: object) -> str:
+        ok("wespeaker")
+        return str(wespeaker_file)
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake_wespeaker)
 
     with pytest.raises(ModelStorageError, match="could not download Cohere"):
         download_local_models(None)

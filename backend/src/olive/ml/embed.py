@@ -16,14 +16,13 @@ from huggingface_hub import hf_hub_download
 
 from ..settings import get_effective_hf_token
 from .audio import resample
+from .model_store import WESPEAKER_FILENAME, WESPEAKER_REPO_ID
 from .protocols import VoiceprintVector
 from .scoring import normalize_vector
 
 os.environ.setdefault("OTEL_SDK_DISABLED", "true")
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 
-WESPEAKER_REPO_ID = "Wespeaker/wespeaker-voxceleb-resnet293-LM"
-WESPEAKER_FILENAME = "voxceleb_resnet293_LM.onnx"
 WESPEAKER_MODEL_TAG = f"{WESPEAKER_REPO_ID}/{WESPEAKER_FILENAME}"
 
 _EMBED_LOCK = threading.Lock()

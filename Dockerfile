@@ -66,4 +66,6 @@ EXPOSE 4470
 # silently downloading multi-GB models into throwaway container storage.
 # Run with e.g.: -v olive2_data:/app/data -v olive2_models:/app/models
 
-CMD ["uv", "run", "--no-dev", "olive", "serve"]
+# NOTE: invoke the venv binary directly — `uv run` would re-resolve and verify
+# the environment on every container boot (~1s) for no benefit in a baked image.
+CMD ["/app/backend/.venv/bin/olive", "serve"]

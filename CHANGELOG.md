@@ -18,10 +18,11 @@ Olive is currently pre-1.0 (`0.2.0`); everything below shipped as part of the
 
 ### Changed
 
-- **Faster container startup** — model preflight skips Hugging Face Hub
-  round-trips when the MMS aligner and staged Cohere INT8 files already
-  exist, and verifies the four local models concurrently instead of
-  sequentially.
+- **Faster container startup** — model preflight verifies the four local
+  models from the on-disk cache with no Hugging Face Hub round-trips and
+  without importing the heavy ML stack (`torch`, `transformers`) on a warm
+  boot, checks them concurrently with per-model timing, and the image now
+  starts via the venv binary instead of `uv run`.
 
 ### Fixed
 

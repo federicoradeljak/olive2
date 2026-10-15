@@ -3,17 +3,65 @@
 from __future__ import annotations
 
 import concurrent.futures
+import time
 import uuid
 from pathlib import Path
 
 from ..settings import resolve_paths
-from .asr_cohere import (
-    COHERE_INT8_ONNX_REPO,
-    COHERE_PROCESSOR_REPO,
-    is_cohere_staged_complete,
-    stage_cohere_int8_model_dir,
+
+# Model identifiers and staged-file checks live in this lightweight module
+# (stdlib + settings only) so container preflight can verify cached models
+# WITHOUT importing torch / onnxruntime / transformers, which cost seconds on
+# every boot. `embed.py` and `asr_cohere.py` import these names from here.
+
+WESPEAKER_REPO_ID = "Wespeaker/wespeaker-voxceleb-resnet293-LM"
+WESPEAKER_FILENAME = "voxceleb_resnet293_LM.onnx"
+# Conservative minimum size: the real file is tens of MB, so anything smaller
+# is a truncated download that must be re-fetched.
+WESPEAKER_MIN_SIZE = 1024 * 1024
+
+COHERE_INT8_ONNX_REPO = "vigneshlabs/cohere-transcribe-03-2026-int8-onnx"
+COHERE_PROCESSOR_REPO = "onnx-community/cohere-transcribe-03-2026-ONNX"
+
+# Staged flat-dir filenames with conservative minimum sizes (bytes) used to
+# detect a complete prior staging without hitting the HF Hub. Thresholds are
+# deliberately far below the real sizes (encoder .data ~2.5G, decoder .data
+# ~146M, encoder .onnx ~101M, decoder .onnx ~570K, tokens.txt ~203K) so future
+# model revisions still fast-path while truncated files re-download.
+_COHERE_STAGED_MIN_SIZES: tuple[tuple[str, int], ...] = (
+    ("cohere-encoder.int8.onnx", 100 * 1024),
+    ("cohere-encoder.int8.onnx.data", 1024 * 1024),
+    ("cohere-encoder.int8.fixed.onnx.data", 1024 * 1024),
+    ("cohere-decoder.int8.onnx", 100 * 1024),
+    ("cohere-decoder.int8.onnx.data", 1024 * 1024),
+    ("cohere-decoder.int8.fixed.onnx.data", 1024 * 1024),
+    ("tokens.txt", 1024),
 )
-from .embed import WESPEAKER_FILENAME, WESPEAKER_REPO_ID
+
+# Processor/config filenames the Cohere AutoProcessor needs. Probed via the
+# local HF cache only (no transformers import, no network): if any one of them
+# is cached, the processor was warmed by a previous boot.
+_COHERE_PROCESSOR_CACHE_PROBES: tuple[str, ...] = (
+    "preprocessor_config.json",
+    "tokenizer_config.json",
+    "tokenizer.json",
+    "config.json",
+)
+
+
+def is_cohere_staged_complete(cohere_dir: Path) -> bool:
+    """True when every staged file exists as a non-symlink regular file above its minimum size."""
+    try:
+        for name, min_size in _COHERE_STAGED_MIN_SIZES:
+            p = cohere_dir / name
+            if p.is_symlink() or not p.is_file():
+                return False
+            if p.stat().st_size < min_size:
+                return False
+        return True
+    except OSError:
+        return False
+
 
 PYANNOTE_REPO_CANDIDATES = (
     "pyannote/speaker-diarization-community-1",
@@ -63,8 +111,39 @@ def _is_aligner_staged(models_dir: Path) -> bool:
         return False
 
 
+def _download_wespeaker(hf_token: str | None) -> None:
+    import huggingface_hub
+
+    # Fast path: resolve from the local HF cache only — no Hub round-trip.
+    try:
+        cached = huggingface_hub.hf_hub_download(
+            repo_id=WESPEAKER_REPO_ID,
+            filename=WESPEAKER_FILENAME,
+            token=hf_token,
+            local_files_only=True,
+        )
+        p = Path(cached)
+        # NOTE: HF cache snapshot entries are symlinks to blobs — unlike the
+        # Cohere staged dir (where ONNX Runtime rejects symlinks), the
+        # WeSpeaker model loads fine from the symlinked cache path at
+        # transcription time, so symlinks are accepted here.
+        if p.is_file() and p.stat().st_size >= WESPEAKER_MIN_SIZE:
+            return
+    except Exception:
+        pass
+    huggingface_hub.hf_hub_download(repo_id=WESPEAKER_REPO_ID, filename=WESPEAKER_FILENAME, token=hf_token)
+
+
 def _download_pyannote(hf_token: str | None) -> None:
-    from huggingface_hub import snapshot_download
+    import huggingface_hub
+
+    # Fast path: a fully cached snapshot resolves with no Hub round-trips.
+    for repo_id in PYANNOTE_REPO_CANDIDATES:
+        try:
+            huggingface_hub.snapshot_download(repo_id=repo_id, local_files_only=True)
+            return
+        except Exception:
+            continue
 
     candidates: list[tuple[str, str | None]] = []
     if hf_token:
@@ -75,7 +154,7 @@ def _download_pyannote(hf_token: str | None) -> None:
     last_err: Exception | None = None
     for repo_id, tok in candidates:
         try:
-            snapshot_download(repo_id=repo_id, token=tok)
+            huggingface_hub.snapshot_download(repo_id=repo_id, token=tok)
             return
         except Exception as exc:
             last_err = exc
@@ -97,31 +176,40 @@ def _download_aligner(models_dir: Path) -> None:
 
 
 def _download_cohere(hf_token: str | None) -> None:
-    from transformers import AutoProcessor
-
-    # Fast path: INT8 files already staged — verify the processor from local
-    # cache only, with no HF Hub round-trips. Falls through to the network
-    # path when the processor is not cached yet.
-    cohere_dir = Path(resolve_paths().models_dir) / "cohere-int8"
-    if is_cohere_staged_complete(cohere_dir):
+    models_dir = Path(resolve_paths().models_dir)
+    if is_cohere_staged_complete(models_dir / "cohere-int8"):
+        # Fast path: multi-GB INT8 blobs already staged. Confirm the small
+        # processor files are in the local HF cache via a pure file lookup —
+        # no transformers import (seconds) and no Hub round-trips. If the
+        # processor was ever evicted, the fall-through re-fetches only the
+        # missing KB-sized files (INT8 staging fast-paths inside).
         try:
-            AutoProcessor.from_pretrained(COHERE_PROCESSOR_REPO, token=hf_token, local_files_only=True)
-            return
+            from huggingface_hub import try_to_load_from_cache
+
+            for probe in _COHERE_PROCESSOR_CACHE_PROBES:
+                try:
+                    if try_to_load_from_cache(COHERE_PROCESSOR_REPO, probe) is not None:
+                        return
+                except Exception:
+                    continue
         except Exception:
             pass
+    # Slow path (first boot, or evicted cache): heavy imports happen only here.
+    from transformers import AutoProcessor
+
+    from .asr_cohere import stage_cohere_int8_model_dir
+
     AutoProcessor.from_pretrained(COHERE_PROCESSOR_REPO, token=hf_token)
     stage_cohere_int8_model_dir(hf_token)
 
 
 def download_local_models(hf_token: str | None) -> None:
     """Download (or verify from cache) every local model. Raises ModelStorageError with the failing model."""
-    from huggingface_hub import hf_hub_download
-
     models_dir = Path(resolve_paths().models_dir)
     steps = [
         (
             f"WeSpeaker model ({WESPEAKER_REPO_ID})",
-            lambda: hf_hub_download(repo_id=WESPEAKER_REPO_ID, filename=WESPEAKER_FILENAME, token=hf_token),
+            lambda: _download_wespeaker(hf_token),
         ),
         (
             "ctc-forced-aligner MMS-300m ONNX model",
@@ -137,19 +225,26 @@ def download_local_models(hf_token: str | None) -> None:
         ),
     ]
     for label, _fetch in steps:
-        print(f"Downloading {label}...", flush=True)
-    # Run the four model checks concurrently: each is network/file I/O bound
-    # (HF Hub metadata + file staging) and they share nothing, so wall time
-    # drops from the sum to roughly the slowest single step.
+        print(f"Verifying {label}...", flush=True)
+    # Run the four model checks concurrently: each is file I/O bound on a warm
+    # boot (local cache probes) and they share nothing, so wall time drops
+    # from the sum to roughly the slowest single step.
+    started = time.monotonic()
+    elapsed: dict[str, float] = {}
     failures: dict[str, Exception] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(steps)) as pool:
         future_to_label = {pool.submit(fetch): label for label, fetch in steps}
         for future in concurrent.futures.as_completed(future_to_label):
+            label = future_to_label[future]
+            elapsed[label] = time.monotonic() - started
             try:
                 future.result()
             except Exception as exc:
-                failures[future_to_label[future]] = exc
+                failures[label] = exc
+    for label, _fetch in steps:
+        status = "FAILED" if label in failures else "ready"
+        print(f"{status} {label} ({elapsed.get(label, 0.0):.1f}s)", flush=True)
     for label, _fetch in steps:
         if label in failures:
             raise ModelStorageError(f"could not download {label}: {failures[label]}") from failures[label]
-    print("All local ML models are available.", flush=True)
+    print(f"All local ML models are available ({time.monotonic() - started:.1f}s total).", flush=True)

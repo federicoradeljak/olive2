@@ -20,37 +20,14 @@ from ..schemas import TranscriptWord
 from ..settings import DEFAULT_LOCAL_ASR_MODEL, get_effective_hf_token, resolve_paths
 from .align import proportional_word_timestamps
 from .audio import resample
-
-_COHERE_STAGE_LOCK = threading.Lock()
-
-# Staged flat-dir filenames with conservative minimum sizes (bytes) used to
-# detect a complete prior staging without hitting the HF Hub. Thresholds are
-# deliberately far below the real sizes (encoder .data ~2.5G, decoder .data
-# ~146M, encoder .onnx ~101M, decoder .onnx ~570K, tokens.txt ~203K) so future
-# model revisions still fast-path while truncated files re-download.
-_COHERE_STAGED_MIN_SIZES: tuple[tuple[str, int], ...] = (
-    ("cohere-encoder.int8.onnx", 100 * 1024),
-    ("cohere-encoder.int8.onnx.data", 1024 * 1024),
-    ("cohere-encoder.int8.fixed.onnx.data", 1024 * 1024),
-    ("cohere-decoder.int8.onnx", 100 * 1024),
-    ("cohere-decoder.int8.onnx.data", 1024 * 1024),
-    ("cohere-decoder.int8.fixed.onnx.data", 1024 * 1024),
-    ("tokens.txt", 1024),
+from .model_store import (
+    _COHERE_STAGED_MIN_SIZES,  # noqa: F401  # re-exported (tests import it from here)
+    COHERE_INT8_ONNX_REPO,
+    COHERE_PROCESSOR_REPO,
+    is_cohere_staged_complete,
 )
 
-
-def is_cohere_staged_complete(cohere_dir: Path) -> bool:
-    """True when every staged file exists as a non-symlink regular file above its minimum size."""
-    try:
-        for name, min_size in _COHERE_STAGED_MIN_SIZES:
-            p = cohere_dir / name
-            if p.is_symlink() or not p.is_file():
-                return False
-            if p.stat().st_size < min_size:
-                return False
-        return True
-    except OSError:
-        return False
+_COHERE_STAGE_LOCK = threading.Lock()
 
 
 def stage_cohere_int8_model_dir(hf_token: str | None = None) -> Path:
@@ -116,8 +93,6 @@ def stage_cohere_int8_model_dir(hf_token: str | None = None) -> Path:
     return cohere_dir
 
 
-COHERE_INT8_ONNX_REPO = "vigneshlabs/cohere-transcribe-03-2026-int8-onnx"
-COHERE_PROCESSOR_REPO = "onnx-community/cohere-transcribe-03-2026-ONNX"
 COHERE_TORCH_REPO = "CohereLabs/cohere-transcribe-03-2026"
 COHERE_TORCH_UNGATED_REPO = "evewashere/cohere-transcribe-03-2026-ungated"
 
