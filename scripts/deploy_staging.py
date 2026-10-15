@@ -14,7 +14,9 @@ from datetime import UTC, datetime
 
 context = os.environ.get("OLIVE_STAGING_DOCKER_CONTEXT") or "dolphin"
 ssh_host = os.environ.get("OLIVE_STAGING_SSH_HOST") or context
-staging_url = (os.environ.get("OLIVE_STAGING_URL") or "http://192.168.0.2:4470").rstrip("/")
+staging_url = (os.environ.get("OLIVE_STAGING_URL") or "http://192.168.0.2:4470").rstrip(
+    "/"
+)
 container_name = os.environ.get("OLIVE_STAGING_CONTAINER_NAME") or "olive"
 service_name = os.environ.get("OLIVE_STAGING_SERVICE_NAME") or "olive"
 image_name = os.environ.get("OLIVE_STAGING_IMAGE_NAME") or "olive2"
@@ -27,6 +29,24 @@ build_date = now_dt.isoformat().replace("+00:00", "Z")
 timestamp = now_dt.strftime("%Y%m%d-%H%M%S")
 new_tag = f"{image_name}:staging-{timestamp}"
 latest_tag = f"{image_name}:staging-latest"
+
+
+def _local_git_sha() -> str:
+    """Commit hash of the local checkout being built (empty when unavailable)."""
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+build_sha = _local_git_sha()
 
 
 def run_cmd(
@@ -52,7 +72,9 @@ def run_cmd(
     return ok, stdout, stderr
 
 
-def docker(args: list[str], *, fatal: bool = True, stream: bool = False) -> tuple[bool, str, str]:
+def docker(
+    args: list[str], *, fatal: bool = True, stream: bool = False
+) -> tuple[bool, str, str]:
     return run_cmd(["docker", "--context", context, *args], fatal=fatal, stream=stream)
 
 
@@ -64,9 +86,14 @@ def main() -> None:
     print(f"  Container: {container_name}")
     print(f"  New image: {new_tag}")
 
-    ok, out, _ = docker(["inspect", "--format", "{{json .}}", container_name], fatal=False)
+    ok, out, _ = docker(
+        ["inspect", "--format", "{{json .}}", container_name], fatal=False
+    )
     if not ok or not out:
-        print(f"\nCannot deploy without an existing Compose-managed {container_name} container.", file=sys.stderr)
+        print(
+            f"\nCannot deploy without an existing Compose-managed {container_name} container.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     container = json.loads(out)
@@ -78,7 +105,9 @@ def main() -> None:
     compose_project = labels.get("com.docker.compose.project")
 
     if not prev_image or not prev_image_id or not compose_dir or not compose_project:
-        print(f"\nCould not read Compose metadata for {container_name}.", file=sys.stderr)
+        print(
+            f"\nCould not read Compose metadata for {container_name}.", file=sys.stderr
+        )
         sys.exit(1)
 
     tags_to_apply = ["-t", new_tag, "-t", latest_tag]
@@ -92,9 +121,9 @@ def main() -> None:
             "--platform",
             target_platform,
             "--build-arg",
-            "APP_VERSION=0.2.0",
+            f"OLIVE_BUILD_SHA={build_sha}",
             "--build-arg",
-            f"BUILD_DATE={build_date}",
+            f"OLIVE_BUILD_DATE={build_date}",
             *tags_to_apply,
             ".",
         ],
@@ -110,7 +139,9 @@ def main() -> None:
         ]
     )
 
-    ok_upd, upd_out, _ = docker(["inspect", "--format", "{{.Image}}", container_name], fatal=False)
+    ok_upd, upd_out, _ = docker(
+        ["inspect", "--format", "{{.Image}}", container_name], fatal=False
+    )
     if not ok_upd or not upd_out or upd_out == prev_image_id:
         print("\n⚠️ Deploy did not replace the running image.", file=sys.stderr)
         sys.exit(1)
@@ -120,7 +151,9 @@ def main() -> None:
     for elapsed in range(1, health_timeout + 1):
         time.sleep(1.0)
         try:
-            with urllib.request.urlopen(f"{staging_url}/api/health", timeout=4.0) as resp:
+            with urllib.request.urlopen(
+                f"{staging_url}/api/health", timeout=4.0
+            ) as resp:
                 if resp.status == 200 and json.load(resp).get("status") == "ok":
                     healthy = True
                     print(f"  ✅ Healthy after {elapsed}s.")
@@ -140,7 +173,9 @@ def main() -> None:
         docker(["logs", "--tail", "50", container_name], fatal=False)
         sys.exit(1)
 
-    ok_imgs, imgs_out, _ = docker(["images", image_name, "--format", "{{.Tag}}"], fatal=False)
+    ok_imgs, imgs_out, _ = docker(
+        ["images", image_name, "--format", "{{.Tag}}"], fatal=False
+    )
     if ok_imgs:
         stale = [
             t

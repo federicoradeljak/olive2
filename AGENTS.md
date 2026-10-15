@@ -72,10 +72,11 @@ Run the cheapest check that covers the change — never all checks reflexively.
 
 ## Changelog policy
 
-`CHANGELOG.md` (repo root, Keep a Changelog format) is user-facing and served in-app via `GET /api/changelog` + the header "What's New" button. Keep it up to date:
-- Every user-visible change (feature, fix, behavior change) gets an entry under `## [Unreleased]` in the same commit/PR — under `Added`, `Changed`, or `Fixed`. One bullet per change, user-facing language, no commit SHAs.
+`CHANGELOG.md` (repo root) is user-facing and served in-app via `GET /api/changelog` + the header "What's New" button. Olive ships continuously — there are no releases and no versioned sections. Keep it up to date:
+- Every user-visible change (feature, fix, behavior change) gets an entry in the same commit/PR, under a `## [YYYY-MM-DD]` heading for the UTC merge date (newest date first — create today's heading if missing), grouped under `Added`, `Changed`, or `Fixed`. One bullet per change, user-facing language, no commit SHAs.
 - Infra-only, chore, and docs changes: add an entry only if they affect users/operators (Docker, deploy, backup, models); otherwise skip.
-- When cutting a release: rename `## [Unreleased]` to `## [<version>] — <YYYY-MM-DD>`, bump `__version__` (`backend/src/olive/__init__.py`), `backend/pyproject.toml`, `frontend/package.json`, and the FastAPI `version=` in `backend/src/olive/app.py`, then start a fresh empty `## [Unreleased]` section. The Dockerfile already bundles `CHANGELOG.md` into the image — no packaging change needed.
+- Never create `Unreleased` or versioned sections, and never bump versions as part of a changelog update. The Dockerfile already bundles `CHANGELOG.md` into the image — no packaging change needed.
+- Version display is the build identity (UTC date/time + commit hash), computed in `backend/src/olive/build_info.py` from `OLIVE_BUILD_SHA` / `OLIVE_BUILD_DATE` env (baked via Docker build args) with a git `HEAD` fallback in dev. Docker builds (GH publish workflow, staging deploy) must keep passing those build args.
 
 ## Invariants & rules
 

@@ -1,5 +1,11 @@
 # syntax=docker/dockerfile:1
 
+# Build identity (commit hash + UTC date) shown in-app instead of a version
+# number. The image contains no .git checkout, so CI / deploy scripts must
+# pass these args — see docker-publish.yml and scripts/deploy_staging.py.
+ARG OLIVE_BUILD_SHA=""
+ARG OLIVE_BUILD_DATE=""
+
 # Stage 1: Build Frontend SPA with Vite + pnpm
 FROM node:22-slim AS web-builder
 WORKDIR /frontend
@@ -45,7 +51,13 @@ RUN --mount=type=cache,id=uv,target=/root/.cache/uv \
 COPY --from=web-builder /frontend/dist /app/frontend/dist
 COPY CHANGELOG.md /app/CHANGELOG.md
 
+# Re-declare (no defaults) to bring the global build-arg values into this stage.
+ARG OLIVE_BUILD_SHA
+ARG OLIVE_BUILD_DATE
+
 ENV PORT=4470 \
+    OLIVE_BUILD_SHA=${OLIVE_BUILD_SHA} \
+    OLIVE_BUILD_DATE=${OLIVE_BUILD_DATE} \
     OLIVE_DOCKER=1 \
     OLIVE_BIND_HOST=0.0.0.0 \
     OLIVE_BIND_PORT=4470 \

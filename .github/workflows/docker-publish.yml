@@ -35,6 +35,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Resolve build identity (commit hash + UTC date for in-app display)
+        run: |
+          echo "OLIVE_BUILD_SHA=${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "OLIVE_BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_ENV}"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -59,6 +64,9 @@ jobs:
           file: ./Dockerfile
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            OLIVE_BUILD_SHA=${{ env.OLIVE_BUILD_SHA }}
+            OLIVE_BUILD_DATE=${{ env.OLIVE_BUILD_DATE }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }}
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }},mode=max

@@ -16,6 +16,7 @@ from sqlalchemy.engine import Engine
 from sse_starlette.sse import EventSourceResponse
 
 from . import __version__
+from .build_info import get_build_display
 from .db import DbHandle, get_db
 from .layout import meeting_paths
 from .ml.audio import enhance_audio_file_async
@@ -2378,7 +2379,9 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         try:
             changelog_path = _resolve_changelog_path()
             markdown = changelog_path.read_text(encoding="utf-8") if changelog_path else ""
-            return JSONResponse({"version": __version__, "markdown": markdown})
+            # "version" is the build identity (date/time/commit hash), not a
+            # release number — Olive ships continuously. See build_info.py.
+            return JSONResponse({"version": get_build_display(), "markdown": markdown})
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=500)
 

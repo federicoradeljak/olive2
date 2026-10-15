@@ -1,14 +1,14 @@
 # Changelog
 
-All notable changes to Olive are documented in this file.
+All notable changes to Olive are documented in this file, newest first.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-Olive is currently pre-1.0 (`0.2.0`); everything below shipped as part of the
-0.2.0 development line unless a future version section says otherwise.
+Olive ships continuously — there are no releases. Each section is dated with
+the UTC day its changes merged (`## [YYYY-MM-DD]`), with entries grouped
+under `Added` / `Changed` / `Fixed`.
 
-## [Unreleased]
+## [2026-10-15]
 
-<!-- Add new entries here under Added / Changed / Fixed. See AGENTS.md "Changelog policy". -->
+<!-- Add new entries under today's date heading (newest date first) under Added / Changed / Fixed. See AGENTS.md "Changelog policy". -->
 
 ### Added
 
@@ -36,6 +36,7 @@ Olive is currently pre-1.0 (`0.2.0`); everything below shipped as part of the
 
 ### Changed
 
+- **Build identity instead of version number** — the What's New header now shows the build's UTC date/time and commit hash (e.g. `2026-10-15 14:32 UTC · 4d5ea70`) instead of a static version, matching continuous delivery with no releases.
 - **Faster container startup** — model preflight verifies the four local
   models from the on-disk cache with no Hugging Face Hub round-trips and
   without importing the heavy ML stack (`torch`, `transformers`) on a warm
@@ -58,7 +59,7 @@ Olive is currently pre-1.0 (`0.2.0`); everything below shipped as part of the
   Plaud are now interpreted as UTC instead of the server's local timezone,
   so meetings no longer shift by the host UTC offset on ingest.
 
-## [0.2.0] — 2026-10-14
+## [2026-08-11 — 2026-10-14]
 
 Covers the full history from project start (2026-08-11) through 2026-10-14,
 including the original TypeScript/Bun prototype era and the Python

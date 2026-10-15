@@ -739,7 +739,7 @@ function ChangelogModal({ onClose }: { onClose: () => void }): ReactElement {
   return (
     <Modal
       onClose={onClose}
-      title={version ? `What's New — v${version}` : "What's New"}
+      title={version ? `What's New — ${version}` : "What's New"}
       ariaLabel="Olive changelog"
       maxWidth="max-w-2xl"
     >
