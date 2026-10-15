@@ -1242,6 +1242,80 @@
         }
       }
     },
+    "/api/meetings/{meeting_id}/speakers/reidentify/status": {
+      "get": {
+        "summary": "Get Meeting Speakers Reidentify Status Route",
+        "operationId": "get_meeting_speakers_reidentify_status_route_api_meetings__meeting_id__speakers_reidentify_status_get",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/meetings/{meeting_id}/speakers/reidentify/cancel": {
+      "post": {
+        "summary": "Post Meeting Speakers Reidentify Cancel Route",
+        "operationId": "post_meeting_speakers_reidentify_cancel_route_api_meetings__meeting_id__speakers_reidentify_cancel_post",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/meetings/{meeting_id}/speakers/link": {
       "post": {
         "summary": "Post Link Speaker Route",
@@ -2845,6 +2919,114 @@
         "title": "SummaryGenerationStatus",
         "type": "object"
       },
+      "SpeakerReidentificationStatus": {
+        "properties": {
+          "meetingId": {
+            "title": "Meetingid",
+            "type": "string"
+          },
+          "stage": {
+            "enum": [
+              "queued",
+              "running",
+              "done",
+              "error",
+              "cancelled"
+            ],
+            "title": "Stage",
+            "type": "string"
+          },
+          "startedAt": {
+            "title": "Startedat",
+            "type": "integer"
+          },
+          "finishedAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Finishedat"
+          },
+          "jobId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Jobid"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Provider"
+          },
+          "matched": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Matched"
+          },
+          "renamed": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Renamed"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          }
+        },
+        "required": [
+          "meetingId",
+          "stage",
+          "startedAt"
+        ],
+        "title": "SpeakerReidentificationStatus",
+        "type": "object"
+      },
       "TranscriptionProgressUpdate": {
         "properties": {
           "stage": {
@@ -3187,6 +3369,17 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/SummaryGenerationStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "speakerReidentification": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SpeakerReidentificationStatus"
               },
               {
                 "type": "null"

@@ -34,11 +34,17 @@ from ..providers.speechmatics import (
     parse_speechmatics_json_v2,
     transcript_to_text,
 )
-from ..schemas import EnrolledSpeaker, Transcript, TranscriptionProgressUpdate
+from ..schemas import (
+    EnrolledSpeaker,
+    SpeakerReidentificationStatus,
+    Transcript,
+    TranscriptionProgressUpdate,
+)
 from ..speaker_labels import is_generic_speaker_label
 from ..workflows import (
     QUEUE_ASSEMBLYAI,
     QUEUE_PIPELINE,
+    QUEUE_PLAUD_SYNC,
     QUEUE_SPEAKER_EMBED,
     QUEUE_SPEECHMATICS,
     QUEUE_SUMMARIZE,
@@ -52,6 +58,7 @@ from ..workflows import (
 STAGE_SPEECHMATICS_TRANSCRIBE = "speechmatics_transcribe"
 STAGE_ASSEMBLYAI_TRANSCRIBE = "assemblyai_transcribe"
 STAGE_LOCAL_TRANSCRIBE = "local_transcribe"
+STAGE_SPEAKER_REIDENTIFY = "speaker_reidentify"
 PROVIDER_SPEECHMATICS = "speechmatics"
 PROVIDER_ASSEMBLYAI = "assemblyai"
 PROVIDER_LOCAL = "local"
@@ -207,6 +214,7 @@ class TranscriptionService:
         self._active_jobs: dict[str, _ActiveTranscriptionJob] = {}
         self._active_progress: dict[str, TranscriptionProgressUpdate] = {}
         self._progress_listeners: dict[str, set[Callable[[TranscriptionProgressUpdate], Any]]] = {}
+        self._reidentify_statuses: dict[str, SpeakerReidentificationStatus] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
 
     @property
@@ -419,6 +427,7 @@ class TranscriptionService:
             )
 
         cancel_time = self.now()
+        self._mark_reidentify_cancelled(meeting_id, cancel_time)
         self.emit_progress(
             meeting_id,
             {
@@ -628,15 +637,164 @@ class TranscriptionService:
             "transcript": transcript,
         }
 
-    async def request_speaker_reidentification(self, meeting_id: str) -> dict[str, Any]:
-        """Validate and enqueue a forced speaker re-identification.
+    def get_speaker_reidentification_status(self, meeting_id: str) -> SpeakerReidentificationStatus | None:
+        status = self._reidentify_statuses.get(meeting_id)
+        return status.model_copy() if status else None
 
-        Plaud transcripts delegate to the Plaud poller's durable identify
-        job; every other provider re-runs the shared ASR-first matcher
-        against the primary persisted transcript. Unlike the ingest-time
-        hooks, a manual re-run always re-matches *all* labels so improved
-        voiceprints can fix previously assigned names too.
+    getSpeakerReidentificationStatus = get_speaker_reidentification_status
+
+    def _write_reidentify_stage_run(self, meeting_id: str, status: str, error: str | None = None) -> None:
+        now_ms = self.now()
+        try:
+            with self.db.begin() as conn:
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO stage_runs (
+                          id, meeting_id, stage, status, attempts, last_error,
+                          started_at, finished_at, created_at, updated_at
+                        ) VALUES (
+                          :id, :mid, :stage, :st, 1,
+                          :err, :now, :fin, :now, :now
+                        )
+                        ON CONFLICT(meeting_id, stage) DO UPDATE SET
+                          status = :st,
+                          attempts = stage_runs.attempts + 1,
+                          last_error = :err,
+                          started_at = CASE WHEN :st IN ('running', 'queued') THEN :now ELSE stage_runs.started_at END,
+                          finished_at = :fin,
+                          updated_at = :now
+                        """
+                    ),
+                    {
+                        "id": str(uuid.uuid4()),
+                        "mid": meeting_id,
+                        "stage": STAGE_SPEAKER_REIDENTIFY,
+                        "st": status,
+                        "err": error,
+                        "now": now_ms,
+                        "fin": None if status in ("running", "queued") else now_ms,
+                    },
+                )
+        except Exception:
+            pass
+
+    def _prune_reidentify_status_later(self, meeting_id: str, delay_s: float = 300.0) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        def _cleanup() -> None:
+            cur = self._reidentify_statuses.get(meeting_id)
+            if cur and cur.stage not in ("queued", "running"):
+                self._reidentify_statuses.pop(meeting_id, None)
+
+        loop.call_later(delay_s, _cleanup)
+
+    def _mark_reidentify_cancelled(self, meeting_id: str, cancel_time: int | None = None) -> None:
+        cur = self._reidentify_statuses.get(meeting_id)
+        if cur is not None and cur.stage in ("queued", "running"):
+            self._reidentify_statuses[meeting_id] = SpeakerReidentificationStatus(
+                meetingId=meeting_id,
+                stage="cancelled",
+                startedAt=cur.startedAt,
+                finishedAt=cancel_time or self.now(),
+                jobId=cur.jobId,
+                provider=cur.provider,
+            )
+            self._prune_reidentify_status_later(meeting_id)
+
+    async def _run_tracked_reidentification(
+        self, meeting_id: str, job_id: str, provider: str, plaud: bool
+    ) -> dict[str, Any]:
+        """DBOS job body: run the matcher and flip the tracked status to terminal."""
+        cur = self._reidentify_statuses.get(meeting_id)
+        if cur is not None:
+            self._reidentify_statuses[meeting_id] = cur.model_copy(update={"stage": "running"})
+        self._write_reidentify_stage_run(meeting_id, "running")
+        try:
+            if plaud:
+                poller = self.plaud_poller
+                run_fn = getattr(poller, "run_plaud_speaker_identification", None)
+                if not callable(run_fn):
+                    raise ValueError("Plaud speaker re-identification is unavailable")
+                raw_res: Any = run_fn(meeting_id)
+                if inspect.isawaitable(raw_res):
+                    raw_res = await raw_res
+                result: dict[str, Any] = (
+                    {str(k): v for k, v in raw_res.items()}
+                    if isinstance(raw_res, dict)
+                    else {"meetingId": meeting_id, "status": "skipped"}
+                )
+            else:
+                result = await self.run_speaker_reidentification(meeting_id)
+        except Exception as exc:
+            msg = str(exc)
+            self.logger.warn(
+                "Speaker re-identification job failed",
+                {"category": "transcription", "meetingId": meeting_id, "error": msg},
+            )
+            self._reidentify_statuses[meeting_id] = SpeakerReidentificationStatus(
+                meetingId=meeting_id,
+                stage="error",
+                startedAt=cur.startedAt if cur else self.now(),
+                finishedAt=self.now(),
+                jobId=job_id,
+                provider=provider,
+                error=msg,
+            )
+            self._write_reidentify_stage_run(meeting_id, "error", msg)
+            self._prune_reidentify_status_later(meeting_id)
+            return {
+                "meetingId": meeting_id,
+                "status": "error",
+                "error": msg,
+            }
+        matched = result.get("matched")
+        renamed = result.get("renamed")
+        error_val = result.get("error")
+        self._reidentify_statuses[meeting_id] = SpeakerReidentificationStatus(
+            meetingId=meeting_id,
+            stage="done",
+            startedAt=cur.startedAt if cur else self.now(),
+            finishedAt=self.now(),
+            jobId=job_id,
+            provider=provider,
+            matched=[str(m) for m in matched] if isinstance(matched, list) else None,
+            renamed={str(k): str(v) for k, v in renamed.items()} if isinstance(renamed, dict) else None,
+            error=str(error_val) if isinstance(error_val, str) else None,
+        )
+        self._write_reidentify_stage_run(meeting_id, "done")
+        self._prune_reidentify_status_later(meeting_id)
+        return result
+
+    async def request_speaker_reidentification(self, meeting_id: str) -> dict[str, Any]:
+        """Validate and enqueue a forced speaker re-identification as a tracked job.
+
+        Both providers funnel through one status lifecycle
+        (``queued`` -> ``running`` -> ``done``/``error``/``cancelled``)
+        exposed via :meth:`get_speaker_reidentification_status`, the
+        ``GET /api/meetings/{id}/speakers/reidentify/status`` route, and the
+        ``speakerReidentification`` field on the meeting detail — mirroring
+        transcription progress and summary generation. The work itself stays
+        on the DBOS queues (``speaker_embed`` for local/cloud transcripts,
+        ``plaud_sync`` for Plaud) with a ``reidentify-speakers:{meeting}``
+        deduplication id, so it keeps bounded concurrency, dedup, restart
+        recovery, and ``cancel_dbos_workflows_for_meeting`` coverage.
+        Unlike the ingest-time hooks, a manual re-run always re-matches
+        *all* labels so improved voiceprints can fix previously assigned
+        names too.
         """
+        existing = self._reidentify_statuses.get(meeting_id)
+        if existing is not None and existing.stage in ("queued", "running"):
+            return {
+                "status": "queued",
+                "jobId": existing.jobId,
+                "meetingId": meeting_id,
+                "provider": existing.provider,
+                "alreadyRunning": True,
+            }
         with self.db.connect() as conn:
             meeting = (
                 conn.execute(text("SELECT id FROM meetings WHERE id = :id"), {"id": meeting_id})
@@ -646,31 +804,47 @@ class TranscriptionService:
             if not meeting:
                 raise ValueError(f"Meeting not found: {meeting_id}")
             provider = self._current_transcript_provider(conn, meeting_id)
-        if (provider or "").lower() == "plaud":
+        plaud = (provider or "").lower() == "plaud"
+        if plaud:
             poller = self.plaud_poller
             if poller is None:
                 raise ValueError("Plaud sync is not configured; cannot re-identify this meeting")
-            request_fn = getattr(poller, "request_speaker_reidentification", None)
-            if not callable(request_fn):
+            if not callable(getattr(poller, "run_plaud_speaker_identification", None)):
                 raise ValueError("Plaud speaker re-identification is unavailable")
-            res: Any = request_fn(meeting_id)
-            if inspect.isawaitable(res):
-                res = await res
-            return dict(res)
-        targets = self._reidentify_targets(meeting_id)
-        enrolled = [
-            s for s in await self._get_enrolled_speakers() if _speaker_has_local_voiceprint_vectors(s)
-        ]
-        if not enrolled:
-            raise ValueError("No enrolled speakers with voiceprints yet — enroll a speaker first")
+            targets = self._reidentify_targets(meeting_id)
+            enrolled = [
+                s for s in await self._get_enrolled_speakers() if _speaker_has_local_voiceprint_vectors(s)
+            ]
+            if not enrolled:
+                raise ValueError("No enrolled speakers with voiceprints yet — enroll a speaker first")
+            provider_label = str(targets["artifact"]["provider"] or "plaud")
+            queue_name = QUEUE_PLAUD_SYNC
+        else:
+            targets = self._reidentify_targets(meeting_id)
+            enrolled = [
+                s for s in await self._get_enrolled_speakers() if _speaker_has_local_voiceprint_vectors(s)
+            ]
+            if not enrolled:
+                raise ValueError("No enrolled speakers with voiceprints yet — enroll a speaker first")
+            provider_label = str(targets["artifact"]["provider"] or "")
+            queue_name = QUEUE_SPEAKER_EMBED
         job_id = f"reidentify-speakers:{meeting_id}:{uuid.uuid4().hex[:8]}"
+        started_at = self.now()
+        self._reidentify_statuses[meeting_id] = SpeakerReidentificationStatus(
+            meetingId=meeting_id,
+            stage="queued",
+            startedAt=started_at,
+            jobId=job_id,
+            provider=provider_label,
+        )
+        self._write_reidentify_stage_run(meeting_id, "running")
         await ensure_dbos_launched_async(
             config_dir=self.config_dir,
             meetings_dir=self.meetings_dir,
         )
         await enqueue_stage_job(
-            QUEUE_SPEAKER_EMBED,
-            lambda: self.run_speaker_reidentification(meeting_id),
+            queue_name,
+            lambda: self._run_tracked_reidentification(meeting_id, job_id, provider_label, plaud),
             deduplication_id=f"reidentify-speakers:{meeting_id}",
             workflow_id=job_id,
             label="reidentify-speakers",
@@ -680,11 +854,32 @@ class TranscriptionService:
             "status": "queued",
             "jobId": job_id,
             "meetingId": meeting_id,
-            "provider": targets["artifact"]["provider"],
+            "provider": provider_label,
             "alreadyRunning": False,
         }
 
     requestSpeakerReidentification = request_speaker_reidentification
+
+    async def cancel_speaker_reidentification(self, meeting_id: str) -> dict[str, Any]:
+        """Cancel a running re-identify job for one meeting."""
+        try:
+            await cancel_dbos_workflows_for_meeting(
+                meeting_id,
+                db=self.db,
+                config_dir=self.config_dir,
+                meetings_dir=self.meetings_dir,
+            )
+        except Exception as exc:
+            self.logger.warn(
+                "Failed to cancel re-identify workflows",
+                {"meetingId": meeting_id, "error": str(exc)},
+            )
+        cancel_time = self.now()
+        self._mark_reidentify_cancelled(meeting_id, cancel_time)
+        self._write_reidentify_stage_run(meeting_id, "cancelled", "Cancelled by user")
+        return {"success": True, "meetingId": meeting_id}
+
+    cancelSpeakerReidentification = cancel_speaker_reidentification
 
     def _touch_meeting_updated_at(self, meeting_id: str) -> None:
         with self.db.begin() as conn:

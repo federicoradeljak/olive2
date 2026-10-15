@@ -22,6 +22,7 @@ export type LlmModelCatalogItem = OpenApiSchemas["LlmModelCatalogItem"];
 export type LlmProviderSummary = OpenApiSchemas["LlmProviderSummary"];
 export type MeetingSummaryItem = OpenApiSchemas["MeetingSummaryItem"];
 export type SummaryGenerationStatus = OpenApiSchemas["SummaryGenerationStatus"];
+export type SpeakerReidentificationStatus = OpenApiSchemas["SpeakerReidentificationStatus"];
 export type TranscriptionProgressUpdate = OpenApiSchemas["TranscriptionProgressUpdate"];
 export type MeetingDetailAggregate = OpenApiSchemas["MeetingDetailAggregate"];
 export type BackupInfo = OpenApiSchemas["BackupInfo"];

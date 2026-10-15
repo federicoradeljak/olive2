@@ -30,6 +30,7 @@ import type {
   Speaker,
   StageRunRow,
   SummaryGenerationStatus,
+  SpeakerReidentificationStatus,
   MeetingUsageResponse,
   RapidEnrollAssignResponse,
   RapidEnrollCandidateGroup,
@@ -1534,6 +1535,7 @@ function MeetingDetailView({
   const [enhancedAudio, setEnhancedAudio] = useState(true);
   const [reassigningSpeaker, setReassigningSpeaker] = useState<{ speaker: string; segmentIndex?: number } | null>(null);
   const [reidentifyingSpeakers, setReidentifyingSpeakers] = useState(false);
+  const [reidentifyStatus, setReidentifyStatus] = useState<SpeakerReidentificationStatus | null>(null);
   const [showRapidEnroll, setShowRapidEnroll] = useState(false);
   const [splittingSegment, setSplittingSegment] = useState<{ segmentIndex: number; speaker: string; text: string; startMs: number; endMs: number } | null>(null);
   const [showSummaryModal, setShowSummaryModal] = useState(false);
@@ -1636,6 +1638,16 @@ function MeetingDetailView({
       setDetail(data);
       if (data.summaryGeneration?.stage === "running") {
         setSummaryGeneration(data.summaryGeneration);
+      }
+      if (data.speakerReidentification) {
+        const stage = data.speakerReidentification.stage;
+        if (stage === "queued" || stage === "running") {
+          setReidentifyStatus(data.speakerReidentification);
+          setReidentifyingSpeakers(true);
+        } else {
+          setReidentifyStatus(data.speakerReidentification);
+          setReidentifyingSpeakers(false);
+        }
       }
       if (data.transcriptionProgress) {
         const stage = data.transcriptionProgress.stage;
@@ -1894,17 +1906,19 @@ function MeetingDetailView({
       const res = await fetch(`/api/meetings/${meetingId}/speakers/reidentify`, { method: "POST" });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      // The background job bumps meeting.updatedAt when it finishes (even
-      // when labels are unchanged), so poll until it moves then refresh.
-      const baseline = detail.meeting.updatedAt;
+      // Poll the tracked job status (queued -> running -> done/error) just
+      // like transcription progress and summary generation — no updatedAt
+      // guessing.
       const deadline = Date.now() + 5 * 60 * 1000;
       for (;;) {
-        await new Promise((r) => setTimeout(r, 3000));
+        await new Promise((r) => setTimeout(r, 2000));
         try {
-          const poll = await fetch(`/api/meetings/${meetingId}`);
+          const poll = await fetch(`/api/meetings/${meetingId}/speakers/reidentify/status`);
           if (poll.ok) {
-            const fresh = (await poll.json()) as MeetingDetailResponse;
-            if (fresh.meeting.updatedAt !== baseline) break;
+            const body = (await poll.json()) as { status: SpeakerReidentificationStatus | null };
+            if (body.status) setReidentifyStatus(body.status);
+            const stage = body.status?.stage;
+            if (stage === "done" || stage === "error" || stage === "cancelled") break;
           }
         } catch {}
         if (Date.now() > deadline) break;
@@ -2469,7 +2483,13 @@ function MeetingDetailView({
                   className="rounded-full border border-stone-700 bg-stone-800/80 px-3 py-1 text-xs font-medium text-stone-300 transition hover:border-lime-500/40 hover:text-lime-300 disabled:cursor-wait disabled:opacity-50"
                   title="Re-match every speaker label against your current enrolled voiceprints"
                 >
-                  {reidentifyingSpeakers ? "⟳ Re-identifying…" : "⟳ Re-identify"}
+                  {reidentifyingSpeakers
+                    ? reidentifyStatus?.stage === "queued"
+                      ? "⟳ Queued…"
+                      : "⟳ Re-identifying…"
+                    : reidentifyStatus?.stage === "error"
+                      ? "⟳ Retry re-identify"
+                      : "⟳ Re-identify"}
                 </button>
               </div>
             ) : null;

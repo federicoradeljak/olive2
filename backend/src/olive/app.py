@@ -474,6 +474,15 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             if summary_service is not None
             else None
         )
+        reidentify_status = (
+            _call_sync(
+                svc,
+                ("get_speaker_reidentification_status", "getSpeakerReidentificationStatus"),
+                meeting_id,
+            )
+            if svc is not None
+            else None
+        )
         payload = detail.model_dump()
         payload["transcriptionProgress"] = (
             active_progress.model_dump(exclude_none=True)
@@ -484,6 +493,11 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             summary_gen.model_dump(exclude_none=True)
             if summary_gen is not None and hasattr(summary_gen, "model_dump")
             else summary_gen
+        )
+        payload["speakerReidentification"] = (
+            reidentify_status.model_dump(exclude_none=True)
+            if reidentify_status is not None and hasattr(reidentify_status, "model_dump")
+            else reidentify_status
         )
         return JSONResponse(payload)
 
@@ -1513,6 +1527,28 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
 
+    @app.get("/api/meetings/{meeting_id}/speakers/reidentify/status")
+    async def get_meeting_speakers_reidentify_status_route(meeting_id: str) -> JSONResponse:
+        status = _call_sync(
+            get_transcription_service(),
+            ("get_speaker_reidentification_status", "getSpeakerReidentificationStatus"),
+            meeting_id,
+        )
+        st_dict = status.model_dump(exclude_none=True) if hasattr(status, "model_dump") else status
+        return JSONResponse({"status": st_dict})
+
+    @app.post("/api/meetings/{meeting_id}/speakers/reidentify/cancel")
+    async def post_meeting_speakers_reidentify_cancel_route(meeting_id: str) -> JSONResponse:
+        try:
+            res = await _call_maybe_async(
+                get_transcription_service(),
+                ("cancel_speaker_reidentification", "cancelSpeakerReidentification"),
+                meeting_id,
+            )
+            return JSONResponse(res, status_code=200)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
     @app.post("/api/meetings/{meeting_id}/speakers/link")
     async def post_link_speaker_route(meeting_id: str, request: Request) -> JSONResponse:
         try:
@@ -2174,6 +2210,7 @@ def export_openapi_schema() -> dict[str, Any]:
         s.LlmProviderSummary,
         s.MeetingSummaryItem,
         s.SummaryGenerationStatus,
+        s.SpeakerReidentificationStatus,
         s.TranscriptionProgressUpdate,
         s.BulkTranscribeFilters,
         s.BulkTranscribeRequest,

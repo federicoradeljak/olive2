@@ -505,6 +505,18 @@ class SummaryGenerationStatus(CamelModel):
     error: str | None = None
 
 
+class SpeakerReidentificationStatus(CamelModel):
+    meetingId: str
+    stage: Literal["queued", "running", "done", "error", "cancelled"]
+    startedAt: int
+    finishedAt: int | None = None
+    jobId: str | None = None
+    provider: str | None = None
+    matched: list[str] | None = None
+    renamed: dict[str, str] | None = None
+    error: str | None = None
+
+
 class MeetingDetailAggregate(CamelModel):
     meeting: MeetingListItem
     recordings: list[Recording]
@@ -516,6 +528,7 @@ class MeetingDetailAggregate(CamelModel):
     summaries: list[MeetingSummaryItem]
     transcriptionProgress: TranscriptionProgressUpdate | None = None
     summaryGeneration: SummaryGenerationStatus | None = None
+    speakerReidentification: SpeakerReidentificationStatus | None = None
 
 
 class BackupManifestStats(CamelModel):
