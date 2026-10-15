@@ -99,6 +99,25 @@ def _seed_meeting(handle: Any, meetings_dir: str, meeting_id: str, title: str, s
         )
 
 
+def _patch_transcription_enqueue_noop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace real DBOS enqueue with a no-op so API tests don't leak background work.
+
+    Without this, ``start_transcription`` enqueues a durable workflow that keeps
+    running after the test disposes its ``:memory:`` engine; the orphaned job
+    then fails with ``no such table: meetings`` once the in-memory DB is gone.
+    """
+    import olive.services.transcription as tx_mod
+
+    async def _fake_ensure(**_kwargs: Any) -> str:
+        return "sqlite:///fake-dbos.sqlite"
+
+    async def _fake_enqueue(queue_name: str, fn: Any, **kwargs: Any) -> str:
+        return kwargs.get("workflow_id") or "handle-fake"
+
+    monkeypatch.setattr(tx_mod, "ensure_dbos_launched_async", _fake_ensure)
+    monkeypatch.setattr(tx_mod, "enqueue_driver_job", _fake_enqueue)
+
+
 def _make_client(tmp_path: Path):
     handle = create_db(":memory:")
     meetings_dir = str(tmp_path / "meetings")
@@ -122,7 +141,10 @@ def _make_client(tmp_path: Path):
     return TestClient(app), handle
 
 
-def test_bulk_transcribe_explicit_ids_queues_background_jobs(tmp_path: Path) -> None:
+def test_bulk_transcribe_explicit_ids_queues_background_jobs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_transcription_enqueue_noop(monkeypatch)
     client, handle = _make_client(tmp_path)
     try:
         res = client.post(
@@ -140,7 +162,10 @@ def test_bulk_transcribe_explicit_ids_queues_background_jobs(tmp_path: Path) -> 
         handle.engine.dispose()
 
 
-def test_bulk_transcribe_filters_by_date_and_rejects_bad_provider(tmp_path: Path) -> None:
+def test_bulk_transcribe_filters_by_date_and_rejects_bad_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_transcription_enqueue_noop(monkeypatch)
     client, handle = _make_client(tmp_path)
     try:
         bad = client.post("/api/meetings/bulk-transcribe", json={"provider": "google-stt"})
@@ -172,7 +197,8 @@ def test_bulk_transcribe_filters_by_date_and_rejects_bad_provider(tmp_path: Path
         handle.engine.dispose()
 
 
-def test_bulk_transcribe_requires_targets(tmp_path: Path) -> None:
+def test_bulk_transcribe_requires_targets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_transcription_enqueue_noop(monkeypatch)
     client, handle = _make_client(tmp_path)
     try:
         res = client.post(
@@ -242,7 +268,11 @@ async def test_bulk_transcribe_registers_durable_workflows(tmp_path: Path) -> No
     """End-to-end: bulk enqueue leaves durable, meeting-tagged workflows."""
     from dbos import DBOS
 
-    handle = create_db(":memory:")
+    from olive.workflows import cancel_dbos_workflows_for_meeting
+
+    # File-backed DB: background drivers hold this engine past the test body,
+    # and a fresh :memory: connection after dispose would have no tables.
+    handle = create_db(str(tmp_path / "olive.sqlite"))
     meetings_dir = str(tmp_path / "meetings")
     _seed_meeting(handle, meetings_dir, "m-bulk-1", "Bulk Meeting One", 1_700_000_000_000)
     _seed_meeting(handle, meetings_dir, "m-bulk-2", "Bulk Meeting Two", 1_700_000_000_001)
@@ -264,4 +294,9 @@ async def test_bulk_transcribe_registers_durable_workflows(tmp_path: Path) -> No
         assert any(i.startswith("transcribe:m-bulk-1:") for i in ids)
         assert any(i.startswith("transcribe:m-bulk-2:") for i in ids)
     finally:
+        for mid in ("m-bulk-1", "m-bulk-2"):
+            try:
+                await cancel_dbos_workflows_for_meeting(mid, db=handle.engine, meetings_dir=meetings_dir)
+            except Exception:
+                pass
         handle.engine.dispose()
