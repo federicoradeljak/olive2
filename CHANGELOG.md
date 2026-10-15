@@ -25,6 +25,7 @@ under `Added` / `Changed` / `Fixed`.
 - **Auto-title meetings** — generate a concise meeting title from the
   transcript with the configured default LLM via the Auto-title button
   next to the meeting title.
+- **Always re-transcribe Plaud recordings with the configured engine** — Settings now offers a three-way Plaud recordings policy (use Plaud transcript, re-transcribe when speakers are unnamed, or always re-transcribe). The always mode keeps Plaud's transcript as a fallback and makes the configured engine authoritative, takes effect without a restart, and skips the redundant Plaud speaker-identification pass. Meetings that arrive with a summary but no transcript segments now always hand off to the configured engine, which also covers running Plaud hardware without a transcription subscription (turn AutoFlow off in Plaud and Olive transcribes from audio).
 - **Transcript-only speaker names** — the Assign Speaker dialog now offers
   "This transcript only" alongside "Save to People", so one-off voices
   (e.g. an interview guest) can be relabeled in that meeting without

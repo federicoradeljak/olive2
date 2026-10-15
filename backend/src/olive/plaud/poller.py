@@ -312,12 +312,29 @@ class PlaudPoller:
         self.transcription_service: Any = opts.get("transcriptionService") or opts.get(
             "transcription_service"
         )
-        self.retranscribe_plaud_when_unnamed: bool = bool(
-            opts.get("retranscribePlaudWhenUnnamed") or opts.get("retranscribe_plaud_when_unnamed")
-        )
-        self.auto_transcribe_with_speechmatics: bool = bool(
-            opts.get("autoTranscribeWithSpeechmatics") or opts.get("auto_transcribe_with_speechmatics")
-        )
+        unnamed_override: bool | None = None
+        for _key in ("retranscribePlaudWhenUnnamed", "retranscribe_plaud_when_unnamed"):
+            if _key in opts:
+                unnamed_override = bool(opts.get(_key))
+                break
+        always_override: bool | None = None
+        for _key in (
+            "alwaysRetranscribePlaud",
+            "always_retranscribe_plaud",
+            # Legacy provider-specific name; kept as an alias for the same flag.
+            "autoTranscribeWithSpeechmatics",
+            "auto_transcribe_with_speechmatics",
+        ):
+            if _key in opts:
+                always_override = bool(opts.get(_key))
+                break
+        self._retranscribe_when_unnamed_override: bool | None = unnamed_override
+        self._always_retranscribe_override: bool | None = always_override
+        self.retranscribe_plaud_when_unnamed: bool = bool(unnamed_override)
+        # Provider-neutral primary flag; the legacy speechmatics-specific
+        # attribute is kept in sync for backward compatibility.
+        self.always_retranscribe_plaud: bool = bool(always_override)
+        self.auto_transcribe_with_speechmatics: bool = self.always_retranscribe_plaud
         self.now: Callable[[], int] = opts.get("now") or (lambda: int(time.time() * 1000))
         self.fetch_impl: Callable[[str], Any] = (
             opts.get("fetchImpl") or opts.get("fetch_impl") or _default_fetch
@@ -900,13 +917,21 @@ class PlaudPoller:
                 {"id": meeting["id"]},
             )
 
+        always, when_unnamed = self._resolve_plaud_retranscribe_flags()
         has_only_generic = not segments or all(is_generic_plaud_speaker(s.get("speaker")) for s in segments)
-        if self.auto_transcribe_with_speechmatics or (
-            self.retranscribe_plaud_when_unnamed and has_only_generic
-        ):
+        # No transcript segments (e.g. Plaud minutes exhausted mid-flow,
+        # summary-only payload) always hands off: there is nothing to keep
+        # as authoritative, regardless of either flag.
+        should_retranscribe = always or (when_unnamed and has_only_generic) or not segments
+        if should_retranscribe:
             self._hand_off_transcription(meeting["id"], "Plaud meeting")
 
-        if segments:
+        if segments and not (always and self.transcription_service):
+            # Skipped when always-re-transcribe fires: the replacement
+            # transcript carries its own speaker identification, so matching
+            # Plaud turns against voiceprints is wasted work that can also
+            # race the re-transcription write. Falls back to identification
+            # when no transcription service is configured.
             # ASR-first speaker identification runs as a durable plaud_sync
             # queue job (never inline: embedding would block the poll cycle).
             # Failures keep the Plaud labels persisted above.
@@ -1284,6 +1309,44 @@ class PlaudPoller:
             except Exception:
                 pass
         return 0.45
+
+    def _read_settings_json(self) -> dict[str, Any]:
+        """Best-effort settings.json read ({} when missing/unparseable)."""
+        if not self.config_dir:
+            return {}
+        try:
+            raw = json.loads((Path(self.config_dir) / "settings.json").read_text(encoding="utf-8"))
+            return raw if isinstance(raw, dict) else {}
+        except Exception:
+            return {}
+
+    def _resolve_plaud_retranscribe_flags(self) -> tuple[bool, bool]:
+        """Resolve (always, when_unnamed) re-transcribe flags (opt → settings → False).
+
+        Constructor opts win when explicitly provided (including the legacy
+        ``autoTranscribeWithSpeechmatics`` alias); otherwise the live
+        ``settings.json`` values are used so Settings toggles take effect
+        without restarting the poller singleton. ``always`` takes precedence
+        at the call site.
+        """
+        settings = self._read_settings_json()
+        if self._always_retranscribe_override is not None:
+            always = self._always_retranscribe_override
+        else:
+            always = bool(
+                settings.get("alwaysRetranscribePlaud")
+                # Legacy alias honored in stored settings too.
+                or settings.get("autoTranscribeWithSpeechmatics")
+            )
+        if self._retranscribe_when_unnamed_override is not None:
+            when_unnamed = self._retranscribe_when_unnamed_override
+        else:
+            when_unnamed = bool(settings.get("retranscribePlaudWhenUnnamed"))
+        # Keep the legacy attribute in sync for duck-typed readers.
+        self.always_retranscribe_plaud = always
+        self.auto_transcribe_with_speechmatics = always
+        self.retranscribe_plaud_when_unnamed = when_unnamed
+        return always, when_unnamed
 
     async def _get_enrolled_speakers_with_voiceprints(self) -> list[EnrolledSpeaker]:
         """Enrolled speakers that actually carry local voiceprints."""

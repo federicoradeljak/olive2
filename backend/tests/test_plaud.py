@@ -896,3 +896,217 @@ def test_poller_does_not_start_without_flag(tmp_path: Path) -> None:
     with TestClient(app):
         pass
     handle.engine.dispose()
+
+
+def _named_detail() -> dict[str, Any]:
+    return {
+        **FIXTURE_FILE,
+        "presigned_url": "https://audio.test/fixture.m4a",
+        "source_list": [
+            {
+                "data_type": "transcript",
+                "data_content": json.dumps(
+                    [
+                        {
+                            "start_time": 0,
+                            "end_time": 5000,
+                            "speaker": "Alice",
+                            "content": "Let's ship it.",
+                        },
+                        {
+                            "start_time": 5000,
+                            "end_time": 12000,
+                            "speaker": "Bob",
+                            "content": "Agreed.",
+                        },
+                    ]
+                ),
+            }
+        ],
+        "note_list": [],
+    }
+
+
+def _unnamed_detail() -> dict[str, Any]:
+    return {
+        **FIXTURE_FILE,
+        "presigned_url": "https://audio.test/fixture.m4a",
+        "source_list": [
+            {
+                "data_type": "transcript",
+                "data_content": json.dumps(
+                    [
+                        {
+                            "start_time": 0,
+                            "end_time": 5000,
+                            "speaker": "Speaker 1",
+                            "content": "Hello.",
+                        },
+                        {
+                            "start_time": 5000,
+                            "end_time": 12000,
+                            "speaker": "Speaker 2",
+                            "content": "Hi there.",
+                        },
+                    ]
+                ),
+            }
+        ],
+        "note_list": [],
+    }
+
+
+def _summary_only_detail() -> dict[str, Any]:
+    return {
+        **FIXTURE_FILE,
+        "presigned_url": "https://audio.test/fixture.m4a",
+        "source_list": [],
+        "note_list": [
+            {
+                "data_type": "summary",
+                "data_content": json.dumps({"summary": "A summary with no transcript."}),
+            }
+        ],
+    }
+
+
+class _RecordingTranscription:
+    """Production-shaped double: prefers start_transcription like the real service."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def start_transcription(self, meeting_id: str) -> dict[str, Any]:
+        self.calls.append(meeting_id)
+        return {"status": "running"}
+
+
+async def test_always_retranscribe_fires_on_named_speakers_and_skips_identify(
+    tmp_path: Path,
+) -> None:
+    handle = create_db(":memory:")
+    svc = _RecordingTranscription()
+    poller = PlaudPoller(
+        {
+            "db": handle.engine,
+            "meetingsDir": str(tmp_path / "meetings"),
+            "client": _FakePlaudClient(_named_detail()),
+            "fetchImpl": _fake_fetch(),
+            "now": lambda: 1_000_000,
+            "transcriptionService": svc,
+            "alwaysRetranscribePlaud": True,
+        }
+    )
+    identify_calls: list[str] = []
+
+    async def _fake_identify(meeting_id: str) -> bool:
+        identify_calls.append(meeting_id)
+        return True
+
+    poller._enqueue_plaud_speaker_identification = _fake_identify  # type: ignore[method-assign]
+    res = await poller.trigger()
+    assert res["resolved"] == 1
+    await asyncio.sleep(0)
+    assert len(svc.calls) == 1
+    # Replacement transcript carries its own speaker identification.
+    assert identify_calls == []
+    handle.engine.dispose()
+
+
+async def test_unnamed_only_skips_named_but_fires_on_generic(tmp_path: Path) -> None:
+    for detail_fn, expect_calls in ((_named_detail, 0), (_unnamed_detail, 1)):
+        handle = create_db(":memory:")
+        svc = _RecordingTranscription()
+        poller = PlaudPoller(
+            {
+                "db": handle.engine,
+                "meetingsDir": str(tmp_path / "meetings"),
+                "client": _FakePlaudClient(detail_fn()),
+                "fetchImpl": _fake_fetch(),
+                "now": lambda: 1_000_000,
+                "transcriptionService": svc,
+                "retranscribePlaudWhenUnnamed": True,
+            }
+        )
+        res = await poller.trigger()
+        assert res["resolved"] == 1
+        await asyncio.sleep(0)
+        assert len(svc.calls) == expect_calls
+        handle.engine.dispose()
+
+
+async def test_summary_without_segments_hands_off_despite_flags_off(tmp_path: Path) -> None:
+    handle = create_db(":memory:")
+    svc = _RecordingTranscription()
+    poller = PlaudPoller(
+        {
+            "db": handle.engine,
+            "meetingsDir": str(tmp_path / "meetings"),
+            "client": _FakePlaudClient(_summary_only_detail()),
+            "fetchImpl": _fake_fetch(),
+            "now": lambda: 1_000_000,
+            "transcriptionService": svc,
+        }
+    )
+    res = await poller.trigger()
+    assert res["resolved"] == 1
+    await asyncio.sleep(0)
+    assert len(svc.calls) == 1
+    with handle.engine.connect() as conn:
+        meeting = conn.execute(text("SELECT * FROM meetings")).mappings().one()
+    # Plaud summary is kept as fallback; no transcript to stay authoritative on.
+    assert meeting["primary_transcript_artifact_id"] is None
+    assert meeting["primary_summary_artifact_id"] is not None
+    handle.engine.dispose()
+
+
+async def test_legacy_alias_still_triggers_retranscribe(tmp_path: Path) -> None:
+    handle = create_db(":memory:")
+    svc = _RecordingTranscription()
+    poller = PlaudPoller(
+        {
+            "db": handle.engine,
+            "meetingsDir": str(tmp_path / "meetings"),
+            "client": _FakePlaudClient(_named_detail()),
+            "fetchImpl": _fake_fetch(),
+            "now": lambda: 1_000_000,
+            "transcriptionService": svc,
+            "autoTranscribeWithSpeechmatics": True,
+        }
+    )
+    res = await poller.trigger()
+    assert res["resolved"] == 1
+    await asyncio.sleep(0)
+    assert len(svc.calls) == 1
+    handle.engine.dispose()
+
+
+async def test_retranscribe_flags_resolve_live_from_settings_without_restart(
+    tmp_path: Path,
+) -> None:
+    handle = create_db(":memory:")
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    settings_path = config_dir / "settings.json"
+    settings_path.write_text(json.dumps({"alwaysRetranscribePlaud": True}), encoding="utf-8")
+    svc = _RecordingTranscription()
+    poller = PlaudPoller(
+        {
+            "db": handle.engine,
+            "meetingsDir": str(tmp_path / "meetings"),
+            "client": _FakePlaudClient(_named_detail()),
+            "fetchImpl": _fake_fetch(),
+            "now": lambda: 1_000_000,
+            "transcriptionService": svc,
+            "configDir": str(config_dir),
+        }
+    )
+    # Same instance sees the toggle flip: no restart required.
+    assert poller._resolve_plaud_retranscribe_flags() == (True, False)
+    res = await poller.trigger()
+    assert res["resolved"] == 1
+    await asyncio.sleep(0)
+    assert len(svc.calls) == 1
+    settings_path.write_text(json.dumps({}), encoding="utf-8")
+    assert poller._resolve_plaud_retranscribe_flags() == (False, False)
+    handle.engine.dispose()

@@ -19,6 +19,7 @@ import { SpeakerCombobox, SpeakerStatusBadges } from "./components/SpeakerCombob
 import {
   ENGINE_OPTIONS,
   LOG_LEVEL_OPTIONS,
+  PLAUD_RETRANSCRIBE_OPTIONS,
   TRANSCRIBE_PROVIDER_OPTIONS,
   TRANSCRIPT_PROVIDER_FILTER_OPTIONS,
   ThinkingLabel,
@@ -5008,6 +5009,7 @@ function LlmSettingsModal({
   const [localSimilarityThreshold, setLocalSimilarityThreshold] = useState<number>(0.45);
   const [localAsrModel, setLocalAsrModel] = useState<string>("onnx-community/cohere-transcribe-03-2026-ONNX");
   const [transcriptionProvider, setTranscriptionProvider] = useState<"speechmatics" | "local" | "assemblyai" | "muse">("local");
+  const [plaudRetranscribeMode, setPlaudRetranscribeMode] = useState<"off" | "unnamed" | "always">("off");
   const [hfToken, setHfToken] = useState<string>("");
   const [speechmaticsApiKey, setSpeechmaticsApiKey] = useState<string>("");
   const [assemblyaiApiKey, setAssemblyaiApiKey] = useState<string>("");
@@ -5055,6 +5057,13 @@ function LlmSettingsModal({
         }
         if (appCfg.transcriptionProvider === "speechmatics" || appCfg.transcriptionProvider === "local" || appCfg.transcriptionProvider === "assemblyai" || appCfg.transcriptionProvider === "muse") {
           setTranscriptionProvider(appCfg.transcriptionProvider);
+        }
+        if (appCfg.alwaysRetranscribePlaud) {
+          setPlaudRetranscribeMode("always");
+        } else if (appCfg.retranscribePlaudWhenUnnamed) {
+          setPlaudRetranscribeMode("unnamed");
+        } else {
+          setPlaudRetranscribeMode("off");
         }
         if (typeof appCfg.hfToken === "string") {
           setHfToken(appCfg.hfToken);
@@ -5202,6 +5211,8 @@ function LlmSettingsModal({
             localSimilarityThreshold,
             localAsrModel,
             transcriptionProvider,
+            retranscribePlaudWhenUnnamed: plaudRetranscribeMode === "unnamed",
+            alwaysRetranscribePlaud: plaudRetranscribeMode === "always",
             hfToken,
             speechmaticsApiKey,
             assemblyaiApiKey,
@@ -5427,6 +5438,22 @@ function LlmSettingsModal({
             <p className="text-[11px] text-stone-500">
               Controls the default for new uploads and manual transcription. Keys entered below take effect immediately; environment variables (ASSEMBLY_API_KEY, SPEECHMATICS_API_KEY, MUSE_API_KEY) override them when set.
             </p>
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold uppercase tracking-wider text-stone-300">
+                Plaud recordings
+              </label>
+              <Combobox
+                value={plaudRetranscribeMode}
+                onChange={(v) => setPlaudRetranscribeMode(v as "off" | "unnamed" | "always")}
+                placeholder="Select Plaud transcript policy…"
+                ariaLabel="Plaud transcript policy"
+                searchPlaceholder="Search Plaud options…"
+                options={PLAUD_RETRANSCRIBE_OPTIONS}
+              />
+              <p className="text-[11px] text-stone-500">
+                Plaud&apos;s transcript is always kept as a fallback. Re-transcribing uses the engine above as authoritative; changes take effect immediately without a restart.
+              </p>
+            </div>
             <div className="space-y-1.5 pt-1">
               <label htmlFor="speechmatics-key-input" className="text-xs text-stone-300 font-medium flex items-center justify-between">
                 <span>Speechmatics API Key:</span>

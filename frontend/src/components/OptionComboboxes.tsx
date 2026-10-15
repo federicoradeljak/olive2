@@ -43,6 +43,25 @@ export const TRANSCRIBE_PROVIDER_OPTIONS: ComboboxOption[] = [
   },
 ];
 
+/** Plaud ingest transcript policy: keep Plaud's, re-transcribe when unnamed, or always re-transcribe. */
+export const PLAUD_RETRANSCRIBE_OPTIONS: ComboboxOption[] = [
+  {
+    value: "off",
+    label: "Use Plaud transcript",
+    keywords: "plaud keep fallback",
+  },
+  {
+    value: "unnamed",
+    label: "Re-transcribe when speakers are unnamed",
+    keywords: "plaud unnamed generic speakers",
+  },
+  {
+    value: "always",
+    label: "Always re-transcribe with the configured engine",
+    keywords: "plaud always authoritative engine",
+  },
+];
+
 /** Engine values used by the meeting detail + upload pickers ("local:cohere" scheme). */
 export const ENGINE_OPTIONS: ComboboxOption[] = [
   {
