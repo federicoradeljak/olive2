@@ -168,7 +168,7 @@ def _score_candidate_segment(segment: TranscriptSegment) -> float:
     scoring_duration = min(duration_sec, ENROLL_TRIM_TARGET_SEC)
     if scoring_duration < 3.0:
         duration_score = 0.4 * (scoring_duration / 3.0)
-    elif scoring_duration <= 12.0:
+    else:
         duration_score = 1.0 - abs(scoring_duration - 8.0) * 0.03
 
     word_count = len((segment.text or "").split())
