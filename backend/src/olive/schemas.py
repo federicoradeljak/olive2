@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 MeetingSource = Literal["plaud", "upload", "ios-shortcut"]
 MeetingStatus = Literal["pending", "processing", "ready", "error", "duplicate"]
+AudioStatus = Literal["ready", "retrieving", "missing"]
 ArtifactKind = Literal["transcript", "summary"]
 ArtifactFormat = Literal["md", "txt", "json", "srt"]
 StageRunStatus = Literal["pending", "running", "done", "error", "cancelled"]
@@ -141,6 +142,8 @@ class Meeting(CamelModel):
     lastError: str | None = None
     createdAt: int
     updatedAt: int
+    audioStatus: AudioStatus = "ready"
+    canRetryAudio: bool = False
 
 
 MeetingListItem = Meeting

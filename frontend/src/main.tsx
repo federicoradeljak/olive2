@@ -1198,6 +1198,7 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
           {meetings.map((meeting) => {
             const selected = selectedIds.includes(meeting.id);
             const progress = activeProgressMap[meeting.id];
+            const audioPending = meeting.audioStatus === "retrieving" || meeting.audioStatus === "missing";
             return (
               <div
                 key={meeting.id}
@@ -1206,6 +1207,8 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
                 className={`group flex h-full cursor-pointer flex-col gap-2.5 rounded-xl border p-4 sm:p-5 shadow-sm transition ${
                   selectMode && selected
                     ? "border-lime-400 bg-lime-400/5"
+                    : audioPending
+                    ? "border-stone-800 bg-stone-900/60 opacity-60 saturate-50 hover:border-sky-400/50 hover:opacity-80"
                     : "border-stone-800 bg-stone-900/90 hover:border-lime-400/60 hover:bg-stone-900"
                 }`}
               >
@@ -1252,7 +1255,16 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
                 </div>
 
                 <div className="mt-auto flex flex-wrap items-center gap-1.5">
-                  {progress ? (
+                  {meeting.audioStatus === "retrieving" && !progress ? (
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-sky-400/40 bg-sky-400/10 px-3 py-1 text-xs font-semibold text-sky-300 animate-pulse">
+                      <span className="h-2 w-2 rounded-full bg-sky-400 animate-ping" />
+                      Retrieving audio…
+                    </span>
+                  ) : meeting.audioStatus === "missing" && !progress ? (
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-rose-500/40 bg-rose-500/10 px-3 py-1 text-xs font-semibold text-rose-300">
+                      Audio missing
+                    </span>
+                  ) : progress ? (
                     <div className="flex items-center gap-2 rounded-full border border-amber-500/40 bg-amber-950/40 px-3 py-1 text-xs text-amber-200">
                       <span className="h-2 w-2 rounded-full bg-amber-400 animate-ping" />
                       <span className="font-semibold">{progress.stage} ({Math.round(progress.percent)}%)</span>
@@ -1653,6 +1665,28 @@ function MeetingDetailView({
   const [newTagInput, setNewTagInput] = useState("");
   const [savingTags, setSavingTags] = useState(false);
   const [mobileSection, setMobileSection] = useState<"summary" | "transcript" | null>(null);
+  const [retryingAudio, setRetryingAudio] = useState(false);
+  const [audioRetryNotice, setAudioRetryNotice] = useState<string | null>(null);
+
+  const audioStatus = detail?.meeting.audioStatus ?? (detail && detail.recordings.length === 0 ? "retrieving" : "ready");
+  const hasNoAudio = !!detail && audioStatus !== "ready";
+
+  const handleRetryAudio = async () => {
+    if (retryingAudio) return;
+    setRetryingAudio(true);
+    setAudioRetryNotice(null);
+    try {
+      const res = await fetch(`/api/meetings/${meetingId}/audio/retry`, { method: "POST" });
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setAudioRetryNotice("Refetch queued — the audio will appear automatically once Plaud Cloud serves it.");
+      await fetchDetail();
+    } catch (err) {
+      setAudioRetryNotice(err instanceof Error ? err.message : "Failed to queue audio refetch");
+    } finally {
+      setRetryingAudio(false);
+    }
+  };
 
   const startRename = () => {
     if (!detail) return;
@@ -2001,6 +2035,14 @@ function MeetingDetailView({
   };
 
   const handleTriggerTranscription = async () => {
+    if (hasNoAudio) {
+      setError(
+        audioStatus === "retrieving"
+          ? "Audio is still being fetched from Plaud Cloud — transcription unlocks once it lands."
+          : "No audio file is attached to this meeting — transcription needs audio first."
+      );
+      return;
+    }
     setTranscribing(true);
     setCancellingTranscription(false);
     const abortController = new AbortController();
@@ -2493,8 +2535,9 @@ function MeetingDetailView({
 
               <button
                 type="button"
-                disabled={transcribing}
+                disabled={transcribing || hasNoAudio}
                 onClick={() => void handleTriggerTranscription()}
+                title={hasNoAudio ? "Transcription unlocks once the meeting audio is attached" : undefined}
                 className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-lime-400 px-4 py-2 text-sm font-semibold text-stone-950 transition hover:bg-lime-300 disabled:opacity-75 disabled:cursor-not-allowed shadow-md shrink-0"
               >
                 {transcribing && (
@@ -2549,6 +2592,62 @@ function MeetingDetailView({
             </div>
             </div>
           </header>
+
+          {/* Audio not yet attached — retrieving or missing banner */}
+          {hasNoAudio && (
+            <div
+              className={`rounded-xl border p-4 shadow-xl space-y-3 animate-in fade-in duration-200 ${
+                audioStatus === "retrieving"
+                  ? "border-sky-500/30 bg-sky-950/30"
+                  : "border-rose-500/30 bg-rose-950/30"
+              }`}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  {audioStatus === "retrieving" ? (
+                    <svg className="h-4 w-4 animate-spin text-sky-300 shrink-0" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                    </svg>
+                  ) : (
+                    <span className="text-rose-300 shrink-0">⚠</span>
+                  )}
+                  <p className={`text-sm ${audioStatus === "retrieving" ? "text-sky-200" : "text-rose-200"}`}>
+                    {audioStatus === "retrieving" ? (
+                      <><span className="font-semibold">Retrieving audio…</span> This Plaud recording is still downloading from Plaud Cloud. Transcription unlocks automatically once it lands.</>
+                    ) : detail?.meeting.source === "plaud" ? (
+                      <><span className="font-semibold">Audio file missing.</span> The recording row exists but no audio is on disk. Re-queue the download from Plaud Cloud.</>
+                    ) : (
+                      <><span className="font-semibold">Audio file missing.</span> No playable audio is attached to this meeting, so transcription is unavailable.</>
+                    )}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {detail?.meeting.canRetryAudio && (
+                    <button
+                      type="button"
+                      disabled={retryingAudio}
+                      onClick={() => void handleRetryAudio()}
+                      className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border border-sky-400/40 bg-sky-400/10 px-3 py-1.5 text-xs font-semibold text-sky-200 transition hover:bg-sky-400/20 disabled:opacity-50"
+                    >
+                      <span>⟳</span>
+                      <span>{retryingAudio ? "Queueing…" : "Retry download"}</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void fetchDetail()}
+                    className="inline-flex min-h-[40px] items-center rounded-lg border border-stone-700 px-3 py-1.5 text-xs font-medium text-stone-300 transition hover:text-white"
+                  >
+                    Check again
+                  </button>
+                </div>
+              </div>
+              {audioRetryNotice && (
+                <p className="text-xs text-stone-300">{audioRetryNotice}</p>
+              )}
+            </div>
+          )}
 
           {/* Live Transcription Progress Banner */}
           {transcriptionProgress && (
@@ -2829,9 +2928,9 @@ function MeetingDetailView({
               <button
                 type="button"
                 onClick={() => setShowSummaryModal(true)}
-                disabled={summaryGenerating}
+                disabled={summaryGenerating || hasNoAudio}
                 className="inline-flex items-center gap-2 rounded-lg bg-lime-400 px-3.5 py-1.5 text-xs font-semibold text-stone-950 hover:bg-lime-300 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                title={summaryGenerating ? "Summary generation already in progress" : undefined}
+                title={hasNoAudio ? "Summaries need meeting audio first" : summaryGenerating ? "Summary generation already in progress" : undefined}
               >
                 <span>+</span>
                 <span>Generate Summary</span>

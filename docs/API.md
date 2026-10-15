@@ -30,6 +30,10 @@ Response:
 
 Streams the audio recording for in-browser playback. Supports HTTP `Range` requests for seekable playback.
 
+## `POST /api/meetings/:id/audio/retry`
+
+Plaud meetings only. Resets the Plaud ingest state so the next poll refetches the audio from Plaud Cloud, and returns HTTP 202. Non-Plaud meetings get HTTP 400; unknown meetings (or Plaud meetings with no ingest state) get HTTP 404. Meeting payloads carry `audioStatus` (`ready` | `retrieving` | `missing`) and `canRetryAudio` so the UI can grey out audio-pending meetings.
+
 ---
 
 ## iOS Shortcut Setup (Voice Memos to Olive)

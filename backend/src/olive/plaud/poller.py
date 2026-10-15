@@ -1751,6 +1751,71 @@ class PlaudPoller:
             ).scalar()
         return int(cnt or 0)
 
+    async def retry_meeting_audio(self, meeting_id: str) -> dict[str, Any]:
+        """Reset a Plaud meeting's ingest state so the next poll refetches audio.
+
+        Only Plaud meetings can refetch from the cloud. Raises ValueError with
+        a user-facing message when the meeting is missing, is not a Plaud
+        meeting, is a duplicate, or has no ingest state to reset.
+        """
+        with self.db.connect() as conn:
+            meeting = (
+                conn.execute(
+                    text("SELECT * FROM meetings WHERE id = :id"),
+                    {"id": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
+            state = (
+                conn.execute(
+                    text("SELECT * FROM plaud_ingest_state WHERE meeting_id = :mid"),
+                    {"mid": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
+        if not meeting:
+            raise ValueError(f"Meeting not found: {meeting_id}")
+        if meeting.get("source") != "plaud":
+            raise ValueError("Only Plaud meetings can refetch audio from the cloud")
+        if meeting.get("status") == "duplicate":
+            raise ValueError("Duplicate meetings have no audio of their own to refetch")
+        if not state:
+            raise ValueError(f"No Plaud ingest state for meeting {meeting_id}")
+
+        now = self.now()
+        with self.db.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE plaud_ingest_state SET pcs_resolved = 0, "
+                    "pcs_deadline_at = :deadline WHERE meeting_id = :mid"
+                ),
+                {"deadline": now + self.pcs_wait_ms, "mid": meeting_id},
+            )
+            conn.execute(
+                text(
+                    "UPDATE meetings SET status = 'processing', last_error = NULL, "
+                    "updated_at = :now WHERE id = :id"
+                ),
+                {"now": now, "id": meeting_id},
+            )
+        self.logger.info(
+            "Plaud audio refetch queued",
+            {"category": "plaud", "meetingId": meeting_id},
+        )
+        try:
+            started = self.trigger_background()
+        except RuntimeError:
+            started = False
+        return {
+            "status": "retrying",
+            "meetingId": meeting_id,
+            "alreadyRunning": not started,
+        }
+
+    retryMeetingAudio = retry_meeting_audio
+
     async def _save_poll_state(self, completed_at: int, error: str | None) -> None:
         with self.db.begin() as conn:
             for k, v in [

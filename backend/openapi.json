@@ -332,6 +332,43 @@
         }
       }
     },
+    "/api/meetings/{meeting_id}/audio/retry": {
+      "post": {
+        "summary": "Post Meeting Audio Retry Route",
+        "operationId": "post_meeting_audio_retry_route_api_meetings__meeting_id__audio_retry_post",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/meetings/{meeting_id}/chat/messages": {
       "get": {
         "summary": "Get Chat Messages Route",
@@ -2253,9 +2290,26 @@
           "updatedAt": {
             "title": "Updatedat",
             "type": "integer"
+          },
+          "audioStatus": {
+            "default": "ready",
+            "enum": [
+              "ready",
+              "retrieving",
+              "missing"
+            ],
+            "title": "Audiostatus",
+            "type": "string"
+          },
+          "canRetryAudio": {
+            "default": false,
+            "title": "Canretryaudio",
+            "type": "boolean"
           }
         },
         "required": [
+          "audioStatus",
+          "canRetryAudio",
           "createdAt",
           "endTime",
           "id",

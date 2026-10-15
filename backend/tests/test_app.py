@@ -91,6 +91,8 @@ def test_serves_health_and_lists_meetings() -> None:
                 "lastError": None,
                 "createdAt": now,
                 "updatedAt": now,
+                "audioStatus": "missing",
+                "canRetryAudio": False,
             }
         ],
         "pagination": {"limit": 50, "offset": 0, "total": 1},

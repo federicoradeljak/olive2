@@ -80,7 +80,11 @@ def parse_json_field(value: str | None, fallback: Any) -> Any:
         return fallback
 
 
-def to_meeting(row: Mapping[Any, Any]) -> MeetingListItem:
+def to_meeting(
+    row: Mapping[Any, Any],
+    audio_status: str = "ready",
+    can_retry_audio: bool = False,
+) -> MeetingListItem:
     return MeetingListItem(
         id=row["id"],
         title=row["title"],
@@ -94,7 +98,54 @@ def to_meeting(row: Mapping[Any, Any]) -> MeetingListItem:
         lastError=row.get("last_error"),
         createdAt=int(row["created_at"]),
         updatedAt=int(row["updated_at"]),
+        audioStatus=audio_status,  # type: ignore[arg-type]
+        canRetryAudio=can_retry_audio,
     )
+
+
+def resolve_audio_status(
+    meeting_row: Mapping[Any, Any],
+    recording_rows: list[Mapping[Any, Any]],
+    meetings_dir: str | None = None,
+) -> tuple[str, bool]:
+    """Resolve (audioStatus, canRetryAudio) for a meeting.
+
+    ``retrieving`` means no recording row exists yet (Plaud Cloud audio still
+    being fetched) or the meeting is still processing its first ingest.
+    ``missing`` means a recording row exists but no audio file is on disk, or
+    a non-Plaud meeting somehow has no recording at all. Only Plaud meetings
+    can refetch from the cloud, so ``canRetryAudio`` is Plaud-only (and never
+    for duplicates, whose audio lives under another meeting).
+    """
+    source = str(meeting_row.get("source") or "")
+    status = str(meeting_row.get("status") or "")
+    is_duplicate = status == "duplicate"
+    can_retry = source == "plaud" and not is_duplicate
+
+    if not recording_rows:
+        if source == "plaud" and not is_duplicate:
+            return "retrieving", True
+        return "missing", False
+
+    if meetings_dir:
+        try:
+            folder = Path(
+                meeting_paths(
+                    meetings_dir,
+                    int(meeting_row["start_time"]),
+                    meeting_row["title"],
+                    meeting_row["id"],
+                ).folder
+            )
+        except Exception:
+            return "ready", False
+        for rec in recording_rows:
+            rel = rec.get("path")
+            if rel and (folder / rel).exists():
+                return "ready", False
+        return "missing", can_retry
+
+    return "ready", False
 
 
 def to_recording(row: Mapping[Any, Any]) -> Recording:
@@ -281,8 +332,30 @@ def list_meetings(
             params,
         ).scalar()
 
+        recordings_by_meeting: dict[str, list[Any]] = {}
+        if rows:
+            rec_placeholders = ", ".join(f":rmid_{i}" for i in range(len(rows)))
+            rec_params = {f"rmid_{i}": r["id"] for i, r in enumerate(rows)}
+            rec_rows = (
+                conn.execute(
+                    text(f"SELECT * FROM recordings WHERE meeting_id IN ({rec_placeholders})"),
+                    rec_params,
+                )
+                .mappings()
+                .all()
+            )
+            for rec in rec_rows:
+                recordings_by_meeting.setdefault(rec["meeting_id"], []).append(rec)
+
+    items = []
+    for r in rows:
+        audio_status, can_retry = resolve_audio_status(
+            r, recordings_by_meeting.get(r["id"], []), meetings_dir
+        )
+        items.append(to_meeting(r, audio_status, can_retry).model_dump())
+
     return {
-        "meetings": [to_meeting(r).model_dump() for r in rows],
+        "meetings": items,
         "pagination": {
             "limit": limit,
             "offset": offset,
@@ -650,8 +723,10 @@ def get_meeting(
     # never surface them as meeting speakers (covers rows persisted earlier).
     active_speaker_rows = [s for s in active_speaker_rows if not is_generic_speaker_label(str(s["name"]))]
 
+    audio_status, can_retry = resolve_audio_status(meeting_row, list(recording_rows), meetings_dir)
+
     return MeetingDetailAggregate(
-        meeting=to_meeting(meeting_row),
+        meeting=to_meeting(meeting_row, audio_status, can_retry),
         recordings=[to_recording(r) for r in recording_rows],
         artifacts=[to_artifact(a) for a in artifact_rows],
         speakers=[to_speaker(s) for s in active_speaker_rows],

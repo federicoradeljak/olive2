@@ -175,6 +175,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/meetings/{meeting_id}/audio/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Meeting Audio Retry Route */
+        post: operations["post_meeting_audio_retry_route_api_meetings__meeting_id__audio_retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/meetings/{meeting_id}/chat/messages": {
         parameters: {
             query?: never;
@@ -1192,6 +1209,17 @@ export interface components {
             createdAt: number;
             /** Updatedat */
             updatedAt: number;
+            /**
+             * Audiostatus
+             * @default ready
+             * @enum {string}
+             */
+            audioStatus: "ready" | "retrieving" | "missing";
+            /**
+             * Canretryaudio
+             * @default false
+             */
+            canRetryAudio: boolean;
         };
         /** Recording */
         Recording: {
@@ -2551,6 +2579,37 @@ export interface operations {
         };
     };
     get_meeting_audio_route_api_meetings__meeting_id__audio_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                meeting_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_meeting_audio_retry_route_api_meetings__meeting_id__audio_retry_post: {
         parameters: {
             query?: never;
             header?: never;

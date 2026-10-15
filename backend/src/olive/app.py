@@ -856,6 +856,23 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             },
         )
 
+    @app.post("/api/meetings/{meeting_id}/audio/retry")
+    async def post_meeting_audio_retry_route(meeting_id: str) -> JSONResponse:
+        try:
+            res = await _call_maybe_async(
+                get_plaud_poller(),
+                ("retry_meeting_audio", "retryMeetingAudio"),
+                meeting_id,
+            )
+            return JSONResponse(res, status_code=202)
+        except ValueError as exc:
+            msg = str(exc)
+            lowered = msg.lower()
+            code = 404 if ("not found" in lowered or "no plaud ingest" in lowered) else 400
+            return JSONResponse({"error": msg}, status_code=code)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
     # Chat API
     @app.get("/api/meetings/{meeting_id}/chat/messages")
     async def get_chat_messages_route(meeting_id: str) -> JSONResponse:

@@ -12,6 +12,7 @@ under `Added` / `Changed` / `Fixed`.
 
 ### Added
 
+- **Audio-pending meetings + Plaud audio refetch** — meetings whose audio hasn't landed yet now show a dimmed card with a "Retrieving audio…" (or "Audio missing") badge in the list instead of looking ready, and the detail page shows a banner explaining the state with Transcribe and Generate Summary disabled until audio attaches. Plaud meetings can re-queue the cloud download via a Retry download button (new `POST /api/meetings/{id}/audio/retry`), backed by `audioStatus`/`canRetryAudio` on the meeting payload.
 - **Transcription API keys in Settings UI** — Speechmatics, AssemblyAI, and Muse Voice keys can now be entered in Settings alongside the transcription engine picker instead of only via environment variables. Keys are stored in `settings.json`, masked in API responses (re-saving a masked value keeps the stored key), take effect immediately without a restart, and environment variables still override them when set.
 - **Muse Voice transcription** — transcribe meetings with Meta's
   Muse Voice Transcribe (`muse-voice-transcribe-1.0`, $0.18/hr) via
