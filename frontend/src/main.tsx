@@ -977,7 +977,10 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
     }
     try {
       const res = await fetch(`/api/meetings/${id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error("Failed to delete meeting");
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error || `Failed to delete meeting (HTTP ${res.status})`);
+      }
       setMeetings((prev) => prev.filter((m) => m.id !== id));
       setActiveProgressMap((prev) => {
         if (!(id in prev)) return prev;
@@ -1943,7 +1946,10 @@ function MeetingDetailView({
     }
     try {
       const res = await fetch(`/api/meetings/${meetingId}`, { method: "DELETE" });
-      if (!res.ok) throw new Error("Failed to delete meeting");
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error || `Failed to delete meeting (HTTP ${res.status})`);
+      }
       onDeleted();
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
@@ -1958,7 +1964,10 @@ function MeetingDetailView({
       const res = await fetch(`/api/meetings/${meetingId}/summaries/${artifactId}`, {
         method: "DELETE"
       });
-      if (!res.ok) throw new Error("Failed to delete summary");
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error || `Failed to delete summary (HTTP ${res.status})`);
+      }
       setSelectedSummaryId(null);
       await fetchDetail();
     } catch (err) {

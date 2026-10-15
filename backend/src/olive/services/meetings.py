@@ -457,6 +457,10 @@ def delete_meeting(db: Engine, meeting_id: str, meetings_dir: str | None = None)
             ),
             {"id": meeting_id},
         )
+        conn.execute(
+            text("UPDATE usage_events SET meeting_id = NULL WHERE meeting_id = :id"),
+            {"id": meeting_id},
+        )
         for tbl in [
             "meeting_speakers",
             "stage_runs",

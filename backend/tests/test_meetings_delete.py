@@ -135,6 +135,22 @@ def _seed_full_meeting(engine, meetings_dir: str) -> tuple[str, Path]:
             ),
             {"mid": meeting_id, "now": now},
         )
+        conn.execute(
+            text(
+                """
+                INSERT INTO usage_events (
+                  id, meeting_id, kind, provider, model, input_tokens,
+                  output_tokens, total_tokens, audio_seconds, cost_usd,
+                  source, detail, created_at
+                ) VALUES (
+                  'usage-delete-1', :mid, 'chat', 'test-provider', 'test-model',
+                  10, 5, 15, NULL, 0.000001,
+                  'usage-delete-source-1', NULL, :now
+                )
+                """
+            ),
+            {"mid": meeting_id, "now": now},
+        )
 
     return meeting_id, Path(paths.folder)
 
@@ -164,9 +180,15 @@ def test_delete_meeting_removes_meeting_related_rows_and_files(tmp_path: Path) -
             ).fetchall()
             assert len(rem) == 0
 
-        speaker = conn.execute(
-            text("SELECT * FROM speakers WHERE id = 'speaker-delete-1'")
-        ).first()
+        # Usage history is detached (meeting_id nulled) so global spend
+        # totals survive, but per-meeting attribution is gone.
+        usage_rows = conn.execute(
+            text("SELECT * FROM usage_events WHERE id = 'usage-delete-1'"),
+        ).fetchall()
+        assert len(usage_rows) == 1
+        assert usage_rows[0]._mapping["meeting_id"] is None
+
+        speaker = conn.execute(text("SELECT * FROM speakers WHERE id = 'speaker-delete-1'")).first()
         assert speaker is not None
 
     handle.engine.dispose()
