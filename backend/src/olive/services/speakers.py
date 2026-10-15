@@ -290,6 +290,7 @@ class SpeakerService:
         sample_rate: int = 16000,
         clip_filename: str,
         is_anchor: bool = False,
+        trusted: bool = False,
         meeting_id: str | None = None,
         segment_index: int | None = None,
     ) -> dict[str, Any]:
@@ -355,7 +356,11 @@ class SpeakerService:
         similarity: float | None = None
         if not is_anchor and existing_vectors:
             similarity = score_against_trusted_vectors(new_embedding, existing_vectors)
-            if similarity < OUTLIER_MIN_SIMILARITY:
+            # Human-verified samples are ground truth: a low score means the
+            # existing voiceprint is too narrow, not that the new clip is
+            # wrong — enroll it to expand coverage. Only automatic (untrusted)
+            # adoptions get outlier-rejected.
+            if similarity < OUTLIER_MIN_SIMILARITY and not trusted:
                 return {
                     "status": "outlier_rejected",
                     "voiceprintEnrolled": False,
@@ -425,16 +430,22 @@ class SpeakerService:
 
         # Local voiceprints are the single speaker-identity store: adopting a
         # voiceprint sample no longer cross-enrolls into Speechmatics.
+        low_sim_note = ""
+        if trusted and similarity is not None and similarity < OUTLIER_MIN_SIMILARITY:
+            low_sim_note = (
+                f" (human-verified despite low similarity {similarity:.3f} < "
+                f"{OUTLIER_MIN_SIMILARITY} — voiceprint expanded)"
+            )
         return {
             "status": status,
             "voiceprintEnrolled": True,
             "similarity": similarity,
             "statusReason": (
-                "Enrolled new sample, evicted oldest non-anchor clip (cap reached)"
+                f"Enrolled new sample, evicted oldest non-anchor clip (cap reached){low_sim_note}"
                 if status == "enrolled_evicted"
                 else (
-                    f"{trimmed_note}Enrolled new voiceprint sample"
-                    if trimmed_note
+                    f"{trimmed_note}Enrolled new voiceprint sample{low_sim_note}"
+                    if (trimmed_note or low_sim_note)
                     else "Enrolled new voiceprint sample"
                 )
             ),
@@ -957,7 +968,9 @@ class SpeakerService:
         Unlike reassign (which concatenates every turn into one usually-oversized
         clip), each selected sample is adopted individually through
         _adopt_voiceprint_sample, length-trimming over-long turns to 12s so
-        every sample >= 3s enrolls, and later samples are outlier-checked against earlier ones.
+        every sample >= 3s enrolls. Samples are human-verified ground truth, so
+        they bypass the outlier gate (trusted=True) — a low score expands the
+        voiceprint instead of rejecting the clip.
         """
         meeting_id = str(options.get("meetingId") or options.get("meeting_id") or "")
         from_label = str(options.get("fromLabel") or options.get("from_label") or "")
@@ -1030,6 +1043,7 @@ class SpeakerService:
                             sample_rate=16000,
                             clip_filename=f"clip_rapid_meeting_{meeting_id}_{idx}_{current_time}.wav",
                             is_anchor=False,
+                            trusted=True,
                             meeting_id=meeting_id,
                             segment_index=idx,
                         )
@@ -1251,6 +1265,7 @@ class SpeakerService:
                                     sample_rate=16000,
                                     clip_filename=clip_filename,
                                     is_anchor=False,
+                                    trusted=True,
                                     meeting_id=meeting_id,
                                     segment_index=seg_idx_opt,
                                 )
@@ -1489,6 +1504,7 @@ class SpeakerService:
                                 sample_rate=16000,
                                 clip_filename=clip_filename,
                                 is_anchor=False,
+                                trusted=True,
                                 meeting_id=meeting_id,
                                 segment_index=segment_index,
                             )

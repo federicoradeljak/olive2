@@ -23,6 +23,13 @@ Olive is currently pre-1.0 (`0.2.0`); everything below shipped as part of the
   exist, and verifies the four local models concurrently instead of
   sequentially.
 
+### Fixed
+
+- **Human-verified voiceprints always enroll** — confirming a speaker turn,
+  reassigning a voice, or rapid-enrolling checked samples now trains the
+  voiceprint even when the clip scores below the outlier threshold; a low
+  score expands the voiceprint instead of rejecting your confirmation.
+
 ## [0.2.0] — 2026-10-14
 
 Covers the full history from project start (2026-08-11) through 2026-10-14,
