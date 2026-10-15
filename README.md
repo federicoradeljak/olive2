@@ -153,24 +153,24 @@ SOURCES                           PIPELINE & ARTIFACT STORE                     
 The multi-arch image (`linux/amd64`, `linux/arm64`) is the primary way to run Olive. On first start it downloads ~4.5 GB of local speech models (WeSpeaker, MMS aligner, pyannote diarization, Cohere Transcribe INT8) into a persistent models volume, then starts the server. Model downloads survive upgrades because they live on the volume, not in the image.
 
 ```bash
-# Pull and start (mounts required: olive_data for meetings/DB, olive_models for ML models)
+# Pull and start (mounts required: olive2_data for meetings/DB, olive2_models for ML models)
 HF_TOKEN=hf_... OLIVE_MCP_TOKEN=... docker compose up -d
 
 # Or with plain docker run:
 docker run -d \
-  --name olive \
+  --name olive2 \
   -p 4471:4470 \
   -e HF_TOKEN=hf_... \
   -e OLIVE_MCP_TOKEN=... \
-  -v olive_data:/app/data \
-  -v olive_models:/app/models \
+  -v olive2_data:/app/data \
+  -v olive2_models:/app/models \
   --restart unless-stopped \
-  ghcr.io/mcowger/olive:latest
+  ghcr.io/mcowger/olive2:latest
 ```
 
-Open **`http://localhost:4471`**. Follow the logs on first start (`docker logs -f olive`) — model downloads take several minutes.
+Open **`http://localhost:4471`**. Follow the logs on first start (`docker logs -f olive2`) — model downloads take several minutes.
 
-The server **refuses to start** if `/app/models` is not a mounted, writable volume, or if a model cannot be downloaded — the error message says why. Do not skip the `olive_models` mount: without it, every upgrade would re-download gigabytes of models.
+The server **refuses to start** if `/app/models` is not a mounted, writable volume, or if a model cannot be downloaded — the error message says why. Do not skip the `olive2_models` mount: without it, every upgrade would re-download gigabytes of models.
 
 ### Local installation (advanced)
 
@@ -178,8 +178,8 @@ Requires [uv](https://docs.astral.sh/uv/) (Python 3.12+), [pnpm](https://pnpm.io
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/mcowger/olive.git
-cd olive
+git clone https://github.com/mcowger/olive2.git
+cd olive2
 
 # 2. Install Python backend dependencies
 cd backend && uv sync && cd ..

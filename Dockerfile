@@ -64,6 +64,6 @@ EXPOSE 4470
 # persistent volume (named volume or bind mount). If it is not a mount, or is not
 # writable, the server refuses to start with an explanatory error instead of
 # silently downloading multi-GB models into throwaway container storage.
-# Run with e.g.: -v olive_data:/app/data -v olive_models:/app/models
+# Run with e.g.: -v olive2_data:/app/data -v olive2_models:/app/models
 
 CMD ["uv", "run", "--no-dev", "olive", "serve"]
