@@ -1485,6 +1485,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                     "toSpeakerName": body.get("toSpeakerName"),
                     "toSpeakerId": body.get("toSpeakerId"),
                     "adoptVoiceprint": body.get("adoptVoiceprint"),
+                    "localOnly": body.get("localOnly"),
                     "segmentIndex": body.get("segmentIndex"),
                     "scope": body.get("scope"),
                 },

@@ -933,6 +933,10 @@ class SpeakerService:
 
             if _is_placeholder_name(label) or label.lower() == "unknown":
                 status, reason = "unmatched", "Placeholder label with no enrolled voiceprint"
+            elif row is None and verified_count > 0:
+                # Transcript-local name: a human assigned a real name to this
+                # meeting only (no People entry). Resolved — don't nag to enroll.
+                continue
             elif row is None:
                 status, reason = "unmatched", "No matching person in the speaker registry"
             elif not enrolled:
@@ -1160,6 +1164,87 @@ class SpeakerService:
             if not other_links and (is_placeholder or (not clips and not sp.get("enrolled_at"))):
                 conn.execute(text("DELETE FROM speakers WHERE id = :sid"), {"sid": sp["id"]})
 
+    def _rename_transcript_label_local_only(
+        self,
+        *,
+        meeting_id: str,
+        transcript_art: Mapping[Any, Any],
+        folder: Path,
+        json_path: Path,
+        parsed_data: Any,
+        from_label: str,
+        to_name: str,
+        segment_index: Any = None,
+        scope: Any = None,
+    ) -> dict[str, Any]:
+        """Rename a speaker label in one transcript without touching the People registry.
+
+        No speaker row is created, no ``meeting_speakers`` link is added, and no
+        voiceprint audio is enrolled — the name lives only in this meeting's
+        transcript files. Stale ``meeting_speakers`` links for labels that no
+        longer appear in the transcript are still pruned (same orphan rules as
+        the registry path). Turns are marked verified so rapid-enroll treats
+        the human-assigned local name as resolved rather than nagging to
+        enroll it.
+        """
+        trimmed = (to_name or "").strip()
+        if not trimmed:
+            raise ValueError("toSpeakerName is required for a transcript-only rename")
+        if _is_placeholder_name(trimmed):
+            raise ValueError(f'"{trimmed}" is a generic speaker label, not a person name')
+        normalized_from = (from_label or "").strip().lower()
+        if not normalized_from:
+            raise ValueError("fromLabel is required")
+
+        extracted = _extract_transcript_segments(parsed_data)
+        segments: list[TranscriptSegment] = extracted["segments"]
+        is_array_format: bool = extracted["isArrayFormat"]
+
+        updated_segments_count = 0
+        is_single = segment_index is not None and scope == "single"
+        if is_single:
+            idx = int(segment_index)
+            if 0 <= idx < len(segments):
+                tseg = segments[idx]
+                tseg.speaker = trimmed
+                tseg.verified = True
+                updated_segments_count += 1
+                if tseg.words:
+                    for w in tseg.words:
+                        w.speaker = trimmed
+        else:
+            for seg in segments:
+                if (seg.speaker or "").strip().lower() == normalized_from:
+                    seg.speaker = trimmed
+                    seg.verified = True
+                    updated_segments_count += 1
+                    if seg.words:
+                        for w in seg.words:
+                            w.speaker = trimmed
+
+        updated_transcript = Transcript(
+            segments=coalesce_speaker_segments(segments, 15000),
+            language=extracted["language"]
+            or (parsed_data.get("language") if isinstance(parsed_data, dict) else None),
+            durationMs=extracted["durationMs"]
+            or (parsed_data.get("durationMs") if isinstance(parsed_data, dict) else None),
+            speakers=extracted["speakers"]
+            or (parsed_data.get("speakers") if isinstance(parsed_data, dict) else None),
+        )
+        self._save_updated_transcript_files(
+            folder, json_path, transcript_art["path"], updated_transcript, is_array_format
+        )
+        with self.db.begin() as conn:
+            self._prune_stale_meeting_speakers(conn, meeting_id, updated_transcript, normalized_from)
+        return {
+            "speaker": None,
+            "localOnly": True,
+            "localName": trimmed,
+            "transcript": updated_transcript.model_dump(exclude_none=True),
+            "updatedSegmentsCount": updated_segments_count,
+            "extractedVoiceprintsCount": 0,
+        }
+
     async def reassign_meeting_speaker(self, options: dict[str, Any]) -> dict[str, Any]:
         meeting_id = str(options.get("meetingId") or options.get("meeting_id") or "")
         from_label = str(options.get("fromLabel") or options.get("from_label") or "")
@@ -1169,10 +1254,23 @@ class SpeakerService:
             else True
         )
         current_time = self.now()
+        local_only = bool(options.get("localOnly") or options.get("local_only"))
 
         meeting, transcript_art, folder, json_path, parsed_data = self._load_meeting_transcript_artifact(
             meeting_id, "reassign meeting transcript"
         )
+        if local_only:
+            return self._rename_transcript_label_local_only(
+                meeting_id=meeting_id,
+                transcript_art=transcript_art,
+                folder=folder,
+                json_path=json_path,
+                parsed_data=parsed_data,
+                from_label=from_label,
+                to_name=str(options.get("toSpeakerName") or options.get("to_speaker_name") or ""),
+                segment_index=options.get("segmentIndex"),
+                scope=options.get("scope"),
+            )
         target_speaker_row = self._resolve_or_create_speaker(
             speaker_id=options.get("toSpeakerId") or options.get("to_speaker_id"),
             speaker_name=options.get("toSpeakerName") or options.get("to_speaker_name"),

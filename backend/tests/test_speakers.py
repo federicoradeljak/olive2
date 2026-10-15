@@ -335,6 +335,140 @@ async def test_coalesces_sequential_turns_and_prunes_placeholder_speakers(tmp_pa
     handle.engine.dispose()
 
 
+async def test_local_only_rename_keeps_name_out_of_people_registry(tmp_path: Path) -> None:
+    handle = create_db(":memory:")
+    config_dir = str(tmp_path / "config")
+    meetings_dir = str(tmp_path / "meetings")
+    now = 1_700_000_000_000
+    meeting_id = "m-local-only-test"
+    artifact_id = "art-trans-local"
+
+    with handle.engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO meetings (
+                  id, title, start_time, end_time, source, status, tags,
+                  primary_transcript_artifact_id, primary_summary_artifact_id,
+                  last_error, created_at, updated_at
+                ) VALUES (
+                  :id, 'Local-Only Rename Test', :now, :end, 'upload', 'ready', '[]',
+                  NULL, NULL, NULL, :now, :now
+                )
+                """
+            ),
+            {"id": meeting_id, "now": now, "end": now + 60000},
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO artifacts (
+                  id, meeting_id, recording_id, kind, provider, format, path, created_at
+                ) VALUES (
+                  :aid, :mid, NULL, 'transcript', 'local', 'json', 'transcripts/local.json', :now
+                )
+                """
+            ),
+            {"aid": artifact_id, "mid": meeting_id, "now": now},
+        )
+        conn.execute(
+            text("UPDATE meetings SET primary_transcript_artifact_id = :aid WHERE id = :id"),
+            {"aid": artifact_id, "id": meeting_id},
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO speakers (
+                  id, name, provider_ids, enrolled_at, enrollment_clip_paths, created_at
+                ) VALUES (:id, :name, '{}', NULL, '[]', :now)
+                """
+            ),
+            {"id": "sp-1", "name": "Speaker 1", "now": now},
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO meeting_speakers (meeting_id, speaker_id, evidence_artifact_id)
+                VALUES (:mid, :sid, :aid)
+                """
+            ),
+            {"mid": meeting_id, "sid": "sp-1", "aid": artifact_id},
+        )
+
+    paths = meeting_paths(meetings_dir, now, "Local-Only Rename Test", meeting_id)
+    Path(paths.transcripts_dir).mkdir(parents=True, exist_ok=True)
+    transcript_data = {
+        "language": "en",
+        "segments": [
+            {"startMs": 0, "endMs": 2000, "speaker": "Speaker 1", "text": "Hi, I'm Fred."},
+            {"startMs": 3000, "endMs": 4500, "speaker": "Speaker 2", "text": "Welcome!"},
+            {"startMs": 5000, "endMs": 8000, "speaker": "Speaker 1", "text": "Thanks."},
+        ],
+    }
+    (Path(paths.folder) / "transcripts/local.json").write_text(
+        json.dumps(transcript_data, indent=2), encoding="utf-8"
+    )
+
+    service = SpeakerService(
+        {
+            "db": handle.engine,
+            "configDir": config_dir,
+            "meetingsDir": meetings_dir,
+            "now": lambda: now + 100,
+        }
+    )
+    app = create_app(
+        {
+            "db": handle.engine,
+            "configDir": config_dir,
+            "meetingsDir": meetings_dir,
+            "speakerService": service,
+        }
+    )
+    client = TestClient(app)
+
+    res = client.post(
+        f"/api/meetings/{meeting_id}/speakers/reassign",
+        json={"fromLabel": "Speaker 1", "toSpeakerName": "Fred", "localOnly": True},
+    )
+    assert res.status_code == 200
+    result = res.json()
+    assert result["speaker"] is None
+    assert result["localOnly"] is True
+    assert result["updatedSegmentsCount"] == 2
+
+    updated_json = json.loads((Path(paths.folder) / "transcripts/local.json").read_text(encoding="utf-8"))
+    speakers_in_transcript = [s["speaker"] for s in updated_json["segments"]]
+    assert "Fred" in speakers_in_transcript
+    assert "Speaker 1" not in speakers_in_transcript
+
+    # Fred lives only in the transcript: no People row, no meeting link.
+    people = await service.list_speakers()
+    assert [s["name"] for s in people] == []
+    with handle.engine.connect() as conn:
+        links = conn.execute(
+            text("SELECT speaker_id FROM meeting_speakers WHERE meeting_id = :mid"),
+            {"mid": meeting_id},
+        ).all()
+        assert links == []
+        fred_rows = conn.execute(
+            text("SELECT id FROM speakers WHERE lower(name) = 'fred'"),
+        ).all()
+        assert fred_rows == []
+
+    # A human-assigned local name is resolved: rapid-enroll must not nag to enroll Fred.
+    candidates = service.get_rapid_enroll_candidates(meeting_id)
+    assert [g["label"] for g in candidates["groups"]] == ["Speaker 2"]
+
+    # Generic target names are still rejected for local-only renames.
+    bad = client.post(
+        f"/api/meetings/{meeting_id}/speakers/reassign",
+        json={"fromLabel": "Speaker 2", "toSpeakerName": "Speaker 9", "localOnly": True},
+    )
+    assert bad.status_code == 400
+    handle.engine.dispose()
+
+
 async def test_enforces_protected_anchor_and_diversity_cap_and_rebuild_profiles(
     tmp_path: Path,
 ) -> None:

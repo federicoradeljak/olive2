@@ -15,6 +15,10 @@ Olive is currently pre-1.0 (`0.2.0`); everything below shipped as part of the
 - **Auto-title meetings** — generate a concise meeting title from the
   transcript with the configured default LLM via the Auto-title button
   next to the meeting title.
+- **Transcript-only speaker names** — the Assign Speaker dialog now offers
+  "This transcript only" alongside "Save to People", so one-off voices
+  (e.g. an interview guest) can be relabeled in that meeting without
+  creating a People entry, linking the meeting, or learning a voiceprint.
 
 ### Changed
 

@@ -3624,16 +3624,18 @@ function ReassignSpeakerModal({
   const [customName, setCustomName] = useState<string>("");
   const [scope, setScope] = useState<"single" | "all">(segmentIndex !== undefined ? "single" : "all");
   const [adoptVoiceprint, setAdoptVoiceprint] = useState(true);
+  const [saveToPeople, setSaveToPeople] = useState(true);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
     let resolvedTargetName = "";
     let targetId: string | undefined = undefined;
+    const localOnly = !saveToPeople;
 
-    if (selectedSpeakerId === "new" || !selectedSpeakerId) {
+    if (localOnly || selectedSpeakerId === "new" || !selectedSpeakerId) {
       if (!customName.trim()) {
-        alert("Please enter a name for the new speaker");
+        alert(localOnly ? "Please enter a name to show in this transcript" : "Please enter a name for the new speaker");
         return;
       }
       resolvedTargetName = customName.trim();
@@ -3645,7 +3647,8 @@ function ReassignSpeakerModal({
 
     const payload: any = {
       fromLabel,
-      adoptVoiceprint,
+      adoptVoiceprint: localOnly ? false : adoptVoiceprint,
+      localOnly,
       segmentIndex,
       scope,
       toSpeakerName: resolvedTargetName,
@@ -3682,6 +3685,38 @@ function ReassignSpeakerModal({
   return (
     <Modal onClose={onClose} title={<>Assign Speaker: "{fromLabel}"</>} ariaLabel="Assign speaker" maxWidth="max-w-md">
       <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
+            Name scope
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setSaveToPeople(true)}
+              className={`rounded-lg border px-3 py-2 text-xs font-semibold transition text-left ${
+                saveToPeople
+                  ? "border-lime-400 bg-lime-400/20 text-lime-300"
+                  : "border-stone-800 bg-stone-950 text-stone-400 hover:text-stone-200"
+              }`}
+            >
+              <div className="font-bold">Save to People</div>
+              <div className="text-[10px] text-stone-400 font-normal mt-0.5">Recognize in future meetings</div>
+            </button>
+            <button
+              type="button"
+              onClick={() => setSaveToPeople(false)}
+              className={`rounded-lg border px-3 py-2 text-xs font-semibold transition text-left ${
+                !saveToPeople
+                  ? "border-lime-400 bg-lime-400/20 text-lime-300"
+                  : "border-stone-800 bg-stone-950 text-stone-400 hover:text-stone-200"
+              }`}
+            >
+              <div className="font-bold">This transcript only</div>
+              <div className="text-[10px] text-stone-400 font-normal mt-0.5">One-off name, not saved</div>
+            </button>
+          </div>
+        </div>
+
         {segmentIndex !== undefined && (
           <div>
             <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
@@ -3716,49 +3751,69 @@ function ReassignSpeakerModal({
           </div>
         )}
 
-        <div>
-          <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1">
-            Select Person
-          </label>
-          <SpeakerCombobox
-            value={selectedSpeakerId}
-            onChange={setSelectedSpeakerId}
-            knownSpeakers={knownSpeakers}
-            emptyLabel="-- Create new or choose person --"
-            createLabel="+ Create New Person"
-            ariaLabel="Select person"
-          />
-        </div>
-
-        {(selectedSpeakerId === "new" || !selectedSpeakerId) && (
+        {!saveToPeople ? (
           <div>
             <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1">
-              Person Name
+              Display Name
             </label>
             <input
               type="text"
-              placeholder="e.g. Matt Cowger"
+              placeholder="e.g. Fred"
               value={customName}
               onChange={(e) => setCustomName(e.target.value)}
               className="w-full rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none"
             />
+            <p className="mt-1.5 text-[11px] leading-snug text-stone-500">
+              Just relabels this transcript — nothing is added to People and no voiceprint is learned.
+            </p>
           </div>
-        )}
+        ) : (
+          <>
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1">
+                Select Person
+              </label>
+              <SpeakerCombobox
+                value={selectedSpeakerId}
+                onChange={setSelectedSpeakerId}
+                knownSpeakers={knownSpeakers}
+                emptyLabel="-- Create new or choose person --"
+                createLabel="+ Create New Person"
+                ariaLabel="Select person"
+              />
+            </div>
 
-        <div className="flex items-center gap-3 rounded-lg border border-stone-800 bg-stone-950/50 p-3">
-          <input
-            type="checkbox"
-            id="voiceprint-toggle"
-            checked={adoptVoiceprint}
-            onChange={(e) => setAdoptVoiceprint(e.target.checked)}
-            className="h-4 w-4 rounded border-stone-700 bg-stone-900 text-lime-400 focus:ring-lime-400"
-          />
-          <label htmlFor="voiceprint-toggle" className="text-xs text-stone-300 leading-snug cursor-pointer">
-            <span className="font-semibold text-stone-100">Learn voiceprint from this audio</span>
-            <br />
-            Olive will automatically recognize and attribute this person in future meetings.
-          </label>
-        </div>
+            {(selectedSpeakerId === "new" || !selectedSpeakerId) && (
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1">
+                  Person Name
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Matt Cowger"
+                  value={customName}
+                  onChange={(e) => setCustomName(e.target.value)}
+                  className="w-full rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none"
+                />
+              </div>
+            )}
+
+            <div className="flex items-center gap-3 rounded-lg border border-stone-800 bg-stone-950/50 p-3">
+              <input
+                type="checkbox"
+                id="voiceprint-toggle"
+                checked={adoptVoiceprint}
+                onChange={(e) => setAdoptVoiceprint(e.target.checked)}
+                className="h-4 w-4 rounded border-stone-700 bg-stone-900 text-lime-400 focus:ring-lime-400"
+              />
+              <label htmlFor="voiceprint-toggle" className="text-xs text-stone-300 leading-snug cursor-pointer">
+                <span className="font-semibold text-stone-100">Learn voiceprint from this audio</span>
+                <br />
+                Olive will automatically recognize and attribute this person in future meetings.
+              </label>
+            </div>
+          </>
+        )}
 
         <div className="flex justify-end gap-3 pt-2">
           <button
