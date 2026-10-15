@@ -128,6 +128,18 @@ class SpeechmaticsClient:
             opts.get("batchClient") or opts.get("batch_client") or _SdkBatchClient(self.api_key, self.api_url)
         )
 
+    def set_api_key(self, api_key: str | None) -> None:
+        """Updates the key at runtime (e.g. after a Settings-UI save)."""
+        self.api_key = str(api_key or "")
+        inner = getattr(self, "_client", None)
+        if inner is not None and hasattr(inner, "api_key"):
+            try:
+                inner.api_key = self.api_key
+            except Exception:
+                pass
+
+    setApiKey = set_api_key
+
     @property
     def is_configured(self) -> bool:
         return bool(self.api_key.strip())

@@ -4907,6 +4907,9 @@ function LlmSettingsModal({
   const [localAsrModel, setLocalAsrModel] = useState<string>("onnx-community/cohere-transcribe-03-2026-ONNX");
   const [transcriptionProvider, setTranscriptionProvider] = useState<"speechmatics" | "local" | "assemblyai" | "muse">("local");
   const [hfToken, setHfToken] = useState<string>("");
+  const [speechmaticsApiKey, setSpeechmaticsApiKey] = useState<string>("");
+  const [assemblyaiApiKey, setAssemblyaiApiKey] = useState<string>("");
+  const [museApiKey, setMuseApiKey] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [refreshingCatalog, setRefreshingCatalog] = useState(false);
@@ -4953,6 +4956,15 @@ function LlmSettingsModal({
         }
         if (typeof appCfg.hfToken === "string") {
           setHfToken(appCfg.hfToken);
+        }
+        if (typeof appCfg.speechmaticsApiKey === "string") {
+          setSpeechmaticsApiKey(appCfg.speechmaticsApiKey);
+        }
+        if (typeof appCfg.assemblyaiApiKey === "string") {
+          setAssemblyaiApiKey(appCfg.assemblyaiApiKey);
+        }
+        if (typeof appCfg.museApiKey === "string") {
+          setMuseApiKey(appCfg.museApiKey);
         }
       }
 
@@ -5088,7 +5100,10 @@ function LlmSettingsModal({
             localSimilarityThreshold,
             localAsrModel,
             transcriptionProvider,
-            hfToken
+            hfToken,
+            speechmaticsApiKey,
+            assemblyaiApiKey,
+            museApiKey
           })
         })
       ]);
@@ -5308,8 +5323,53 @@ function LlmSettingsModal({
               options={TRANSCRIBE_PROVIDER_OPTIONS}
             />
             <p className="text-[11px] text-stone-500">
-              Controls the default for new uploads and manual transcription. AssemblyAI requires ASSEMBLY_API_KEY; Speechmatics requires SPEECHMATICS_API_KEY; Muse Voice requires MUSE_API_KEY.
+              Controls the default for new uploads and manual transcription. Keys entered below take effect immediately; environment variables (ASSEMBLY_API_KEY, SPEECHMATICS_API_KEY, MUSE_API_KEY) override them when set.
             </p>
+            <div className="space-y-1.5 pt-1">
+              <label htmlFor="speechmatics-key-input" className="text-xs text-stone-300 font-medium flex items-center justify-between">
+                <span>Speechmatics API Key:</span>
+                <span className="text-[10px] text-stone-500 font-mono">SPEECHMATICS_API_KEY env overrides</span>
+              </label>
+              <input
+                id="speechmatics-key-input"
+                type="password"
+                value={speechmaticsApiKey}
+                onChange={(e) => setSpeechmaticsApiKey(e.target.value)}
+                placeholder="Speechmatics key…"
+                autoComplete="off"
+                className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-base sm:text-sm text-stone-100 placeholder-stone-600 focus:border-lime-400 focus:outline-none font-mono"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="assemblyai-key-input" className="text-xs text-stone-300 font-medium flex items-center justify-between">
+                <span>AssemblyAI API Key:</span>
+                <span className="text-[10px] text-stone-500 font-mono">ASSEMBLY_API_KEY env overrides</span>
+              </label>
+              <input
+                id="assemblyai-key-input"
+                type="password"
+                value={assemblyaiApiKey}
+                onChange={(e) => setAssemblyaiApiKey(e.target.value)}
+                placeholder="AssemblyAI key…"
+                autoComplete="off"
+                className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-base sm:text-sm text-stone-100 placeholder-stone-600 focus:border-lime-400 focus:outline-none font-mono"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="muse-key-input" className="text-xs text-stone-300 font-medium flex items-center justify-between">
+                <span>Muse Voice API Key:</span>
+                <span className="text-[10px] text-stone-500 font-mono">MUSE_API_KEY env overrides</span>
+              </label>
+              <input
+                id="muse-key-input"
+                type="password"
+                value={museApiKey}
+                onChange={(e) => setMuseApiKey(e.target.value)}
+                placeholder="Muse Voice key…"
+                autoComplete="off"
+                className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-base sm:text-sm text-stone-100 placeholder-stone-600 focus:border-lime-400 focus:outline-none font-mono"
+              />
+            </div>
           </div>
 
           {testResult && (

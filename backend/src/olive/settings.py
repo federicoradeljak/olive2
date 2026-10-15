@@ -116,6 +116,9 @@ class AppConfig(BaseModel):
     llmProvider: Literal["openai", "anthropic"] = Field(default="openai")
     llmPrompt: str = Field(default="")
     hfToken: str = Field(default="")
+    speechmaticsApiKey: str = Field(default="")
+    assemblyaiApiKey: str = Field(default="")
+    museApiKey: str = Field(default="")
 
     @field_validator("localAsrModel", mode="before")
     @classmethod
@@ -244,6 +247,12 @@ def mask_app_config(config: AppConfig) -> dict[str, Any]:
     data = config.model_dump()
     data["hfToken"] = mask_secret(config.hfToken)
     data["hasHfToken"] = bool(get_effective_hf_token(config))
+    data["speechmaticsApiKey"] = mask_secret(config.speechmaticsApiKey)
+    data["hasSpeechmaticsApiKey"] = bool(get_effective_speechmatics_key(config))
+    data["assemblyaiApiKey"] = mask_secret(config.assemblyaiApiKey)
+    data["hasAssemblyaiApiKey"] = bool(get_effective_assemblyai_key(config))
+    data["museApiKey"] = mask_secret(config.museApiKey)
+    data["hasMuseApiKey"] = bool(get_effective_muse_key(config))
     return data
 
 
@@ -299,3 +308,50 @@ def get_effective_hf_token(
     if cfg.hfToken and cfg.hfToken.strip() and not is_masked_secret(cfg.hfToken):
         return cfg.hfToken.strip()
     return None
+
+
+def _effective_stored_secret(value: str | None) -> str | None:
+    if value and value.strip() and not is_masked_secret(value):
+        return value.strip()
+    return None
+
+
+def get_effective_speechmatics_key(
+    config: AppConfig | None = None,
+    env: Mapping[str, str] | None = None,
+) -> str | None:
+    """Env ``SPEECHMATICS_API_KEY`` wins; otherwise the Settings-UI stored key."""
+    effective_env = env if env is not None else os.environ
+    env_token = (effective_env.get("SPEECHMATICS_API_KEY") or "").strip()
+    if env_token:
+        return env_token
+    cfg = config or load_app_config()
+    return _effective_stored_secret(cfg.speechmaticsApiKey)
+
+
+def get_effective_assemblyai_key(
+    config: AppConfig | None = None,
+    env: Mapping[str, str] | None = None,
+) -> str | None:
+    """Env ``ASSEMBLY_API_KEY``/``ASSEMBLYAI_API_KEY`` wins; otherwise the stored key."""
+    effective_env = env if env is not None else os.environ
+    env_token = (
+        effective_env.get("ASSEMBLY_API_KEY") or effective_env.get("ASSEMBLYAI_API_KEY") or ""
+    ).strip()
+    if env_token:
+        return env_token
+    cfg = config or load_app_config()
+    return _effective_stored_secret(cfg.assemblyaiApiKey)
+
+
+def get_effective_muse_key(
+    config: AppConfig | None = None,
+    env: Mapping[str, str] | None = None,
+) -> str | None:
+    """Env ``MUSE_API_KEY``/``MODEL_API_KEY`` wins; otherwise the stored key."""
+    effective_env = env if env is not None else os.environ
+    env_token = (effective_env.get("MUSE_API_KEY") or effective_env.get("MODEL_API_KEY") or "").strip()
+    if env_token:
+        return env_token
+    cfg = config or load_app_config()
+    return _effective_stored_secret(cfg.museApiKey)

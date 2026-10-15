@@ -32,6 +32,9 @@ from .services.meetings import (
 from .services.templates import TemplateService
 from .settings import (
     OlivePaths,
+    get_effective_assemblyai_key,
+    get_effective_muse_key,
+    get_effective_speechmatics_key,
     is_masked_secret,
     load_app_config,
     mask_app_config,
@@ -78,6 +81,48 @@ def _safe_web_path(web_root: str, request_path: str) -> Path | None:
     except ValueError:
         return None
     return candidate
+
+
+def refresh_transcription_client_keys(
+    clients: list[tuple[str, Any]],
+    config: Any = None,
+    env: dict[str, str] | None = None,
+) -> None:
+    """Pushes effective (env-wins) transcription keys onto provider clients.
+
+    Provider clients are constructed once and reused; without this a key
+    entered in the Settings UI would only take effect after a restart.
+    Duplicate client objects are only updated once. Failures are swallowed
+    so a config save never fails because of a key refresh.
+    """
+    getters = {
+        "speechmatics": get_effective_speechmatics_key,
+        "assemblyai": get_effective_assemblyai_key,
+        "muse": get_effective_muse_key,
+    }
+    seen: set[int] = set()
+    for kind, client in clients:
+        if client is None or id(client) in seen:
+            continue
+        seen.add(id(client))
+        getter = getters.get(kind)
+        if getter is None:
+            continue
+        try:
+            key = getter(config, env) if env is not None else getter(config) or ""
+        except Exception:
+            continue
+        setter = getattr(client, "set_api_key", None) or getattr(client, "setApiKey", None)
+        if callable(setter):
+            try:
+                setter(key)
+            except Exception:
+                pass
+        elif hasattr(client, "api_key"):
+            try:
+                client.api_key = key
+            except Exception:
+                pass
 
 
 def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
@@ -156,12 +201,41 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
     oauth_manager = opts.get("oauthManager") or opts.get("oauth_manager")
     auth_sessions = opts.get("authSessions") or opts.get("auth_sessions")
 
+    def _current_app_config() -> Any:
+        try:
+            return load_app_config(app_config_paths)
+        except Exception:
+            return None
+
+    def _apply_stored_transcription_keys(config: Any = None) -> None:
+        """Pushes effective (env-wins) transcription keys onto live clients."""
+        cfg = config or _current_app_config()
+        pairs: list[tuple[str, Any]] = [
+            ("speechmatics", speechmatics_client),
+            ("assemblyai", assemblyai_client),
+            ("muse", muse_client),
+        ]
+        if transcription_service is not None:
+            pairs.extend(
+                [
+                    ("speechmatics", getattr(transcription_service, "client", None)),
+                    ("assemblyai", getattr(transcription_service, "assemblyai_client", None)),
+                    ("muse", getattr(transcription_service, "muse_client", None)),
+                ]
+            )
+        refresh_transcription_client_keys(pairs, cfg)
+
     def get_speechmatics_client() -> Any:
         nonlocal speechmatics_client
         if speechmatics_client is None:
             from .providers.speechmatics import SpeechmaticsClient
 
-            speechmatics_client = SpeechmaticsClient()
+            cfg = _current_app_config()
+            try:
+                initial_key = get_effective_speechmatics_key(cfg) or ""
+            except Exception:
+                initial_key = ""
+            speechmatics_client = SpeechmaticsClient({"apiKey": initial_key})
         return speechmatics_client
 
     def get_assemblyai_client() -> Any:
@@ -169,7 +243,12 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         if assemblyai_client is None:
             from .providers.assemblyai import AssemblyAIClient
 
-            assemblyai_client = AssemblyAIClient()
+            cfg = _current_app_config()
+            try:
+                initial_key = get_effective_assemblyai_key(cfg) or ""
+            except Exception:
+                initial_key = ""
+            assemblyai_client = AssemblyAIClient({"apiKey": initial_key})
         return assemblyai_client
 
     def get_muse_client() -> Any:
@@ -177,7 +256,12 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         if muse_client is None:
             from .providers.muse import MuseClient
 
-            muse_client = MuseClient()
+            cfg = _current_app_config()
+            try:
+                initial_key = get_effective_muse_key(cfg) or ""
+            except Exception:
+                initial_key = ""
+            muse_client = MuseClient({"apiKey": initial_key})
         return muse_client
 
     def get_llm_service() -> Any:
@@ -1876,9 +1960,11 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                 raise ValueError("JSON object required")
             current = load_app_config(app_config_paths)
             merged = {**current.model_dump(), **body}
-            if "hfToken" in body and is_masked_secret(body.get("hfToken")):
-                merged["hfToken"] = current.hfToken
+            for secret_field in ("hfToken", "speechmaticsApiKey", "assemblyaiApiKey", "museApiKey"):
+                if secret_field in body and is_masked_secret(body.get(secret_field)):
+                    merged[secret_field] = getattr(current, secret_field)
             updated = save_app_config(merged, app_config_paths)
+            _apply_stored_transcription_keys(updated)
             if transcription_service is not None:
                 _call_sync(
                     transcription_service,

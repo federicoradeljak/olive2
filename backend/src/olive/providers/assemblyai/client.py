@@ -153,6 +153,12 @@ class AssemblyAIClient:
         self._transcriber: Any = opts.get("transcriber") or opts.get("transcriber_client") or None
         self._staged_results: dict[str, AssemblyAITranscript] = {}
 
+    def set_api_key(self, api_key: str | None) -> None:
+        """Updates the key at runtime (e.g. after a Settings-UI save)."""
+        self.api_key = str(api_key or "")
+
+    setApiKey = set_api_key
+
     @property
     def is_configured(self) -> bool:
         return bool(self.api_key.strip())

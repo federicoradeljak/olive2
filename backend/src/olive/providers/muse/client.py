@@ -159,6 +159,12 @@ class MuseClient:
         self.max_retries: int = int(opts.get("maxRetries", opts.get("max_retries", 3)))
         self._sender: Any = opts.get("sender") or _default_sender
 
+    def set_api_key(self, api_key: str | None) -> None:
+        """Updates the key at runtime (e.g. after a Settings-UI save)."""
+        self.api_key = str(api_key or "")
+
+    setApiKey = set_api_key
+
     @property
     def is_configured(self) -> bool:
         return bool(self.api_key.strip())

@@ -12,6 +12,7 @@ Olive is currently pre-1.0 (`0.2.0`); everything below shipped as part of the
 
 ### Added
 
+- **Transcription API keys in Settings UI** — Speechmatics, AssemblyAI, and Muse Voice keys can now be entered in Settings alongside the transcription engine picker instead of only via environment variables. Keys are stored in `settings.json`, masked in API responses (re-saving a masked value keeps the stored key), take effect immediately without a restart, and environment variables still override them when set.
 - **Muse Voice transcription** — transcribe meetings with Meta's
   Muse Voice Transcribe (`muse-voice-transcribe-1.0`, $0.18/hr) via
   `MUSE_API_KEY`. Uses speaker diarization by default, auto-chunks
