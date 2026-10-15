@@ -13,6 +13,7 @@
   "dependencies": {
     "@assistant-ui/react": "^0.15.16",
     "dompurify": "^3.2.4",
+    "lucide-react": "^0.545.0",
     "marked": "^15.0.7",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"

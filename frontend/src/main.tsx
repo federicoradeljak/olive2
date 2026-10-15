@@ -13,6 +13,20 @@ import {
   type ThreadMessageLike
 } from "@assistant-ui/react";
 import "./styles.css";
+import { Combobox } from "./components/Combobox";
+import { SpeakerCombobox, SpeakerStatusBadges } from "./components/SpeakerCombobox";
+import {
+  ENGINE_OPTIONS,
+  LOG_LEVEL_OPTIONS,
+  TRANSCRIBE_PROVIDER_OPTIONS,
+  TRANSCRIPT_PROVIDER_FILTER_OPTIONS,
+  ThinkingLabel,
+  llmProviderOptions,
+  logCategoryOptions,
+  modelOptions,
+  templateOptions,
+  thinkingLevelOptions,
+} from "./components/OptionComboboxes";
 import type {
   Artifact,
   BackupInfo,
@@ -1388,25 +1402,28 @@ function BulkTranscribeModal({
               </div>
               <label className="space-y-1 text-xs text-stone-400">
                 <span>Current transcript provider</span>
-                <select value={currentProvider} onChange={(e) => setCurrentProvider(e.target.value)} className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none">
-                  <option value="any">Any (no filter)</option>
-                  <option value="local">Local</option>
-                  <option value="speechmatics">Speechmatics</option>
-                  <option value="assemblyai">AssemblyAI</option>
-                  <option value="plaud">Plaud</option>
-                  <option value="none">No transcript yet</option>
-                </select>
+                <Combobox
+                  value={currentProvider}
+                  onChange={setCurrentProvider}
+                  placeholder="Select provider filter…"
+                  ariaLabel="Current transcript provider"
+                  searchPlaceholder="Search providers…"
+                  options={TRANSCRIPT_PROVIDER_FILTER_OPTIONS}
+                />
               </label>
             </div>
           )}
 
           <label className="space-y-1 text-xs text-stone-400">
             <span className="text-xs font-semibold uppercase tracking-wider">Transcribe with</span>
-            <select value={provider} onChange={(e) => setProvider(e.target.value)} className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none">
-              <option value="assemblyai">AssemblyAI (Cloud)</option>
-              <option value="speechmatics">Speechmatics (Cloud)</option>
-              <option value="local">Local (Cohere + Diarization)</option>
-            </select>
+            <Combobox
+              value={provider}
+              onChange={setProvider}
+              placeholder="Select engine…"
+              ariaLabel="Transcribe with"
+              searchPlaceholder="Search engines…"
+              options={TRANSCRIBE_PROVIDER_OPTIONS}
+            />
           </label>
 
           <label className="flex cursor-pointer items-center gap-2 text-xs text-stone-300">
@@ -2220,15 +2237,16 @@ function MeetingDetailView({
                 <span>✦</span>
                 <span>Chat with Meeting</span>
               </button>
-              <select
-                value={selectedEngine}
-                onChange={(e) => setSelectedEngine(e.target.value)}
-                className="min-h-[44px] rounded-lg border border-stone-800 bg-stone-900 px-3 py-2 text-xs text-stone-200 focus:border-lime-400 focus:outline-none max-w-full"
-              >
-                <option value="local:cohere">Local (Cohere + Diarization) (Default)</option>
-                <option value="speechmatics">Speechmatics (Cloud)</option>
-                <option value="assemblyai">AssemblyAI (Cloud)</option>
-              </select>
+              <div className="w-full sm:w-72">
+                <Combobox
+                  value={selectedEngine}
+                  onChange={setSelectedEngine}
+                  placeholder="Select engine…"
+                  ariaLabel="Transcription engine"
+                  searchPlaceholder="Search engines…"
+                  options={ENGINE_OPTIONS}
+                />
+              </div>
 
               {selectedEngine.startsWith("local") && (
                 <button
@@ -3070,17 +3088,15 @@ function GenerateSummaryModal({
             <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
               Summary Template
             </label>
-            <select
+            <Combobox
               value={selectedTemplateId}
-              onChange={(e) => setSelectedTemplateId(e.target.value)}
-              className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none"
-            >
-              {templates.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name} {t.isDefault ? "(Default)" : ""} {t.isBuiltin ? "" : "★ Custom"}
-                </option>
-              ))}
-            </select>
+              onChange={setSelectedTemplateId}
+              placeholder="Select template…"
+              ariaLabel="Summary template"
+              searchPlaceholder="Search templates…"
+              emptyText="No templates match your search."
+              options={templateOptions(templates)}
+            />
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -3088,53 +3104,47 @@ function GenerateSummaryModal({
               <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
                 AI Provider
               </label>
-              <select
+              <Combobox
                 value={selectedProvider}
-                onChange={(e) => handleProviderChange(e.target.value)}
-                className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none capitalize"
-              >
-                {providers.map((p) => (
-                  <option key={p} value={p}>
-                    {p}
-                  </option>
-                ))}
-              </select>
+                onChange={handleProviderChange}
+                placeholder="Select provider…"
+                ariaLabel="AI provider"
+                searchPlaceholder="Search providers…"
+                options={providers.map((p) => ({
+                  value: p,
+                  label: p.charAt(0).toUpperCase() + p.slice(1),
+                }))}
+              />
             </div>
 
             <div className="space-y-1">
               <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
                 Model
               </label>
-              <select
+              <Combobox
                 value={selectedModel}
-                onChange={(e) => handleModelChange(e.target.value)}
-                className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none"
-              >
-                {providerModels.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name} {m.reasoning ? "🧠" : ""}
-                  </option>
-                ))}
-              </select>
+                onChange={handleModelChange}
+                placeholder="Select model…"
+                ariaLabel="Model"
+                searchPlaceholder="Search models…"
+                emptyText="No models match your search."
+                options={modelOptions(providerModels)}
+              />
             </div>
           </div>
 
           {selectedModelObj && selectedModelObj.reasoning && (
             <div className="space-y-1">
               <label className="text-xs font-medium uppercase tracking-wider text-stone-400 flex items-center gap-1.5">
-                <span>🧠 Thinking / Reasoning Level</span>
+                <ThinkingLabel />
               </label>
-              <select
+              <Combobox
                 value={thinkingLevel}
-                onChange={(e) => setThinkingLevel(e.target.value)}
-                className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none capitalize"
-              >
-                {(selectedModelObj.supportedThinkingLevels || ["low", "medium", "high"]).map((lvl) => (
-                  <option key={lvl} value={lvl}>
-                    {lvl === "off" ? "Off (Standard Response)" : `${lvl.charAt(0).toUpperCase() + lvl.slice(1)} Thinking`}
-                  </option>
-                ))}
-              </select>
+                onChange={setThinkingLevel}
+                placeholder="Select thinking level…"
+                ariaLabel="Thinking reasoning level"
+                options={thinkingLevelOptions(selectedModelObj.supportedThinkingLevels || ["low", "medium", "high"])}
+              />
             </div>
           )}
 
@@ -3386,22 +3396,15 @@ function RapidEnrollModal({
             </div>
 
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-              <select
+              <SpeakerCombobox
                 value={target.speakerId}
-                onChange={(e) =>
-                  setTargets((prev) => ({ ...prev, [group.label]: { ...target, speakerId: e.target.value } }))
+                onChange={(next) =>
+                  setTargets((prev) => ({ ...prev, [group.label]: { ...target, speakerId: next } }))
                 }
-                className="w-full rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-base text-stone-100 focus:border-lime-400 focus:outline-none sm:text-sm"
-                aria-label={`Who is ${group.label}?`}
-              >
-                <option value="">-- Who is this? --</option>
-                <option value="new">+ Create new person</option>
-                {knownSpeakers.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} ({s.providerIds.speechmatics?.length || s.providerIds.local?.length ? "Voiceprint enrolled" : "Discovered"})
-                  </option>
-                ))}
-              </select>
+                knownSpeakers={knownSpeakers}
+                emptyLabel="-- Who is this? --"
+                ariaLabel={`Who is ${group.label}?`}
+              />
               {(target.speakerId === "new" || !target.speakerId) && (
                 <input
                   type="text"
@@ -3547,19 +3550,14 @@ function ReassignSpeakerModal({
           <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1">
             Select Person
           </label>
-          <select
+          <SpeakerCombobox
             value={selectedSpeakerId}
-            onChange={(e) => setSelectedSpeakerId(e.target.value)}
-            className="w-full rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none"
-          >
-            <option value="">-- Create new or choose person --</option>
-            <option value="new">+ Create New Person</option>
-            {knownSpeakers.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name} ({s.providerIds.speechmatics?.length || s.providerIds.local?.length ? "Voiceprint enrolled" : "Discovered"})
-              </option>
-            ))}
-          </select>
+            onChange={setSelectedSpeakerId}
+            knownSpeakers={knownSpeakers}
+            emptyLabel="-- Create new or choose person --"
+            createLabel="+ Create New Person"
+            ariaLabel="Select person"
+          />
         </div>
 
         {(selectedSpeakerId === "new" || !selectedSpeakerId) && (
@@ -3772,19 +3770,14 @@ function SplitSegmentModal({
             <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1">
               Speaker for Part 2
             </label>
-            <select
+            <SpeakerCombobox
               value={selectedSpeakerId}
-              onChange={(e) => setSelectedSpeakerId(e.target.value)}
-              className="w-full rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-cyan-400 focus:outline-none"
-            >
-              <option value="">Keep as "{segment.speaker}"</option>
-              <option value="new">+ Create New Person</option>
-              {knownSpeakers.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name} ({s.providerIds.speechmatics?.length || s.providerIds.local?.length ? "Voiceprint enrolled" : "Discovered"})
-                </option>
-              ))}
-            </select>
+              onChange={setSelectedSpeakerId}
+              knownSpeakers={knownSpeakers}
+              emptyLabel={`Keep as "${segment.speaker}"`}
+              createLabel="+ Create New Person"
+              ariaLabel="Speaker for Part 2"
+            />
           </div>
 
           {selectedSpeakerId === "new" && (
@@ -3956,15 +3949,14 @@ function UploadAudioModal({
           {autoTranscribe && (
             <div className="pt-2 pl-6">
               <label className="block text-xs text-stone-400 mb-1">Transcription Engine:</label>
-              <select
+              <Combobox
                 value={selectedEngine}
-                onChange={(e) => setSelectedEngine(e.target.value)}
-                className="w-full rounded border border-stone-700 bg-stone-900 px-2 py-1 text-base sm:text-sm text-stone-200"
-              >
-                <option value="local:cohere">Local (Cohere + Diarization) (Default)</option>
-                <option value="speechmatics">Speechmatics (Cloud API)</option>
-                <option value="assemblyai">AssemblyAI (Cloud API)</option>
-              </select>
+                onChange={setSelectedEngine}
+                placeholder="Select engine…"
+                ariaLabel="Transcription engine"
+                searchPlaceholder="Search engines…"
+                options={ENGINE_OPTIONS}
+              />
             </div>
           )}
         </div>
@@ -4096,8 +4088,6 @@ function SpeakersListView({
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {speakers.map((s) => {
-            const hasSmVoiceprint = (s.providerIds.speechmatics?.length ?? 0) > 0;
-            const hasLocalVoiceprint = (s.providerIds.local?.length ?? 0) > 0;
             return (
               <div
                 key={s.id}
@@ -4137,36 +4127,7 @@ function SpeakersListView({
                       </h2>
                     )}
                     <div className="flex flex-col gap-1 items-end">
-                      {hasLocalVoiceprint && (
-                        <span
-                          className={`rounded-full px-2 py-0.5 text-[10px] font-medium border ${
-                            (s.enrollmentClipPaths?.length ?? 0) >= 8
-                              ? "bg-lime-400/20 text-lime-300 border-lime-400/40 font-semibold"
-                              : (s.enrollmentClipPaths?.length ?? 0) >= 5
-                              ? "bg-lime-400/15 text-lime-300 border-lime-400/30"
-                              : "bg-lime-400/10 text-lime-400 border-lime-400/20"
-                          }`}
-                          title={
-                            (s.enrollmentClipPaths?.length ?? 0) >= 8
-                              ? "Profile optimal (8/8 clips enrolled with anchor protection)"
-                              : `${s.enrollmentClipPaths?.length ?? 1}/8 voiceprint clips enrolled`
-                          }
-                        >
-                          {(s.enrollmentClipPaths?.length ?? 0) >= 8
-                            ? "Profile Optimal (8/8)"
-                            : `Enrolled (${s.enrollmentClipPaths?.length ?? 1}/8)`}
-                        </span>
-                      )}
-                      {hasSmVoiceprint && (
-                        <span className="rounded-full px-2 py-0.5 text-[10px] font-medium bg-blue-400/10 text-blue-300 border border-blue-400/20">
-                          Speechmatics Active
-                        </span>
-                      )}
-                      {!hasLocalVoiceprint && !hasSmVoiceprint && (
-                        <span className="rounded-full px-2 py-0.5 text-[10px] font-medium bg-stone-800 text-stone-400">
-                          Discovered
-                        </span>
-                      )}
+                      <SpeakerStatusBadges speaker={s} />
                     </div>
                   </div>
 
@@ -4189,20 +4150,23 @@ function SpeakersListView({
                 {mergingId === s.id ? (
                   <div className="border-t border-stone-800 pt-3 space-y-2">
                     <label className="text-xs text-stone-400">Merge {s.name} into:</label>
-                    <select
+                    <Combobox
                       value={targetMergeId}
-                      onChange={(e) => setTargetMergeId(e.target.value)}
-                      className="min-h-[44px] w-full rounded border border-stone-700 bg-stone-950 px-2 py-1 text-base text-stone-100 sm:min-h-0 sm:text-xs"
-                    >
-                      <option value="">-- Choose target --</option>
-                      {speakers
-                        .filter((candidate) => candidate.id !== s.id)
-                        .map((candidate) => (
-                          <option key={candidate.id} value={candidate.id}>
-                            {candidate.name}
-                          </option>
-                        ))}
-                    </select>
+                      onChange={setTargetMergeId}
+                      placeholder="Select target…"
+                      ariaLabel={`Merge ${s.name} into`}
+                      searchPlaceholder="Search people…"
+                      emptyText="No people match your search."
+                      options={[
+                        { value: "", label: "-- Choose target --" },
+                        ...speakers
+                          .filter((candidate) => candidate.id !== s.id)
+                          .map((candidate) => ({
+                            value: candidate.id,
+                            label: candidate.name,
+                          })),
+                      ]}
+                    />
                     <div className="flex gap-2 justify-end">
                       <button
                         type="button"
@@ -4724,7 +4688,6 @@ function LlmSettingsModal({
   const [testResult, setTestResult] = useState<{ ok: boolean; message?: string; durationMs?: number } | null>(null);
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [searchModel, setSearchModel] = useState("");
 
   const fetchData = async () => {
     setLoading(true);
@@ -4923,11 +4886,6 @@ function LlmSettingsModal({
   };
 
   const providerModels = models.filter((m) => m.provider === selectedProvider);
-  const filteredModels = providerModels.filter((m) => {
-    if (!searchModel.trim()) return true;
-    const q = searchModel.toLowerCase();
-    return m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q);
-  });
 
   const selectedModelObj = models.find((m) => m.provider === selectedProvider && m.id === selectedModel);
   const currentProviderSummary = providers.find((p) => p.id === selectedProvider);
@@ -4950,17 +4908,14 @@ function LlmSettingsModal({
               <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
                 AI Provider
               </label>
-              <select
+              <Combobox
                 value={selectedProvider}
-                onChange={(e) => handleProviderChange(e.target.value)}
-                className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none"
-              >
-                {providers.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} {p.isConfigured ? "✓" : "(unconfigured)"} ({p.modelCount} models)
-                  </option>
-                ))}
-              </select>
+                onChange={handleProviderChange}
+                placeholder="Select provider…"
+                ariaLabel="AI provider"
+                searchPlaceholder="Search providers…"
+                options={llmProviderOptions(providers)}
+              />
               <div className="flex items-center justify-between pt-1">
                 <span className="text-[11px] text-stone-500">
                   Status: {currentProviderSummary?.isConfigured ? "🟢 Key Configured" : "🟡 Needs API Key"}
@@ -4980,43 +4935,30 @@ function LlmSettingsModal({
               <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
                 Model
               </label>
-              <input
-                type="text"
-                placeholder="Filter models…"
-                value={searchModel}
-                onChange={(e) => setSearchModel(e.target.value)}
-                className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-1.5 text-base sm:text-sm text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none mb-1"
-              />
-              <select
+              <Combobox
                 value={selectedModel}
-                onChange={(e) => handleModelChange(e.target.value)}
-                className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none"
-              >
-                {filteredModels.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name} {m.reasoning ? "🧠" : ""} {m.contextWindow ? `(${Math.round(m.contextWindow / 1000)}k ctx)` : ""}
-                  </option>
-                ))}
-              </select>
+                onChange={handleModelChange}
+                placeholder="Select model…"
+                ariaLabel="Model"
+                searchPlaceholder="Search models…"
+                emptyText="No models match your search."
+                options={modelOptions(providerModels)}
+              />
             </div>
           </div>
 
           {selectedModelObj && selectedModelObj.reasoning && (
             <div className="space-y-1">
               <label className="text-xs font-medium uppercase tracking-wider text-stone-400 flex items-center gap-1.5">
-                <span>🧠 Thinking / Reasoning Level</span>
+                <ThinkingLabel />
               </label>
-              <select
+              <Combobox
                 value={thinkingLevel}
-                onChange={(e) => setThinkingLevel(e.target.value)}
-                className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none capitalize"
-              >
-                {(selectedModelObj.supportedThinkingLevels || ["low", "medium", "high"]).map((lvl) => (
-                  <option key={lvl} value={lvl}>
-                    {lvl === "off" ? "Off (Standard Response)" : `${lvl.charAt(0).toUpperCase() + lvl.slice(1)} Thinking`}
-                  </option>
-                ))}
-              </select>
+                onChange={setThinkingLevel}
+                placeholder="Select thinking level…"
+                ariaLabel="Thinking reasoning level"
+                options={thinkingLevelOptions(selectedModelObj.supportedThinkingLevels || ["low", "medium", "high"])}
+              />
             </div>
           )}
 
@@ -5132,15 +5074,14 @@ function LlmSettingsModal({
             <label className="block text-xs font-semibold uppercase tracking-wider text-stone-300">
               Automatic Transcription Engine
             </label>
-            <select
+            <Combobox
               value={transcriptionProvider}
-              onChange={(e) => setTranscriptionProvider(e.target.value as "speechmatics" | "local" | "assemblyai")}
-              className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none"
-            >
-              <option value="local">Local (Cohere + diarization)</option>
-              <option value="speechmatics">Speechmatics Cloud</option>
-              <option value="assemblyai">AssemblyAI Cloud (Universal-3.5 Pro)</option>
-            </select>
+              onChange={(v) => setTranscriptionProvider(v as "speechmatics" | "local" | "assemblyai")}
+              placeholder="Select engine…"
+              ariaLabel="Automatic transcription engine"
+              searchPlaceholder="Search engines…"
+              options={TRANSCRIBE_PROVIDER_OPTIONS}
+            />
             <p className="text-[11px] text-stone-500">
               Controls the default for new uploads and manual transcription. AssemblyAI requires ASSEMBLY_API_KEY; Speechmatics requires SPEECHMATICS_API_KEY.
             </p>
@@ -5654,40 +5595,37 @@ export function LogsView({ onSelectMeeting }: { onSelectMeeting: (id: string) =>
       <div className="flex flex-col gap-3 rounded-xl border border-stone-800 bg-stone-900/60 p-3.5 backdrop-blur sm:flex-row sm:flex-wrap sm:items-center">
         {/* Severity Level Filter */}
         <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-2">
-          <label htmlFor="log-level-select" className="text-xs font-medium text-stone-400">
+          <span className="text-xs font-medium text-stone-400">
             Min Level:
-          </label>
-          <select
-            id="log-level-select"
-            value={selectedLevel}
-            onChange={(e) => setSelectedLevel(e.target.value as LogLevel)}
-            className="min-h-[44px] rounded-lg border border-stone-700 bg-stone-950 px-2.5 py-1.5 text-base font-medium text-stone-200 focus:border-lime-400 focus:outline-none sm:min-h-0 sm:text-xs"
-          >
-            <option value="debug">All Levels (DEBUG+)</option>
-            <option value="info">INFO and above</option>
-            <option value="warn">WARN and ERROR only</option>
-            <option value="error">ERROR only</option>
-          </select>
+          </span>
+          <div className="w-full sm:w-56">
+            <Combobox
+              value={selectedLevel}
+              onChange={(v) => setSelectedLevel(v as LogLevel)}
+              placeholder="Select level…"
+              ariaLabel="Minimum log level"
+              searchPlaceholder="Search levels…"
+              options={LOG_LEVEL_OPTIONS}
+            />
+          </div>
         </div>
 
         {/* Category Filter */}
         <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-2">
-          <label htmlFor="log-category-select" className="text-xs font-medium text-stone-400">
+          <span className="text-xs font-medium text-stone-400">
             Category:
-          </label>
-          <select
-            id="log-category-select"
-            value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
-            className="min-h-[44px] rounded-lg border border-stone-700 bg-stone-950 px-2.5 py-1.5 text-base font-medium text-stone-200 focus:border-lime-400 focus:outline-none sm:min-h-0 sm:text-xs"
-          >
-            <option value="">All Categories</option>
-            {categories.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
+          </span>
+          <div className="w-full sm:w-56">
+            <Combobox
+              value={selectedCategory}
+              onChange={setSelectedCategory}
+              placeholder="Select category…"
+              ariaLabel="Log category"
+              searchPlaceholder="Search categories…"
+              emptyText="No categories match your search."
+              options={logCategoryOptions(categories)}
+            />
+          </div>
         </div>
 
         {/* Search Input */}
