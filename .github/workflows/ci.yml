@@ -6,30 +6,23 @@ on:
   pull_request:
 
 jobs:
-  test:
+  backend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg libsndfile1
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: ffmpeg libsndfile1
+          version: "1.0"
 
       - name: Set up uv & Python 3.12
         uses: astral-sh/setup-uv@v10.3.0
         with:
           python-version: "3.12"
-
-      - name: Set up Node & pnpm
-        uses: pnpm/action-setup@v6
-        with:
-          version: 10
-          run_install: false
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "22"
-          cache: "pnpm"
-          cache-dependency-path: frontend/pnpm-lock.yaml
+          enable-cache: true
+          cache-dependency-glob: "backend/uv.lock"
 
       - name: Install backend dependencies
         working-directory: backend
@@ -44,6 +37,23 @@ jobs:
       - name: Run backend tests
         working-directory: backend
         run: uv run pytest
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Node & pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10
+          run_install: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: "pnpm"
+          cache-dependency-path: frontend/pnpm-lock.yaml
 
       - name: Install frontend dependencies
         working-directory: frontend
