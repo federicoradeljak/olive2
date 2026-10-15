@@ -15,12 +15,18 @@ import {
 import { Combobox } from "./Combobox";
 import type { ComboboxOption } from "./Combobox";
 
-/** Transcription provider values used by bulk / settings forms: "local" | "speechmatics" | "assemblyai". */
+/** Transcription provider values used by bulk / settings forms: "local" | "speechmatics" | "assemblyai" | "muse". */
 export const TRANSCRIBE_PROVIDER_OPTIONS: ComboboxOption[] = [
   {
     value: "assemblyai",
     label: "AssemblyAI (Cloud)",
     keywords: "cloud",
+    icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-sky-300" aria-hidden="true" />,
+  },
+  {
+    value: "muse",
+    label: "Muse Voice (Cloud)",
+    keywords: "cloud meta",
     icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-sky-300" aria-hidden="true" />,
   },
   {
@@ -57,6 +63,12 @@ export const ENGINE_OPTIONS: ComboboxOption[] = [
     keywords: "cloud",
     icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-sky-300" aria-hidden="true" />,
   },
+  {
+    value: "muse",
+    label: "Muse Voice (Cloud)",
+    keywords: "cloud meta",
+    icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-sky-300" aria-hidden="true" />,
+  },
 ];
 
 export const TRANSCRIPT_PROVIDER_FILTER_OPTIONS: ComboboxOption[] = [
@@ -64,6 +76,7 @@ export const TRANSCRIPT_PROVIDER_FILTER_OPTIONS: ComboboxOption[] = [
   { value: "local", label: "Local" },
   { value: "speechmatics", label: "Speechmatics" },
   { value: "assemblyai", label: "AssemblyAI" },
+  { value: "muse", label: "Muse Voice" },
   { value: "plaud", label: "Plaud" },
   { value: "none", label: "No transcript yet" },
 ];

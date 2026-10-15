@@ -29,6 +29,7 @@ from ..ml import (
 )
 from ..ml.identify import identify_cloud_transcript_speakers
 from ..providers.assemblyai import AssemblyAIClient, parse_assemblyai_transcript
+from ..providers.muse import MuseClient, merge_muse_chunk_transcripts, prepare_muse_wav_chunks
 from ..providers.speechmatics import (
     SpeechmaticsClient,
     parse_speechmatics_json_v2,
@@ -44,6 +45,7 @@ from ..schemas import (
 from ..speaker_labels import is_generic_speaker_label
 from ..workflows import (
     QUEUE_ASSEMBLYAI,
+    QUEUE_MUSE,
     QUEUE_PIPELINE,
     QUEUE_PLAUD_SYNC,
     QUEUE_SPEAKER_EMBED,
@@ -58,13 +60,15 @@ from ..workflows import (
 
 STAGE_SPEECHMATICS_TRANSCRIBE = "speechmatics_transcribe"
 STAGE_ASSEMBLYAI_TRANSCRIBE = "assemblyai_transcribe"
+STAGE_MUSE_TRANSCRIBE = "muse_transcribe"
 STAGE_LOCAL_TRANSCRIBE = "local_transcribe"
 STAGE_SPEAKER_REIDENTIFY = "speaker_reidentify"
 PROVIDER_SPEECHMATICS = "speechmatics"
 PROVIDER_ASSEMBLYAI = "assemblyai"
+PROVIDER_MUSE = "muse"
 PROVIDER_LOCAL = "local"
 
-TranscriptionProviderName = Literal["speechmatics", "assemblyai", "local"]
+TranscriptionProviderName = Literal["speechmatics", "assemblyai", "muse", "local"]
 
 # Durable-queue routing for background transcription work (see AGENTS.md:
 # the DBOS job queue is the SOLE acceptable path for enqueuing work).
@@ -72,6 +76,7 @@ TRANSCRIBE_QUEUE_BY_PROVIDER: dict[str, str] = {
     PROVIDER_LOCAL: QUEUE_PIPELINE,
     PROVIDER_SPEECHMATICS: QUEUE_SPEECHMATICS,
     PROVIDER_ASSEMBLYAI: QUEUE_ASSEMBLYAI,
+    PROVIDER_MUSE: QUEUE_MUSE,
 }
 
 
@@ -89,6 +94,8 @@ def normalize_transcription_provider(value: Any, default: str = PROVIDER_LOCAL) 
         return PROVIDER_LOCAL
     if raw == PROVIDER_ASSEMBLYAI:
         return PROVIDER_ASSEMBLYAI
+    if raw == PROVIDER_MUSE:
+        return PROVIDER_MUSE
     return PROVIDER_SPEECHMATICS
 
 
@@ -97,7 +104,11 @@ def is_known_transcription_provider(value: Any) -> bool:
     if value is None:
         return True
     raw = str(value).strip().lower()
-    return raw.startswith(PROVIDER_LOCAL) or raw in (PROVIDER_SPEECHMATICS, PROVIDER_ASSEMBLYAI)
+    return raw.startswith(PROVIDER_LOCAL) or raw in (
+        PROVIDER_SPEECHMATICS,
+        PROVIDER_ASSEMBLYAI,
+        PROVIDER_MUSE,
+    )
 
 
 def _parse_json_field(value: str | None, fallback: Any) -> Any:
@@ -204,6 +215,7 @@ class TranscriptionService:
         meetings_dir: str | None = None,
         speechmatics_client: SpeechmaticsClient | None = None,
         assemblyai_client: AssemblyAIClient | None = None,
+        muse_client: MuseClient | None = None,
         local_pipeline: Any = None,
         default_provider: TranscriptionProviderName | None = None,
         logger: Logger | None = None,
@@ -229,6 +241,8 @@ class TranscriptionService:
         self.client: SpeechmaticsClient = passed_sm or SpeechmaticsClient()
         passed_aai = assemblyai_client or opts.get("assemblyaiClient") or opts.get("assemblyai_client")
         self.assemblyai_client: AssemblyAIClient = passed_aai or AssemblyAIClient()
+        passed_muse = muse_client or opts.get("museClient") or opts.get("muse_client")
+        self.muse_client: MuseClient = passed_muse or MuseClient()
         # Injectable for tests: async (audio_path, transcript, enrolled) ->
         # (renamed_transcript, discovered) | None. None = use local ML default.
         self.cloud_speaker_identifier = opts.get("cloudSpeakerIdentifier") or opts.get(
@@ -247,6 +261,8 @@ class TranscriptionService:
             or (
                 "speechmatics"
                 if (passed_sm or os.environ.get("SPEECHMATICS_API_KEY"))
+                else "muse"
+                if (passed_muse or os.environ.get("MUSE_API_KEY") or os.environ.get("MODEL_API_KEY"))
                 else "assemblyai"
                 if (passed_aai or os.environ.get("ASSEMBLY_API_KEY") or os.environ.get("ASSEMBLYAI_API_KEY"))
                 else "local"
@@ -273,6 +289,10 @@ class TranscriptionService:
     @property
     def assemblyai(self) -> AssemblyAIClient:
         return self.assemblyai_client
+
+    @property
+    def muse(self) -> MuseClient:
+        return self.muse_client
 
     @property
     def local(self) -> Any:
@@ -1106,7 +1126,7 @@ class TranscriptionService:
         """
         opts = dict(options or {})
         if not is_known_transcription_provider(opts.get("provider")):
-            raise ValueError("provider must be one of 'local', 'speechmatics', 'assemblyai'")
+            raise ValueError("provider must be one of 'local', 'speechmatics', 'assemblyai', 'muse'")
         provider = normalize_transcription_provider(
             opts.get("provider") or self.default_provider,
             default=self.default_provider,
@@ -1373,6 +1393,8 @@ class TranscriptionService:
                 return await self.transcribe_meeting_local(meeting_id, merged_opts)
             if provider == "assemblyai":
                 return await self.transcribe_meeting_assemblyai(meeting_id, merged_opts)
+            if provider == "muse":
+                return await self.transcribe_meeting_muse(meeting_id, merged_opts)
             return await self.transcribe_meeting_speechmatics(meeting_id, merged_opts)
         finally:
             if self._active_jobs.get(meeting_id) is active_job:
@@ -2834,6 +2856,285 @@ class TranscriptionService:
                     {"err": err_msg, "t": err_time, "id": meeting_id},
                 )
         self.logger.error("AssemblyAI transcription failed", {"meetingId": meeting_id, "error": err_msg})
+        if callable(on_progress):
+            r = on_progress(
+                TranscriptionProgressUpdate(
+                    stage="cancelled" if cancelled else "error",
+                    percent=0,
+                    message="Transcription was cancelled." if cancelled else err_msg,
+                    error=None if cancelled else err_msg,
+                )
+            )
+            if inspect.isawaitable(r):
+                await r
+        return {
+            "stageRunId": stage_run_id,
+            "jobId": job_id,
+            "status": "cancelled" if cancelled else "error",
+            "error": "Cancelled by user" if cancelled else err_msg,
+        }
+
+    async def transcribe_meeting_muse(
+        self,
+        meeting_id: str,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        opts = options or {}
+        on_progress = opts.get("onProgress")
+
+        with self.db.connect() as conn:
+            meeting = (
+                conn.execute(
+                    text("SELECT * FROM meetings WHERE id = :id"),
+                    {"id": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
+            if not meeting:
+                raise ValueError(f"Meeting not found: {meeting_id}")
+
+            recording = (
+                conn.execute(
+                    text("SELECT * FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"),
+                    {"mid": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
+            if not recording:
+                raise ValueError(f"No recording found for meeting {meeting_id}")
+
+            stage_run = (
+                conn.execute(
+                    text("SELECT * FROM stage_runs WHERE meeting_id = :mid AND stage = :stage LIMIT 1"),
+                    {"mid": meeting_id, "stage": STAGE_MUSE_TRANSCRIBE},
+                )
+                .mappings()
+                .first()
+            )
+
+        folder = meeting_paths(
+            self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]
+        ).folder
+        audio_full_path = str(Path(folder) / recording["path"])
+        if not Path(audio_full_path).exists():
+            raise FileNotFoundError(f"Audio file not found on disk at {audio_full_path}")
+
+        if stage_run and stage_run["status"] == "done" and not opts.get("force"):
+            with self.db.connect() as conn:
+                existing_art = (
+                    conn.execute(
+                        text(
+                            """
+                        SELECT id FROM artifacts
+                        WHERE meeting_id = :mid AND provider = :prov AND kind = 'transcript' AND format = 'json'
+                        LIMIT 1
+                        """
+                        ),
+                        {"mid": meeting_id, "prov": PROVIDER_MUSE},
+                    )
+                    .mappings()
+                    .first()
+                )
+            return {
+                "stageRunId": stage_run["id"],
+                "jobId": stage_run.get("provider_job_id") or "",
+                "status": "done",
+                "transcriptArtifactId": existing_art["id"] if existing_art else None,
+            }
+
+        stage_run_id = stage_run["id"] if stage_run else str(uuid.uuid4())
+        session_id = f"muse-{meeting_id[:8]}-{uuid.uuid4().hex[:8]}"
+        current_time = self.now()
+
+        async def _emit_muse(stage: str, percent: float, message: str) -> None:
+            if callable(on_progress):
+                r = on_progress(
+                    TranscriptionProgressUpdate(
+                        stage=stage,  # type: ignore[arg-type]
+                        percent=float(round(percent)),
+                        message=message,
+                    )
+                )
+                if inspect.isawaitable(r):
+                    await r
+
+        with self.db.begin() as conn:
+            if stage_run:
+                conn.execute(
+                    text(
+                        """
+                        UPDATE stage_runs
+                        SET status = 'running', attempts = :attempts, last_error = NULL,
+                            started_at = :now, updated_at = :now
+                        WHERE id = :id
+                        """
+                    ),
+                    {
+                        "attempts": int(stage_run["attempts"]) + 1,
+                        "now": current_time,
+                        "id": stage_run["id"],
+                    },
+                )
+            else:
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO stage_runs (
+                          id, meeting_id, stage, status, provider_job_id, attempts,
+                          last_error, started_at, finished_at, created_at, updated_at
+                        ) VALUES (
+                          :id, :mid, :stage, 'running', :jid, 1,
+                          NULL, :now, NULL, :now, :now
+                        )
+                        """
+                    ),
+                    {
+                        "id": stage_run_id,
+                        "mid": meeting_id,
+                        "stage": STAGE_MUSE_TRANSCRIBE,
+                        "jid": session_id,
+                        "now": current_time,
+                    },
+                )
+
+        sig = opts.get("signal")
+        if _signal_aborted(sig):
+            return await self._fail_muse(
+                meeting_id,
+                stage_run_id,
+                session_id,
+                "Transcription was cancelled.",
+                cancelled=True,
+                on_progress=on_progress,
+            )
+
+        await _emit_muse("uploading", 12, "Converting audio for Muse Voice (24 kHz WAV)...")
+        try:
+            chunks = await asyncio.to_thread(prepare_muse_wav_chunks, audio_full_path)
+        except Exception as exc:
+            return await self._fail_muse(
+                meeting_id, stage_run_id, session_id, str(exc), on_progress=on_progress
+            )
+
+        if _signal_aborted(sig):
+            return await self._fail_muse(
+                meeting_id,
+                stage_run_id,
+                session_id,
+                "Transcription was cancelled.",
+                cancelled=True,
+                on_progress=on_progress,
+            )
+
+        mode = str(opts.get("mode") or "DIARIZATION")
+        raw_responses: list[dict[str, Any]] = []
+        chunk_offsets: list[int] = []
+        try:
+            for index, (wav_bytes, offset_ms) in enumerate(chunks):
+                if _signal_aborted(sig):
+                    return await self._fail_muse(
+                        meeting_id,
+                        stage_run_id,
+                        session_id,
+                        "Transcription was cancelled.",
+                        cancelled=True,
+                        on_progress=on_progress,
+                    )
+                pct = 15.0 + 55.0 * (index / max(1, len(chunks)))
+                await _emit_muse(
+                    "transcribing",
+                    pct,
+                    f"Transcribing with Muse Voice (chunk {index + 1}/{len(chunks)})...",
+                )
+                raw = await self.muse_client.transcribe_wav(
+                    wav_bytes,
+                    {
+                        "mode": mode,
+                        "language": opts.get("language"),
+                        "additionalVocab": opts.get("additionalVocab") or opts.get("additional_vocab"),
+                        "sessionId": f"{session_id}-{index}",
+                        "filename": f"muse-chunk-{index}.wav",
+                    },
+                )
+                raw_responses.append(raw)
+                chunk_offsets.append(offset_ms)
+        except Exception as exc:
+            return await self._fail_muse(
+                meeting_id, stage_run_id, session_id, str(exc), on_progress=on_progress
+            )
+
+        await _emit_muse("finalizing", 72, "Muse transcription complete. Identifying speakers...")
+
+        # Labels are request-scoped: the same letter in two chunks may be
+        # different people, so merge assigns globally unique Speaker N
+        # clusters and lets voiceprint matching reconcile identities.
+        canonical = merge_muse_chunk_transcripts(raw_responses, chunk_offsets)
+        res = await self._complete_cloud_transcription(
+            meeting_id,
+            stage_run_id,
+            session_id,
+            canonical,
+            PROVIDER_MUSE,
+            raw_payload=None,
+            options=opts,
+        )
+        if res.get("status") == "cancelled":
+            return await self._fail_muse(
+                meeting_id,
+                stage_run_id,
+                session_id,
+                "Transcription was cancelled.",
+                cancelled=True,
+                on_progress=on_progress,
+            )
+        if callable(on_progress):
+            r = on_progress(
+                TranscriptionProgressUpdate(
+                    stage="done",
+                    percent=100,
+                    message="Muse transcription complete!",
+                )
+            )
+            if inspect.isawaitable(r):
+                await r
+        return res
+
+    transcribeMeetingMuse = transcribe_meeting_muse
+
+    async def _fail_muse(
+        self,
+        meeting_id: str,
+        stage_run_id: str,
+        job_id: str,
+        err_msg: str,
+        cancelled: bool = False,
+        on_progress: Callable[[TranscriptionProgressUpdate], Any] | None = None,
+    ) -> dict[str, Any]:
+        err_time = self.now()
+        with self.db.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    UPDATE stage_runs
+                    SET status = :st, last_error = :err, finished_at = :t, updated_at = :t
+                    WHERE id = :id
+                    """
+                ),
+                {
+                    "st": "cancelled" if cancelled else "error",
+                    "err": "Cancelled by user" if cancelled else err_msg,
+                    "t": err_time,
+                    "id": stage_run_id,
+                },
+            )
+            if not cancelled:
+                conn.execute(
+                    text("UPDATE meetings SET last_error = :err, updated_at = :t WHERE id = :id"),
+                    {"err": err_msg, "t": err_time, "id": meeting_id},
+                )
+        self.logger.error("Muse transcription failed", {"meetingId": meeting_id, "error": err_msg})
         if callable(on_progress):
             r = on_progress(
                 TranscriptionProgressUpdate(

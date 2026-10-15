@@ -106,7 +106,7 @@ class AppConfig(BaseModel):
 
     pollIntervalMinutes: int = Field(default=15, gt=0)
     retranscribePlaudWhenUnnamed: bool = Field(default=False)
-    transcriptionProvider: Literal["speechmatics", "assemblyai", "local"] = Field(default="local")
+    transcriptionProvider: Literal["speechmatics", "assemblyai", "muse", "local"] = Field(default="local")
     localAsrModel: str = Field(default=DEFAULT_LOCAL_ASR_MODEL)
     localClusteringThreshold: float = Field(default=0.50, ge=0.1, le=0.99)
     localSimilarityThreshold: float = Field(default=0.45, ge=0.1, le=0.99)

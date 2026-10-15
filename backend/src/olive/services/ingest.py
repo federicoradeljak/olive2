@@ -76,21 +76,21 @@ class IngestService:
         db: Engine,
         meetings_dir: str,
         transcription_service: Any = None,
-        default_transcription_provider: Literal["speechmatics", "assemblyai", "local"] = "local",
+        default_transcription_provider: Literal["speechmatics", "assemblyai", "muse", "local"] = "local",
         logger: Logger | None = None,
         now: Callable[[], int] | None = None,
     ) -> None:
         self.db = db
         self.meetings_dir = meetings_dir
         self.transcription_service = transcription_service
-        self.default_transcription_provider: Literal["speechmatics", "assemblyai", "local"] = (
+        self.default_transcription_provider: Literal["speechmatics", "assemblyai", "muse", "local"] = (
             default_transcription_provider
         )
         self.logger = logger or default_logger
         self.now = now or (lambda: int(time.time() * 1000))
 
     def set_default_transcription_provider(
-        self, provider: Literal["speechmatics", "assemblyai", "local"]
+        self, provider: Literal["speechmatics", "assemblyai", "muse", "local"]
     ) -> None:
         self.default_transcription_provider = provider
 

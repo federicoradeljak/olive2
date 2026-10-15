@@ -26,9 +26,11 @@ from ..db import DbHandle, get_db
 # Estimated transcription rates in USD per hour of audio, from public rate
 # cards (Oct 2026): AssemblyAI universal-3-5-pro batch $0.21/hr + standard
 # speaker diarization add-on $0.02/hr; Speechmatics Standard batch
-# pay-as-you-go $0.45/hr. Local transcription runs on-device and is free.
+# pay-as-you-go $0.45/hr; Muse Voice Transcribe $0.18/hr. Local transcription
+# runs on-device and is free.
 TRANSCRIPTION_USD_PER_HOUR: dict[str, float] = {
     "assemblyai": 0.23,
+    "muse": 0.18,
     "speechmatics": 0.45,
     "local": 0.0,
 }
@@ -100,9 +102,7 @@ def month_bounds_ms(month: str) -> tuple[int, int]:
 def current_month_str(now_ms: int | None = None) -> str:
     from datetime import datetime
 
-    dt = datetime.fromtimestamp(
-        (now_ms if now_ms is not None else int(time.time() * 1000)) / 1000, tz=UTC
-    )
+    dt = datetime.fromtimestamp((now_ms if now_ms is not None else int(time.time() * 1000)) / 1000, tz=UTC)
     return f"{dt.year:04d}-{dt.month:02d}"
 
 

@@ -143,6 +143,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
 
     speechmatics_client = opts.get("speechmaticsClient") or opts.get("speechmatics_client")
     assemblyai_client = opts.get("assemblyaiClient") or opts.get("assemblyai_client")
+    muse_client = opts.get("museClient") or opts.get("muse_client")
     transcription_service = opts.get("transcriptionService") or opts.get("transcription_service")
     speaker_service = opts.get("speakerService") or opts.get("speaker_service")
     llm_service = opts.get("llmService") or opts.get("llm_service")
@@ -170,6 +171,14 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
 
             assemblyai_client = AssemblyAIClient()
         return assemblyai_client
+
+    def get_muse_client() -> Any:
+        nonlocal muse_client
+        if muse_client is None:
+            from .providers.muse import MuseClient
+
+            muse_client = MuseClient()
+        return muse_client
 
     def get_llm_service() -> Any:
         nonlocal llm_service
@@ -226,6 +235,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                 meetings_dir=meetings_dir,
                 speechmatics_client=get_speechmatics_client(),
                 assemblyai_client=get_assemblyai_client(),
+                muse_client=get_muse_client(),
                 default_provider=default_provider,
                 webhook_secret=speechmatics_webhook_secret,
                 config_dir=config_dir,
@@ -480,7 +490,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
 
         auto_transcribe = str(auto_transcribe_param) in ("true", "1")
         transcription_provider = load_app_config(app_config_paths).transcriptionProvider
-        if provider_param in ("local", "speechmatics", "assemblyai"):
+        if provider_param in ("local", "speechmatics", "assemblyai", "muse"):
             transcription_provider = provider_param  # type: ignore[assignment]
         model_id = (
             str(model_id_param).strip()
@@ -1126,9 +1136,9 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         if isinstance(provider, str) and provider.startswith("local"):
             body = {**body, "provider": "local"}
             provider = "local"
-        if provider not in ("local", "speechmatics", "assemblyai"):
+        if provider not in ("local", "speechmatics", "assemblyai", "muse"):
             return JSONResponse(
-                {"error": "provider must be one of 'local', 'speechmatics', 'assemblyai'"},
+                {"error": "provider must be one of 'local', 'speechmatics', 'assemblyai', 'muse'"},
                 status_code=400,
             )
 

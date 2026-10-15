@@ -14,7 +14,7 @@ from olive.db import create_db
 from olive.layout import meeting_paths
 from olive.providers.speechmatics import SpeechmaticsClient
 from olive.services.transcription import TranscriptionService
-from olive.workflows.queues import QUEUE_ASSEMBLYAI, QUEUE_PIPELINE, QUEUE_SPEECHMATICS
+from olive.workflows.queues import QUEUE_ASSEMBLYAI, QUEUE_MUSE, QUEUE_PIPELINE, QUEUE_SPEECHMATICS
 
 AUDIO_BYTES = b"fake audio bytes"
 
@@ -217,6 +217,7 @@ def test_bulk_transcribe_requires_targets(tmp_path: Path, monkeypatch: pytest.Mo
         ("local", QUEUE_PIPELINE),
         ("speechmatics", QUEUE_SPEECHMATICS),
         ("assemblyai", QUEUE_ASSEMBLYAI),
+        ("muse", QUEUE_MUSE),
         ("local:cohere", QUEUE_PIPELINE),
     ],
 )

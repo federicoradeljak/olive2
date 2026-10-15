@@ -41,6 +41,7 @@ def test_estimate_llm_cost_uses_catalog_rates() -> None:
 def test_estimate_transcription_cost_uses_hourly_rates() -> None:
     assert estimate_transcription_cost("assemblyai", 3600.0) == 0.23
     assert estimate_transcription_cost("speechmatics", 1800.0) == 0.225
+    assert estimate_transcription_cost("muse", 3600.0) == 0.18
     assert estimate_transcription_cost("local", 3600.0) == 0.0
     assert estimate_transcription_cost("unknown-provider", 3600.0) is None
     assert estimate_transcription_cost("assemblyai", None) is None

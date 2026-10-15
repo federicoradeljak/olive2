@@ -1783,7 +1783,7 @@ function MeetingDetailView({
         const cfg = await cfgRes.json();
         if (cfg.localClusteringThreshold !== undefined) setCustomClusteringThreshold(cfg.localClusteringThreshold);
         if (cfg.localSimilarityThreshold !== undefined) setCustomSimilarityThreshold(cfg.localSimilarityThreshold);
-        if (cfg.transcriptionProvider === "speechmatics" || cfg.transcriptionProvider === "assemblyai") {
+        if (cfg.transcriptionProvider === "speechmatics" || cfg.transcriptionProvider === "assemblyai" || cfg.transcriptionProvider === "muse") {
           setSelectedEngine(cfg.transcriptionProvider);
         } else {
           setSelectedEngine("local:cohere");
@@ -2459,7 +2459,7 @@ function MeetingDetailView({
                   <span className="font-semibold text-stone-200 uppercase tracking-wide">
                     {selectedEngine.startsWith("local")
                       ? "Local Pipeline (Cohere Transcribe + Diarization)"
-                      : selectedEngine === "assemblyai" ? "AssemblyAI Cloud" : "Speechmatics Cloud"}
+                      : selectedEngine === "assemblyai" ? "AssemblyAI Cloud" : selectedEngine === "muse" ? "Muse Voice Cloud" : "Speechmatics Cloud"}
                   </span>
                   <span className="text-stone-500">•</span>
                   <span className="text-lime-300 font-medium capitalize">
@@ -4060,7 +4060,7 @@ function UploadAudioModal({
     void fetch("/api/config")
       .then((res) => (res.ok ? res.json() : null))
       .then((config) => {
-        if (config?.transcriptionProvider === "speechmatics" || config?.transcriptionProvider === "assemblyai") {
+        if (config?.transcriptionProvider === "speechmatics" || config?.transcriptionProvider === "assemblyai" || config?.transcriptionProvider === "muse") {
           setSelectedEngine(config.transcriptionProvider);
         } else {
           setSelectedEngine("local:cohere");
@@ -4905,7 +4905,7 @@ function LlmSettingsModal({
   const [localClusteringThreshold, setLocalClusteringThreshold] = useState<number>(0.50);
   const [localSimilarityThreshold, setLocalSimilarityThreshold] = useState<number>(0.45);
   const [localAsrModel, setLocalAsrModel] = useState<string>("onnx-community/cohere-transcribe-03-2026-ONNX");
-  const [transcriptionProvider, setTranscriptionProvider] = useState<"speechmatics" | "local" | "assemblyai">("local");
+  const [transcriptionProvider, setTranscriptionProvider] = useState<"speechmatics" | "local" | "assemblyai" | "muse">("local");
   const [hfToken, setHfToken] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -4948,7 +4948,7 @@ function LlmSettingsModal({
         if (appCfg.localAsrModel !== undefined) {
           setLocalAsrModel(appCfg.localAsrModel);
         }
-        if (appCfg.transcriptionProvider === "speechmatics" || appCfg.transcriptionProvider === "local" || appCfg.transcriptionProvider === "assemblyai") {
+        if (appCfg.transcriptionProvider === "speechmatics" || appCfg.transcriptionProvider === "local" || appCfg.transcriptionProvider === "assemblyai" || appCfg.transcriptionProvider === "muse") {
           setTranscriptionProvider(appCfg.transcriptionProvider);
         }
         if (typeof appCfg.hfToken === "string") {
@@ -5301,14 +5301,14 @@ function LlmSettingsModal({
             </label>
             <Combobox
               value={transcriptionProvider}
-              onChange={(v) => setTranscriptionProvider(v as "speechmatics" | "local" | "assemblyai")}
+              onChange={(v) => setTranscriptionProvider(v as "speechmatics" | "local" | "assemblyai" | "muse")}
               placeholder="Select engine…"
               ariaLabel="Automatic transcription engine"
               searchPlaceholder="Search engines…"
               options={TRANSCRIBE_PROVIDER_OPTIONS}
             />
             <p className="text-[11px] text-stone-500">
-              Controls the default for new uploads and manual transcription. AssemblyAI requires ASSEMBLY_API_KEY; Speechmatics requires SPEECHMATICS_API_KEY.
+              Controls the default for new uploads and manual transcription. AssemblyAI requires ASSEMBLY_API_KEY; Speechmatics requires SPEECHMATICS_API_KEY; Muse Voice requires MUSE_API_KEY.
             </p>
           </div>
 

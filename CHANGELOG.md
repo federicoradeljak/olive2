@@ -12,6 +12,15 @@ Olive is currently pre-1.0 (`0.2.0`); everything below shipped as part of the
 
 ### Added
 
+- **Muse Voice transcription** — transcribe meetings with Meta's
+  Muse Voice Transcribe (`muse-voice-transcribe-1.0`, $0.18/hr) via
+  `MUSE_API_KEY`. Uses speaker diarization by default, auto-chunks
+  recordings over the 10-minute API limit, and supports keyword and
+  language biasing from the existing transcription options. Speaker
+  labels are kept distinct per chunk (labels are request-scoped) and
+  reconciled to enrolled names by voiceprint matching. Selectable
+  anywhere AssemblyAI/Speechmatics are (upload, meeting detail, bulk
+  re-transcribe, default engine setting).
 - **Auto-title meetings** — generate a concise meeting title from the
   transcript with the configured default LLM via the Auto-title button
   next to the meeting title.
