@@ -2002,6 +2002,22 @@
           }
         }
       }
+    },
+    "/api/changelog": {
+      "get": {
+        "summary": "Get Changelog Route",
+        "operationId": "get_changelog_route_api_changelog_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
