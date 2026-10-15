@@ -29,7 +29,12 @@ from ..ml import (
 )
 from ..ml.identify import identify_cloud_transcript_speakers
 from ..providers.assemblyai import AssemblyAIClient, parse_assemblyai_transcript
-from ..providers.muse import MuseClient, merge_muse_chunk_transcripts, prepare_muse_wav_chunks
+from ..providers.muse import (
+    MuseClient,
+    MuseTranscribeResponse,
+    merge_muse_chunk_transcripts,
+    prepare_muse_wav_chunks,
+)
 from ..providers.speechmatics import (
     SpeechmaticsClient,
     parse_speechmatics_json_v2,
@@ -3070,7 +3075,7 @@ class TranscriptionService:
             )
 
         mode = str(opts.get("mode") or "DIARIZATION")
-        raw_responses: list[dict[str, Any]] = []
+        raw_responses: list[MuseTranscribeResponse | dict[str, Any]] = []
         chunk_offsets: list[int] = []
         try:
             for index, (wav_bytes, offset_ms) in enumerate(chunks):

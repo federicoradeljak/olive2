@@ -360,7 +360,7 @@ class SpeakerService:
             # existing voiceprint is too narrow, not that the new clip is
             # wrong — enroll it to expand coverage. Only automatic (untrusted)
             # adoptions get outlier-rejected.
-            if similarity < OUTLIER_MIN_SIMILARITY and not trusted:
+            if similarity is not None and similarity < OUTLIER_MIN_SIMILARITY and not trusted:
                 return {
                     "status": "outlier_rejected",
                     "voiceprintEnrolled": False,
@@ -368,7 +368,7 @@ class SpeakerService:
                     "statusReason": f"Similarity ({similarity:.3f}) is below outlier threshold ({OUTLIER_MIN_SIMILARITY})",
                     "updatedSpeakerRow": speaker_row,
                 }
-            if similarity > REDUNDANT_MAX_SIMILARITY:
+            if similarity is not None and similarity > REDUNDANT_MAX_SIMILARITY:
                 return {
                     "status": "redundant_skipped",
                     "voiceprintEnrolled": False,
@@ -1202,7 +1202,7 @@ class SpeakerService:
 
         updated_segments_count = 0
         is_single = segment_index is not None and scope == "single"
-        if is_single:
+        if is_single and segment_index is not None:
             idx = int(segment_index)
             if 0 <= idx < len(segments):
                 tseg = segments[idx]
