@@ -23,6 +23,35 @@ from .audio import resample
 
 _COHERE_STAGE_LOCK = threading.Lock()
 
+# Staged flat-dir filenames with conservative minimum sizes (bytes) used to
+# detect a complete prior staging without hitting the HF Hub. Thresholds are
+# deliberately far below the real sizes (encoder .data ~2.5G, decoder .data
+# ~146M, encoder .onnx ~101M, decoder .onnx ~570K, tokens.txt ~203K) so future
+# model revisions still fast-path while truncated files re-download.
+_COHERE_STAGED_MIN_SIZES: tuple[tuple[str, int], ...] = (
+    ("cohere-encoder.int8.onnx", 100 * 1024),
+    ("cohere-encoder.int8.onnx.data", 1024 * 1024),
+    ("cohere-encoder.int8.fixed.onnx.data", 1024 * 1024),
+    ("cohere-decoder.int8.onnx", 100 * 1024),
+    ("cohere-decoder.int8.onnx.data", 1024 * 1024),
+    ("cohere-decoder.int8.fixed.onnx.data", 1024 * 1024),
+    ("tokens.txt", 1024),
+)
+
+
+def is_cohere_staged_complete(cohere_dir: Path) -> bool:
+    """True when every staged file exists as a non-symlink regular file above its minimum size."""
+    try:
+        for name, min_size in _COHERE_STAGED_MIN_SIZES:
+            p = cohere_dir / name
+            if p.is_symlink() or not p.is_file():
+                return False
+            if p.stat().st_size < min_size:
+                return False
+        return True
+    except OSError:
+        return False
+
 
 def stage_cohere_int8_model_dir(hf_token: str | None = None) -> Path:
     """Stages Cohere INT8 ONNX files into a flat non-symlink directory for ONNX Runtime 1.25+."""
@@ -30,6 +59,9 @@ def stage_cohere_int8_model_dir(hf_token: str | None = None) -> Path:
     cohere_dir = Path(resolve_paths().models_dir) / "cohere-int8"
     with _COHERE_STAGE_LOCK:
         cohere_dir.mkdir(parents=True, exist_ok=True)
+        # Fast path: fully staged from a previous boot — skip all HF Hub calls.
+        if is_cohere_staged_complete(cohere_dir):
+            return cohere_dir
         for onnx_name, data_name, fixed_name in (
             (
                 "cohere-encoder.int8.onnx",

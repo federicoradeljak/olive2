@@ -16,6 +16,13 @@ Olive is currently pre-1.0 (`0.2.0`); everything below shipped as part of the
   transcript with the configured default LLM via the Auto-title button
   next to the meeting title.
 
+### Changed
+
+- **Faster container startup** — model preflight skips Hugging Face Hub
+  round-trips when the MMS aligner and staged Cohere INT8 files already
+  exist, and verifies the four local models concurrently instead of
+  sequentially.
+
 ## [0.2.0] — 2026-10-14
 
 Covers the full history from project start (2026-08-11) through 2026-10-14,
