@@ -15,6 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sse_starlette.sse import EventSourceResponse
 
+from . import __version__
 from .db import DbHandle, get_db
 from .layout import meeting_paths
 from .ml.audio import enhance_audio_file_async
@@ -50,6 +51,22 @@ def _numeric_query_param(value: str | None) -> int | None:
 
 def _is_loopback_host(hostname: str) -> bool:
     return hostname in ("127.0.0.1", "localhost", "::1")
+
+
+def _resolve_changelog_path() -> Path | None:
+    """Locate the repo CHANGELOG.md in dev, Docker, or via env override."""
+    override = os.environ.get("OLIVE_CHANGELOG_PATH")
+    if override:
+        candidate = Path(override)
+        if candidate.is_file():
+            return candidate
+    docker_path = Path("/app/CHANGELOG.md")
+    if docker_path.is_file():
+        return docker_path
+    repo_candidate = Path(__file__).resolve().parents[3] / "CHANGELOG.md"
+    if repo_candidate.is_file():
+        return repo_candidate
+    return None
 
 
 def _safe_web_path(web_root: str, request_path: str) -> Path | None:
@@ -377,7 +394,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         meetings_dir=meetings_dir,
     )
 
-    app = FastAPI(title="Olive API", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="Olive API", version=__version__, lifespan=lifespan)
 
     @app.api_route("/mcp", methods=["GET", "POST", "DELETE", "OPTIONS"], include_in_schema=False)
     async def mcp_endpoint(request: Request) -> Response:
@@ -2231,6 +2248,15 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                 else:
                     conn.execute(text("DELETE FROM logs"))
             return JSONResponse({"ok": True})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+    @app.get("/api/changelog")
+    async def get_changelog_route() -> JSONResponse:
+        try:
+            changelog_path = _resolve_changelog_path()
+            markdown = changelog_path.read_text(encoding="utf-8") if changelog_path else ""
+            return JSONResponse({"version": __version__, "markdown": markdown})
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=500)
 

@@ -414,6 +414,9 @@ export function App(): ReactElement {
   const [llmConfig, setLlmConfig] = useState<{ defaultProvider: string; defaultModel: string } | null>(null);
   const [showLlmModal, setShowLlmModal] = useState(false);
 
+  // Changelog
+  const [showChangelogModal, setShowChangelogModal] = useState(false);
+
   const isTabActive = (key: TabKey) => (key === "meetings" ? activeTab === "meetings" && !selectedMeetingId : activeTab === key);
 
   const navigate = (path: string) => {
@@ -518,6 +521,15 @@ export function App(): ReactElement {
           <div className="flex shrink-0 items-center gap-2">
             <button
               type="button"
+              onClick={() => setShowChangelogModal(true)}
+              title="What's new in Olive"
+              className="flex items-center gap-1.5 rounded-full border border-stone-700 bg-stone-800/80 px-2.5 py-1 text-[11px] sm:text-xs font-medium text-stone-300 hover:border-stone-500 hover:text-white transition shrink-0"
+            >
+              <span aria-hidden="true">✨</span>
+              <span className="hidden md:inline">What's New</span>
+            </button>
+            <button
+              type="button"
               onClick={() => setShowLlmModal(true)}
               className="flex min-w-0 max-w-[110px] lg:max-w-[150px] xl:max-w-none items-center gap-1.5 rounded-full border border-stone-700 bg-stone-800/80 px-2.5 py-1 text-[11px] sm:text-xs font-medium text-stone-300 hover:border-stone-500 hover:text-white transition"
             >
@@ -612,6 +624,11 @@ export function App(): ReactElement {
         )}
       </main>
 
+      {/* Changelog Modal */}
+      {showChangelogModal && (
+        <ChangelogModal onClose={() => setShowChangelogModal(false)} />
+      )}
+
       {/* Plaud Auth & Sync Modal */}
       {showPlaudModal && (
         <PlaudModal
@@ -685,6 +702,55 @@ function Modal({
         <div className="space-y-5 p-6">{children}</div>
       </div>
     </div>
+  );
+}
+
+function ChangelogModal({ onClose }: { onClose: () => void }): ReactElement {
+  const [markdown, setMarkdown] = useState<string | null>(null);
+  const [version, setVersion] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/changelog")
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json() as Promise<{ version: string; markdown: string }>;
+      })
+      .then((data) => {
+        if (cancelled) return;
+        setVersion(data.version);
+        setMarkdown(data.markdown);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <Modal
+      onClose={onClose}
+      title={version ? `What's New — v${version}` : "What's New"}
+      ariaLabel="Olive changelog"
+      maxWidth="max-w-2xl"
+    >
+      {error ? (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">
+          Failed to load changelog: {error}
+        </div>
+      ) : markdown === null ? (
+        <div className="py-8 text-center text-sm text-stone-500">Loading changelog…</div>
+      ) : markdown ? (
+        <div className="max-h-[60vh] overflow-y-auto pr-1">
+          <MarkdownRenderer content={markdown} />
+        </div>
+      ) : (
+        <div className="py-8 text-center text-sm text-stone-500">No changelog available.</div>
+      )}
+    </Modal>
   );
 }
 
