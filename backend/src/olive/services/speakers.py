@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import time
 import uuid
@@ -24,6 +25,7 @@ from ..ml import (
     SpeakerEmbedder,
     VoiceprintVector,
     WeSpeakerEmbeddingExtractor,
+    cosine_similarity,
     encode_wav,
     load_audio_samples,
     score_against_trusted_vectors,
@@ -36,6 +38,8 @@ from ..schemas import (
     RapidEnrollCandidatesResponse,
     RapidEnrollSampleResult,
     Speaker,
+    SpeakerLibrary,
+    SpeakerLibraryImportResult,
     Transcript,
     TranscriptSegment,
     TranscriptWord,
@@ -44,6 +48,13 @@ from ..schemas import (
 from ..speaker_labels import is_generic_speaker_label
 
 MAX_ENROLLMENT_CLIPS = 8
+
+SPEAKER_LIBRARY_VERSION = "1.0"
+SPEAKER_LIBRARY_MAX_SPEAKERS = 1000
+SPEAKER_LIBRARY_VECTOR_DIM = 256
+# Offline imports only skip near-duplicates (stricter than the runtime
+# REDUNDANT_MAX_SIMILARITY): a human-curated file is ground truth.
+LIBRARY_REDUNDANT_SIMILARITY = 0.995
 MIN_CONFIRM_DURATION_SEC = 3.0
 MAX_CONFIRM_DURATION_SEC = 15.0
 MAX_ENROLL_DURATION_SEC = 30.0
@@ -71,6 +82,23 @@ def _parse_json_field(value: str | None, fallback: Any) -> Any:
         return json.loads(value)
     except Exception:
         return fallback
+
+
+def _validate_library_vector(vec: Any, *, speaker_name: str, index: int) -> list[float]:
+    if not isinstance(vec, list) or len(vec) != SPEAKER_LIBRARY_VECTOR_DIM:
+        raise ValueError(
+            f'Voiceprint #{index} for speaker "{speaker_name}" must be a list of '
+            f"{SPEAKER_LIBRARY_VECTOR_DIM} numbers"
+        )
+    out: list[float] = []
+    for value in vec:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f'Voiceprint #{index} for speaker "{speaker_name}" contains a non-numeric value')
+        num = float(value)
+        if not math.isfinite(num):
+            raise ValueError(f'Voiceprint #{index} for speaker "{speaker_name}" contains a non-finite value')
+        out.append(num)
+    return out
 
 
 def _to_speaker_dict(row: Mapping[Any, Any]) -> dict[str, Any]:
@@ -2387,6 +2415,366 @@ class SpeakerService:
             )
 
     deleteSpeaker = delete_speaker
+
+    def export_speaker_library(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Exports enrolled voiceprint vectors as a portable JSON-serializable library.
+
+        Vectors only — no enrollment audio. Every emitted voiceprint imports as-is
+        on another instance with no model run required.
+        """
+        opts = options or {}
+        raw_ids = opts.get("speakerIds") or opts.get("speaker_ids")
+        wanted: set[str] | None = {str(v) for v in raw_ids} if isinstance(raw_ids, list) else None
+        with self.db.connect() as conn:
+            rows = conn.execute(text("SELECT * FROM speakers ORDER BY name ASC")).mappings().all()
+        speakers: list[dict[str, Any]] = []
+        for row in rows:
+            if wanted is not None and str(row["id"]) not in wanted:
+                continue
+            if _is_placeholder_name(str(row["name"] or "")):
+                continue
+            vectors: list[list[float]] = []
+            for raw in _parse_json_field(row.get("provider_ids"), {}).get("local") or []:
+                try:
+                    parsed = json.loads(raw) if isinstance(raw, str) else raw
+                except Exception:
+                    continue
+                if (
+                    isinstance(parsed, list)
+                    and len(parsed) == SPEAKER_LIBRARY_VECTOR_DIM
+                    and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in parsed)
+                ):
+                    vectors.append([float(v) for v in parsed])
+            if not vectors:
+                continue
+            speakers.append(
+                {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "enrolledAt": row.get("enrolled_at"),
+                    "createdAt": row.get("created_at"),
+                    "voiceprints": vectors,
+                }
+            )
+        return SpeakerLibrary(
+            version=SPEAKER_LIBRARY_VERSION,
+            createdAt=self.now(),
+            embeddingModel=WESPEAKER_MODEL_TAG,
+            speakers=speakers,  # type: ignore[arg-type]
+        ).model_dump()
+
+    exportSpeakerLibrary = export_speaker_library
+
+    def import_speaker_library(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Imports a portable speaker library (vectors only, no audio).
+
+        `mode="merge"` (default) unions vectors into matching speakers by name and
+        creates the rest; `mode="replace"` wipes the local library first while
+        preserving meeting attributions by speaker name. `dryRun` previews without
+        writing. Meeting links are never imported — meeting IDs differ per instance.
+        """
+        opts = options or {}
+        library = opts.get("library")
+        mode = str(opts.get("mode") or "merge").strip().lower()
+        dry_run = bool(opts.get("dryRun") or opts.get("dry_run"))
+        if mode not in ("merge", "replace"):
+            raise ValueError('mode must be "merge" or "replace"')
+        if not isinstance(library, dict):
+            raise ValueError("library object is required")
+        if library.get("version") != SPEAKER_LIBRARY_VERSION:
+            raise ValueError(
+                f"Unsupported speaker library version: {library.get('version')!r} "
+                f'(this Olive expects "{SPEAKER_LIBRARY_VERSION}"). '
+                "Export again from an up-to-date Olive."
+            )
+        raw_entries = library.get("speakers")
+        if not isinstance(raw_entries, list):
+            raise ValueError("library.speakers must be a list")
+        if len(raw_entries) > SPEAKER_LIBRARY_MAX_SPEAKERS:
+            raise ValueError(
+                f"library holds {len(raw_entries)} speakers (max {SPEAKER_LIBRARY_MAX_SPEAKERS})"
+            )
+        if mode == "replace" and not raw_entries:
+            raise ValueError("Refusing to replace the speaker library with an empty file")
+
+        warnings: list[str] = []
+        model_tag = library.get("embeddingModel") or library.get("embedding_model")
+        if model_tag and model_tag != WESPEAKER_MODEL_TAG:
+            warnings.append(
+                f"Library was exported with embedding model {model_tag!r}, "
+                f"this Olive uses {WESPEAKER_MODEL_TAG!r}. "
+                "Voiceprints still import as-is, but identification accuracy may differ."
+            )
+
+        # Validate the whole file before touching the database.
+        validated: list[dict[str, Any]] = []
+        folded: dict[str, dict[str, Any]] = {}
+        for index, entry in enumerate(raw_entries):
+            if not isinstance(entry, dict):
+                raise ValueError(f"Speaker entry #{index} must be an object")
+            name = str(entry.get("name") or "").strip()
+            if not name:
+                raise ValueError(f"Speaker entry #{index} is missing a name")
+            if _is_placeholder_name(name):
+                raise ValueError(f'"{name}" is a generic speaker label, not a person name')
+            raw_vectors = entry.get("voiceprints")
+            if not isinstance(raw_vectors, list) or not raw_vectors:
+                raise ValueError(f'Speaker "{name}" has no voiceprints to import')
+            vectors = [
+                _validate_library_vector(v, speaker_name=name, index=i) for i, v in enumerate(raw_vectors)
+            ]
+            if len(vectors) > MAX_ENROLLMENT_CLIPS:
+                warnings.append(
+                    f'Speaker "{name}" carries {len(vectors)} voiceprints '
+                    f"(max {MAX_ENROLLMENT_CLIPS}); keeping 8"
+                )
+                vectors = vectors[:MAX_ENROLLMENT_CLIPS]
+            norm = name.lower()
+            if norm in folded:
+                folded[norm]["voiceprints"].extend(vectors)
+                warnings.append(f'Library lists "{name}" more than once; merged into one speaker')
+                continue
+            item = {
+                "id": entry.get("id") if isinstance(entry.get("id"), str) else None,
+                "name": name,
+                "enrolledAt": entry.get("enrolledAt") or entry.get("enrolled_at"),
+                "createdAt": entry.get("createdAt") or entry.get("created_at"),
+                "voiceprints": vectors,
+            }
+            folded[norm] = item
+            validated.append(item)
+
+        now = self.now()
+        with self.db.connect() as conn:
+            existing_rows = conn.execute(text("SELECT * FROM speakers")).mappings().all()
+        by_id = {str(r["id"]): r for r in existing_rows}
+        by_name = {str(r["name"] or "").strip().lower(): r for r in existing_rows}
+        claimed_ids = set(by_id)
+
+        removed_count = 0
+        relink: dict[str, list[str]] = {}
+        if mode == "replace":
+            with self.db.connect() as conn:
+                links = (
+                    conn.execute(text("SELECT meeting_id, speaker_id FROM meeting_speakers")).mappings().all()
+                )
+            id_to_name = {str(r["id"]): str(r["name"] or "").strip().lower() for r in existing_rows}
+            for link in links:
+                relink.setdefault(id_to_name.get(str(link["speaker_id"]), ""), []).append(
+                    str(link["meeting_id"])
+                )
+            removed_count = len(existing_rows)
+            if not dry_run:
+                orphan_clips: list[str] = []
+                for r in existing_rows:
+                    orphan_clips.extend(list(_parse_json_field(r.get("enrollment_clip_paths"), [])))
+                with self.db.begin() as conn:
+                    conn.execute(text("DELETE FROM meeting_speakers"))
+                    conn.execute(text("DELETE FROM speakers"))
+                for rel in orphan_clips:
+                    try:
+                        (Path(self.config_dir) / rel).unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                by_id = {}
+                by_name = {}
+                claimed_ids = set()
+
+        ops: list[dict[str, Any]] = []
+        for item in validated:
+            norm = item["name"].lower()
+            target: Mapping[Any, Any] | None = None
+            if item["id"] and item["id"] in by_id:
+                row = by_id[item["id"]]
+                if str(row["name"] or "").strip().lower() == norm:
+                    target = row
+                else:
+                    warnings.append(
+                        f'Library id for "{item["name"]}" is already used by '
+                        f'"{row["name"]}" on this machine; importing as a new speaker'
+                    )
+            if target is None:
+                target = by_name.get(norm)
+            existing_vectors: list[list[float]] = []
+            if target is not None:
+                for raw in _parse_json_field(target.get("provider_ids"), {}).get("local") or []:
+                    try:
+                        parsed = json.loads(raw) if isinstance(raw, str) else raw
+                    except Exception:
+                        continue
+                    if isinstance(parsed, list) and len(parsed) == SPEAKER_LIBRARY_VECTOR_DIM:
+                        existing_vectors.append([float(v) for v in parsed])
+            known: list[list[float]] = [list(v) for v in existing_vectors]
+            accepted: list[list[float]] = []
+            skipped = 0
+            for vec in item["voiceprints"]:
+                best = max((cosine_similarity(vec, k) for k in known), default=-1.0)
+                if best >= LIBRARY_REDUNDANT_SIMILARITY:
+                    skipped += 1
+                else:
+                    accepted.append(vec)
+                    known.append(vec)
+            combined = existing_vectors + accepted
+            if len(combined) > MAX_ENROLLMENT_CLIPS:
+                combined = [combined[0], *combined[-(MAX_ENROLLMENT_CLIPS - 1) :]]
+                kept = [v for v in accepted if any(v is c for c in combined)]
+                skipped += len(accepted) - len(kept)
+                accepted = kept
+            if target is None:
+                action = "created"
+                resolved_id = item["id"] if item["id"] and item["id"] not in claimed_ids else None
+                if item["id"] and item["id"] in claimed_ids:
+                    warnings.append(f'Library id for "{item["name"]}" collides; importing as a new speaker')
+                resolved_id = resolved_id or str(uuid.uuid4())
+                claimed_ids.add(resolved_id)
+            else:
+                action = "merged" if accepted else "skipped"
+                resolved_id = str(target["id"])
+            ops.append(
+                {
+                    "item": item,
+                    "target": target,
+                    "action": action,
+                    "resolved_id": resolved_id,
+                    "combined": combined,
+                    "accepted": accepted,
+                    "skipped": skipped,
+                }
+            )
+
+        stats = {
+            "speakersImported": 0,
+            "created": 0,
+            "merged": 0,
+            "skipped": 0,
+            "vectorsImported": 0,
+            "vectorsSkippedRedundant": 0,
+        }
+        plan: list[dict[str, Any]] = []
+        affected_ids: list[str] = []
+        for op in ops:
+            if op["action"] == "created":
+                stats["created"] += 1
+                stats["speakersImported"] += 1
+            elif op["action"] == "merged":
+                stats["merged"] += 1
+                stats["speakersImported"] += 1
+            else:
+                stats["skipped"] += 1
+            stats["vectorsImported"] += len(op["accepted"])
+            stats["vectorsSkippedRedundant"] += op["skipped"]
+            affected_ids.append(op["resolved_id"])
+            if dry_run:
+                plan.append(
+                    {
+                        "name": op["item"]["name"],
+                        "action": op["action"],
+                        "speakerId": op["resolved_id"],
+                        "vectorsNew": len(op["accepted"]),
+                        "vectorsTotal": len(op["combined"]),
+                        "reason": (
+                            "All voiceprints already present on this machine"
+                            if op["action"] == "skipped"
+                            else None
+                        ),
+                    }
+                )
+
+        if mode == "replace":
+            if dry_run:
+                preserved = sum(len(relink.get(item["name"].lower(), [])) for item in validated)
+                warnings.append(
+                    f"Replace mode would remove {removed_count} existing speaker(s); "
+                    f"{preserved} meeting attribution(s) would carry over by speaker name."
+                )
+            elif removed_count:
+                warnings.append(f"Replace mode removed {removed_count} existing speaker(s).")
+        if stats["vectorsImported"] > 0:
+            warnings.append(
+                "Imported voiceprints carry no enrollment audio on this machine — "
+                "they identify speakers immediately, but cannot be rebuilt from audio "
+                "if the embedding model changes."
+            )
+
+        speakers_out: list[dict[str, Any]] = []
+        if not dry_run:
+            with self.db.begin() as conn:
+                for op in ops:
+                    item = op["item"]
+                    if op["target"] is None:
+                        conn.execute(
+                            text(
+                                """
+                                INSERT INTO speakers (
+                                  id, name, provider_ids, enrolled_at,
+                                  enrollment_clip_paths, created_at
+                                ) VALUES (:id, :name, :pids, :eat, '[]', :now)
+                                """
+                            ),
+                            {
+                                "id": op["resolved_id"],
+                                "name": item["name"],
+                                "pids": json.dumps({"local": [json.dumps(v) for v in op["combined"]]}),
+                                "eat": item["enrolledAt"] or now,
+                                "now": item["createdAt"] or now,
+                            },
+                        )
+                    else:
+                        pids = _parse_json_field(op["target"].get("provider_ids"), {})
+                        pids["local"] = [json.dumps(v) for v in op["combined"]]
+                        eat = op["target"].get("enrolled_at") or item["enrolledAt"] or now
+                        conn.execute(
+                            text(
+                                """
+                                UPDATE speakers
+                                SET provider_ids = :pids, enrolled_at = :eat
+                                WHERE id = :id
+                                """
+                            ),
+                            {"pids": json.dumps(pids), "eat": eat, "id": op["resolved_id"]},
+                        )
+                if mode == "replace" and relink:
+                    name_rows = conn.execute(text("SELECT id, name FROM speakers")).mappings().all()
+                    name_to_id = {str(r["name"] or "").strip().lower(): str(r["id"]) for r in name_rows}
+                    restored = 0
+                    for norm_name, mids in relink.items():
+                        sid = name_to_id.get(norm_name)
+                        if not sid:
+                            continue
+                        for mid in mids:
+                            conn.execute(
+                                text(
+                                    """
+                                    INSERT INTO meeting_speakers (meeting_id, speaker_id, evidence_artifact_id)
+                                    VALUES (:mid, :sid, NULL)
+                                    ON CONFLICT(meeting_id, speaker_id) DO NOTHING
+                                    """
+                                ),
+                                {"mid": mid, "sid": sid},
+                            )
+                            restored += 1
+                    if restored:
+                        warnings.append(f"Preserved {restored} meeting attribution(s) by speaker name.")
+            with self.db.connect() as conn:
+                for aid in dict.fromkeys(affected_ids):
+                    row = (
+                        conn.execute(text("SELECT * FROM speakers WHERE id = :id"), {"id": aid})
+                        .mappings()
+                        .first()
+                    )
+                    if row:
+                        speakers_out.append(_to_speaker_dict(row))
+
+        return SpeakerLibraryImportResult(
+            mode=mode,  # type: ignore[arg-type]
+            dryRun=dry_run,
+            stats=stats,  # type: ignore[arg-type]
+            warnings=warnings,
+            speakers=speakers_out,  # type: ignore[arg-type]
+            plan=plan if dry_run else None,  # type: ignore[arg-type]
+        ).model_dump()
+
+    importSpeakerLibrary = import_speaker_library
 
     def sync_meeting_speakers_and_transcripts_sync(self) -> dict[str, int]:
         if not self.meetings_dir:

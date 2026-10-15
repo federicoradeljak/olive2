@@ -188,6 +188,54 @@ class MeetingSpeaker(CamelModel):
     evidenceArtifactId: str | None = None
 
 
+class SpeakerLibrarySpeaker(CamelModel):
+    """One person in a portable speaker-library file (vectors only, no clips)."""
+
+    id: str | None = None
+    name: str
+    enrolledAt: int | None = None
+    createdAt: int | None = None
+    voiceprints: list[list[float]] = Field(default_factory=list)
+
+
+class SpeakerLibrary(CamelModel):
+    """Portable speaker-library export: voiceprint vectors + metadata, no audio."""
+
+    version: str = "1.0"
+    createdAt: int
+    embeddingModel: str | None = None
+    speakers: list[SpeakerLibrarySpeaker] = Field(default_factory=list)
+
+
+class SpeakerLibraryPlanItem(CamelModel):
+    """Preview of what importing one library speaker would do (dryRun)."""
+
+    name: str
+    action: Literal["created", "merged", "skipped"]
+    speakerId: str | None = None
+    vectorsNew: int = 0
+    vectorsTotal: int = 0
+    reason: str | None = None
+
+
+class SpeakerLibraryImportStats(CamelModel):
+    speakersImported: int = 0
+    created: int = 0
+    merged: int = 0
+    skipped: int = 0
+    vectorsImported: int = 0
+    vectorsSkippedRedundant: int = 0
+
+
+class SpeakerLibraryImportResult(CamelModel):
+    mode: Literal["merge", "replace"] = "merge"
+    dryRun: bool = False
+    stats: SpeakerLibraryImportStats = Field(default_factory=SpeakerLibraryImportStats)
+    warnings: list[str] = Field(default_factory=list)
+    speakers: list[Speaker] = Field(default_factory=list)
+    plan: list[SpeakerLibraryPlanItem] | None = None
+
+
 class StageRunRow(CamelModel):
     id: str
     meeting_id: str

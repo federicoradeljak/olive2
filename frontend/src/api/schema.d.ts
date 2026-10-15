@@ -389,6 +389,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/speakers/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Speakers Export Route */
+        get: operations["get_speakers_export_route_api_speakers_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/speakers/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Speakers Import Route */
+        post: operations["post_speakers_import_route_api_speakers_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/speakers": {
         parameters: {
             query?: never;
@@ -2075,6 +2109,141 @@ export interface components {
             manifest: components["schemas"]["BackupManifest"] | null;
             stats: components["schemas"]["RestoreStats"];
         };
+        /**
+         * SpeakerLibrarySpeaker
+         * @description One person in a portable speaker-library file (vectors only, no clips).
+         */
+        SpeakerLibrarySpeaker: {
+            /**
+             * Id
+             * @default null
+             */
+            id: string | null;
+            /** Name */
+            name: string;
+            /**
+             * Enrolledat
+             * @default null
+             */
+            enrolledAt: number | null;
+            /**
+             * Createdat
+             * @default null
+             */
+            createdAt: number | null;
+            /** Voiceprints */
+            voiceprints?: number[][];
+        };
+        /**
+         * SpeakerLibrary
+         * @description Portable speaker-library export: voiceprint vectors + metadata, no audio.
+         */
+        SpeakerLibrary: {
+            /**
+             * Version
+             * @default 1.0
+             */
+            version: string;
+            /** Createdat */
+            createdAt: number;
+            /**
+             * Embeddingmodel
+             * @default null
+             */
+            embeddingModel: string | null;
+            /** Speakers */
+            speakers?: components["schemas"]["SpeakerLibrarySpeaker"][];
+        };
+        /**
+         * SpeakerLibraryPlanItem
+         * @description Preview of what importing one library speaker would do (dryRun).
+         */
+        SpeakerLibraryPlanItem: {
+            /** Name */
+            name: string;
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "created" | "merged" | "skipped";
+            /**
+             * Speakerid
+             * @default null
+             */
+            speakerId: string | null;
+            /**
+             * Vectorsnew
+             * @default 0
+             */
+            vectorsNew: number;
+            /**
+             * Vectorstotal
+             * @default 0
+             */
+            vectorsTotal: number;
+            /**
+             * Reason
+             * @default null
+             */
+            reason: string | null;
+        };
+        /** SpeakerLibraryImportStats */
+        SpeakerLibraryImportStats: {
+            /**
+             * Speakersimported
+             * @default 0
+             */
+            speakersImported: number;
+            /**
+             * Created
+             * @default 0
+             */
+            created: number;
+            /**
+             * Merged
+             * @default 0
+             */
+            merged: number;
+            /**
+             * Skipped
+             * @default 0
+             */
+            skipped: number;
+            /**
+             * Vectorsimported
+             * @default 0
+             */
+            vectorsImported: number;
+            /**
+             * Vectorsskippedredundant
+             * @default 0
+             */
+            vectorsSkippedRedundant: number;
+        };
+        /** SpeakerLibraryImportResult */
+        SpeakerLibraryImportResult: {
+            /**
+             * Mode
+             * @default merge
+             * @enum {string}
+             */
+            mode: "merge" | "replace";
+            /**
+             * Dryrun
+             * @default false
+             */
+            dryRun: boolean;
+            stats?: components["schemas"]["SpeakerLibraryImportStats"];
+            /** Warnings */
+            warnings?: string[];
+            /** Speakers */
+            speakers?: components["schemas"]["Speaker"][];
+            /**
+             * Plan
+             * @default null
+             */
+            plan: components["schemas"]["SpeakerLibraryPlanItem"][] | null;
+        };
         /** LogItem */
         LogItem: {
             /** Id */
@@ -2993,6 +3162,46 @@ export interface operations {
         };
     };
     post_speechmatics_webhook_route_api_webhooks_speechmatics_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_speakers_export_route_api_speakers_export_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    post_speakers_import_route_api_speakers_import_post: {
         parameters: {
             query?: never;
             header?: never;

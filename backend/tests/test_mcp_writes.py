@@ -114,6 +114,7 @@ def test_write_tools_hidden_by_default(tmp_path: Path) -> None:
     assert "delete_speaker" not in names
     assert "set_meeting_tags" not in names
     assert "update_meeting_title" not in names
+    assert "import_speaker_library" not in names
 
     res = _call_tool(client, "update_speaker", {"speakerId": "x", "newName": "Y"})
     assert res.get("isError") is True
@@ -139,6 +140,7 @@ def test_write_tools_listed_when_enabled(tmp_path: Path) -> None:
         "delete_speaker",
         "set_meeting_tags",
         "update_meeting_title",
+        "import_speaker_library",
     ]:
         assert expected in names
     handle.engine.dispose()

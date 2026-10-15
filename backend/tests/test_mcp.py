@@ -71,6 +71,7 @@ def test_mcp_is_available_without_token_on_loopback_and_lists_tools(tmp_path: Pa
         "get_action_items",
         "list_speakers",
         "get_speaker_profile",
+        "export_speaker_library",
     ]
     handle.engine.dispose()
 

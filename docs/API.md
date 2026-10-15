@@ -117,7 +117,7 @@ Returns distinct meeting tags with meeting counts, sorted alphabetically:
 
 ## `/mcp`
 
-Provides Olive's Model Context Protocol endpoint on the same port as the HTTP API. Read tools (`list_meetings`, `list_tags`, `get_meeting`, `search_transcripts`, `get_action_items`, `list_speakers`, `get_speaker_profile`) are always available. Write tools are off by default and are listed and callable only when the server runs with `OLIVE_MCP_WRITE=1`: speaker edits (`update_speaker`, `merge_speakers`, `delete_speaker`), tags (`set_meeting_tags`, single or bulk via `meetingIds` up to 500), titles and lifecycle (`update_meeting_title`, `update_meeting_start_time`, `auto_title_meeting`, `summarize_meeting`, `delete_meeting`), and transcription (`transcribe_meeting`, `bulk_transcribe` up to 2000, `cancel_transcription`, `retry_meeting_audio`, `reidentify_speakers`).
+Provides Olive's Model Context Protocol endpoint on the same port as the HTTP API. Read tools (`list_meetings`, `list_tags`, `get_meeting`, `search_transcripts`, `get_action_items`, `list_speakers`, `get_speaker_profile`, `export_speaker_library`) are always available. Write tools are off by default and are listed and callable only when the server runs with `OLIVE_MCP_WRITE=1`: speaker edits (`update_speaker`, `merge_speakers`, `delete_speaker`), tags (`set_meeting_tags`, single or bulk via `meetingIds` up to 500), titles and lifecycle (`update_meeting_title`, `update_meeting_start_time`, `auto_title_meeting`, `summarize_meeting`, `delete_meeting`), and transcription (`transcribe_meeting`, `bulk_transcribe` up to 2000, `cancel_transcription`, `retry_meeting_audio`, `reidentify_speakers`).
 
 `list_meetings` accepts `search` plus the meeting filters: `tags` (exact,
 AND-combined), `source`, `status`, `speakerId`, `hasSummary`,
@@ -157,6 +157,7 @@ Every write tool accepts `dryRun: true` to preview without mutating, and an `exp
 - `update_speaker { speakerId, newName, expectedName?, dryRun? }` — rename; aborts unless the live name matches `expectedName`.
 - `merge_speakers { sourceSpeakerId, targetSpeakerId, expectedSourceName?, expectedTargetName?, dryRun? }` — moves meeting links, voiceprints, and clips into the target, then deletes the source; `dryRun` lists the meetings that would move.
 - `delete_speaker { speakerId, expectedName?, dryRun? }` — deletes the speaker and its meeting links; `dryRun` lists affected meetings.
+- `import_speaker_library { library, mode?, dryRun? }` — imports a library from `export_speaker_library`; `mode` is `merge` (default) or `replace` (wipes local first, meeting attributions carry over by name); `dryRun` returns the per-speaker plan without mutating. Like other bulk tools it has no `expected*` guard.
 - `set_meeting_tags { meetingId?, meetingIds?, tags, expectedTags?, dryRun? }` — replaces tags (single, or bulk up to 500 via `meetingIds`); single aborts unless live tags match `expectedTags` (order-insensitive). For bulk tagging, scope with `list_meetings` or pass `meetingIds` directly.
 - `update_meeting_title { meetingId, newTitle, expectedTitle?, dryRun? }` — renames the title and its on-disk folder; aborts unless the live title matches `expectedTitle`.
 - `transcribe_meeting { meetingId, provider?, language?, force?, dryRun? }` — queues (re)transcription async, returns `jobId`; `dryRun` validates the meeting/recording without queueing.
@@ -243,6 +244,37 @@ Submits audio to Speechmatics with `get_speakers: true`, extracts voiceprint ide
 ## `GET /api/speakers/:id`
 
 Returns speaker profile, enrolled audio clips, and list of associated meetings.
+
+## `GET /api/speakers/export?speakerIds&download`
+
+Exports the enrolled speaker library as a portable JSON object (voiceprint vectors + metadata, no audio). Copy the returned `library` to another Olive instance to share voiceprints without re-enrolling. Optional `speakerIds` (comma-separated) exports a subset; `download=1` adds a `Content-Disposition: attachment` header.
+
+```json
+{
+  "library": {
+    "version": "1.0",
+    "createdAt": 1720000000000,
+    "embeddingModel": "Wespeaker/…",
+    "speakers": [
+      { "id": "uuid", "name": "Matt", "enrolledAt": 1720000000000, "createdAt": 1720000000000, "voiceprints": [[0.01, …]] }
+    ]
+  }
+}
+```
+
+## `POST /api/speakers/import`
+
+Imports a portable speaker library from `GET /api/speakers/export`. Accepts either `{ "library", "mode", "dryRun" }` or the library object itself as the body. `mode` is `merge` (default: union vectors into same-name speakers, create the rest) or `replace` (wipe the local library first; meeting attributions carry over by speaker name). `dryRun: true` previews via `plan` without writing. Meeting links are never imported — meeting IDs differ per instance.
+
+```json
+{
+  "mode": "merge",
+  "dryRun": false,
+  "stats": { "speakersImported": 2, "created": 1, "merged": 1, "skipped": 0, "vectorsImported": 3, "vectorsSkippedRedundant": 1 },
+  "warnings": ["…"],
+  "speakers": [ … ]
+}
+```
 
 ## `POST /api/meetings/:id/speakers/link`
 

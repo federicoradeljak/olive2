@@ -248,6 +248,25 @@ MCP_TOOLS_SPEC: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "name": "export_speaker_library",
+        "description": (
+            "Export the enrolled speaker library as a portable JSON object "
+            "(voiceprint vectors + metadata, no audio). Copy the returned "
+            "`library` value to another Olive instance via import_speaker_library "
+            "or POST /api/speakers/import to share voiceprints without re-enrolling."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "speakerIds": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional subset of speaker IDs (default: all enrolled speakers)",
+                },
+            },
+        },
+    },
 ]
 
 MCP_WRITE_TOOLS_SPEC: list[dict[str, Any]] = [
@@ -621,6 +640,37 @@ MCP_WRITE_TOOLS_SPEC: list[dict[str, Any]] = [
                     "type": "boolean",
                     "default": False,
                     "description": "When true, validate without queueing",
+                },
+            },
+        },
+    },
+    {
+        "name": "import_speaker_library",
+        "description": (
+            "Import a portable speaker library produced by export_speaker_library "
+            "(voiceprint vectors, no audio). Requires OLIVE_MCP_WRITE=1. "
+            "mode='merge' unions vectors into same-name speakers and creates the rest; "
+            "mode='replace' wipes the local library first (meeting attributions carry "
+            "over by speaker name). Pass dryRun=true to preview without mutating."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["library"],
+            "properties": {
+                "library": {
+                    "type": "object",
+                    "description": "Speaker library object from export_speaker_library",
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["merge", "replace"],
+                    "default": "merge",
+                    "description": "merge unions into the local library; replace wipes it first",
+                },
+                "dryRun": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "When true, return the plan without mutating",
                 },
             },
         },
@@ -1183,6 +1233,20 @@ async def execute_mcp_tool(
                 return _error_result("Speaker not found")
             return _text_result(spk)
 
+        if tool_name == "export_speaker_library":
+            raw_ids = arguments.get("speakerIds")
+            exp_fn = getattr(speaker_service, "export_speaker_library", None) or getattr(
+                speaker_service, "exportSpeakerLibrary", None
+            )
+            if not callable(exp_fn):
+                return _error_result("Speaker service unavailable")
+            exp_opts: dict[str, Any] = {}
+            if isinstance(raw_ids, list):
+                exp_opts["speakerIds"] = [str(v) for v in raw_ids if isinstance(v, str) and v.strip()]
+            exp_res: Any = exp_fn(exp_opts)
+            library = await exp_res if hasattr(exp_res, "__await__") else exp_res
+            return _text_result({"library": library})
+
         if tool_name == "update_speaker":
             sid = str(arguments.get("speakerId") or "").strip()
             new_name = str(arguments.get("newName") or "").strip()
@@ -1379,6 +1443,26 @@ async def execute_mcp_tool(
                     "releasedMeetingIds": mids,
                 }
             )
+
+        if tool_name == "import_speaker_library":
+            imp_library = arguments.get("library")
+            imp_mode = str(arguments.get("mode") or "merge")
+            imp_dry = bool(arguments.get("dryRun"))
+            if not isinstance(imp_library, dict):
+                return _error_result("library must be the speaker library object from export_speaker_library")
+            if imp_mode not in ("merge", "replace"):
+                return _error_result('mode must be "merge" or "replace"')
+            imp_fn = getattr(speaker_service, "import_speaker_library", None) or getattr(
+                speaker_service, "importSpeakerLibrary", None
+            )
+            if not callable(imp_fn):
+                return _error_result("Speaker service unavailable")
+            try:
+                imp_res: Any = imp_fn({"library": imp_library, "mode": imp_mode, "dryRun": imp_dry})
+                imported = await imp_res if hasattr(imp_res, "__await__") else imp_res
+            except ValueError as exc:
+                return _error_result(str(exc))
+            return _text_result({"operation": "import_speaker_library", **imported})
 
         if tool_name == "set_meeting_tags":
             raw_single_id = arguments.get("meetingId")

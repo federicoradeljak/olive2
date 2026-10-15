@@ -1429,6 +1429,56 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             return JSONResponse({"error": str(exc)}, status_code=500)
 
     # Speakers API
+    # NOTE: /api/speakers/export must be registered before /api/speakers/{speaker_id}
+    # or FastAPI routes "export" as a speaker id.
+    @app.get("/api/speakers/export")
+    async def get_speakers_export_route(request: Request) -> JSONResponse:
+        q = request.query_params
+        raw_ids = (q.get("speakerIds") or "").strip()
+        speaker_ids = [s.strip() for s in raw_ids.split(",") if s.strip()] or None
+        download = (q.get("download") or "").strip().lower() in ("1", "true", "yes")
+        try:
+            library = await _call_maybe_async(
+                get_speaker_service(),
+                ("export_speaker_library", "exportSpeakerLibrary"),
+                {"speakerIds": speaker_ids} if speaker_ids else {},
+            )
+            if not download:
+                return JSONResponse({"library": library})
+            filename = q.get("filename") or "olive-voiceprints.json"
+            return JSONResponse(
+                {"library": library},
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+    @app.post("/api/speakers/import")
+    async def post_speakers_import_route(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Valid JSON body required"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "Valid JSON body required"}, status_code=400)
+        # Accept either { library, mode, dryRun } or the library object itself.
+        library = body.get("library") if isinstance(body.get("library"), dict) else body
+        try:
+            res = await _call_maybe_async(
+                get_speaker_service(),
+                ("import_speaker_library", "importSpeakerLibrary"),
+                {
+                    "library": library,
+                    "mode": body.get("mode") or "merge",
+                    "dryRun": body.get("dryRun") or False,
+                },
+            )
+            return JSONResponse(res)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
     @app.get("/api/speakers")
     async def get_speakers_route() -> JSONResponse:
         speakers = await _call_maybe_async(get_speaker_service(), ("list_speakers", "listSpeakers"))
@@ -2504,6 +2554,11 @@ def export_openapi_schema() -> dict[str, Any]:
         s.BackupInfo,
         s.RestoreStats,
         s.RestoreResult,
+        s.SpeakerLibrarySpeaker,
+        s.SpeakerLibrary,
+        s.SpeakerLibraryPlanItem,
+        s.SpeakerLibraryImportStats,
+        s.SpeakerLibraryImportResult,
         s.LogItem,
         s.LogPagination,
         s.LogListResponse,

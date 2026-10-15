@@ -802,6 +802,38 @@
         }
       }
     },
+    "/api/speakers/export": {
+      "get": {
+        "summary": "Get Speakers Export Route",
+        "operationId": "get_speakers_export_route_api_speakers_export_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/speakers/import": {
+      "post": {
+        "summary": "Post Speakers Import Route",
+        "operationId": "post_speakers_import_route_api_speakers_import_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/speakers": {
       "get": {
         "summary": "Get Speakers Route",
@@ -4229,6 +4261,250 @@
           "success"
         ],
         "title": "RestoreResult",
+        "type": "object"
+      },
+      "SpeakerLibrarySpeaker": {
+        "description": "One person in a portable speaker-library file (vectors only, no clips).",
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Id"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "enrolledAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Enrolledat"
+          },
+          "createdAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Createdat"
+          },
+          "voiceprints": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "title": "Voiceprints",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "SpeakerLibrarySpeaker",
+        "type": "object"
+      },
+      "SpeakerLibrary": {
+        "description": "Portable speaker-library export: voiceprint vectors + metadata, no audio.",
+        "properties": {
+          "version": {
+            "default": "1.0",
+            "title": "Version",
+            "type": "string"
+          },
+          "createdAt": {
+            "title": "Createdat",
+            "type": "integer"
+          },
+          "embeddingModel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Embeddingmodel"
+          },
+          "speakers": {
+            "items": {
+              "$ref": "#/components/schemas/SpeakerLibrarySpeaker"
+            },
+            "title": "Speakers",
+            "type": "array"
+          }
+        },
+        "required": [
+          "createdAt"
+        ],
+        "title": "SpeakerLibrary",
+        "type": "object"
+      },
+      "SpeakerLibraryPlanItem": {
+        "description": "Preview of what importing one library speaker would do (dryRun).",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "action": {
+            "enum": [
+              "created",
+              "merged",
+              "skipped"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "speakerId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Speakerid"
+          },
+          "vectorsNew": {
+            "default": 0,
+            "title": "Vectorsnew",
+            "type": "integer"
+          },
+          "vectorsTotal": {
+            "default": 0,
+            "title": "Vectorstotal",
+            "type": "integer"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "action",
+          "name"
+        ],
+        "title": "SpeakerLibraryPlanItem",
+        "type": "object"
+      },
+      "SpeakerLibraryImportStats": {
+        "properties": {
+          "speakersImported": {
+            "default": 0,
+            "title": "Speakersimported",
+            "type": "integer"
+          },
+          "created": {
+            "default": 0,
+            "title": "Created",
+            "type": "integer"
+          },
+          "merged": {
+            "default": 0,
+            "title": "Merged",
+            "type": "integer"
+          },
+          "skipped": {
+            "default": 0,
+            "title": "Skipped",
+            "type": "integer"
+          },
+          "vectorsImported": {
+            "default": 0,
+            "title": "Vectorsimported",
+            "type": "integer"
+          },
+          "vectorsSkippedRedundant": {
+            "default": 0,
+            "title": "Vectorsskippedredundant",
+            "type": "integer"
+          }
+        },
+        "title": "SpeakerLibraryImportStats",
+        "type": "object"
+      },
+      "SpeakerLibraryImportResult": {
+        "properties": {
+          "mode": {
+            "default": "merge",
+            "enum": [
+              "merge",
+              "replace"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "dryRun": {
+            "default": false,
+            "title": "Dryrun",
+            "type": "boolean"
+          },
+          "stats": {
+            "$ref": "#/components/schemas/SpeakerLibraryImportStats"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          },
+          "speakers": {
+            "items": {
+              "$ref": "#/components/schemas/Speaker"
+            },
+            "title": "Speakers",
+            "type": "array"
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/SpeakerLibraryPlanItem"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Plan"
+          }
+        },
+        "title": "SpeakerLibraryImportResult",
         "type": "object"
       },
       "LogItem": {
