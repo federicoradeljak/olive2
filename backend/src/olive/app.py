@@ -26,6 +26,7 @@ from .services.meetings import (
     get_meeting,
     list_meetings,
     parse_json_field,
+    update_meeting_start_time,
     update_meeting_tags,
     update_meeting_title,
 )
@@ -670,6 +671,30 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             if not updated:
                 return JSONResponse({"error": "Meeting not found"}, status_code=404)
             return JSONResponse({"meeting": updated.model_dump()})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+    @app.put("/api/meetings/{meeting_id}/start-time")
+    async def put_meeting_start_time_route(meeting_id: str, request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "JSON body required"}, status_code=400)
+
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "JSON body required"}, status_code=400)
+        raw = body.get("startTime", body.get("start_time"))
+        if not isinstance(raw, (int, float)) or isinstance(raw, bool):
+            return JSONResponse({"error": "startTime must be epoch milliseconds"}, status_code=400)
+        start_time = int(raw)
+
+        try:
+            updated = update_meeting_start_time(db, meeting_id, start_time, meetings_dir)
+            if not updated:
+                return JSONResponse({"error": "Meeting not found"}, status_code=404)
+            return JSONResponse({"meeting": updated.model_dump()})
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=500)
 

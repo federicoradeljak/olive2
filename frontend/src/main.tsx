@@ -91,6 +91,12 @@ function formatDate(timestamp: number): string {
   }).format(new Date(timestamp));
 }
 
+function toDatetimeLocalValue(timestamp: number): string {
+  const d = new Date(timestamp);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 function formatDuration(ms: number): string {
   const seconds = Math.floor((ms / 1000) % 60);
   const minutes = Math.floor((ms / (1000 * 60)) % 60);
@@ -1640,6 +1646,9 @@ function MeetingDetailView({
   const [titleInput, setTitleInput] = useState("");
   const [savingTitle, setSavingTitle] = useState(false);
   const [autoTitling, setAutoTitling] = useState(false);
+  const [editingStartTime, setEditingStartTime] = useState(false);
+  const [startTimeInput, setStartTimeInput] = useState("");
+  const [savingStartTime, setSavingStartTime] = useState(false);
   const [newTagInput, setNewTagInput] = useState("");
   const [savingTags, setSavingTags] = useState(false);
   const [mobileSection, setMobileSection] = useState<"summary" | "transcript" | null>(null);
@@ -1674,6 +1683,50 @@ function MeetingDetailView({
       setError(err instanceof Error ? err.message : "Failed to rename meeting");
     } finally {
       setSavingTitle(false);
+    }
+  };
+
+  const startEditStartTime = () => {
+    if (!detail) return;
+    setStartTimeInput(toDatetimeLocalValue(detail.meeting.startTime));
+    setEditingStartTime(true);
+    setError(null);
+  };
+
+  const saveStartTime = async () => {
+    const ms = new Date(startTimeInput).getTime();
+    if (!startTimeInput || Number.isNaN(ms)) {
+      setError("Enter a valid meeting date and time");
+      return;
+    }
+
+    setSavingStartTime(true);
+    try {
+      const res = await fetch(`/api/meetings/${meetingId}/start-time`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ startTime: ms })
+      });
+      const data = (await res.json().catch(() => ({}))) as { error?: string; meeting?: MeetingListItem };
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (!data.meeting) throw new Error("Meeting time update returned no meeting");
+      setDetail((prev) =>
+        prev
+          ? {
+              ...prev,
+              meeting: {
+                ...prev.meeting,
+                startTime: data.meeting!.startTime,
+                endTime: data.meeting!.endTime
+              }
+            }
+          : prev
+      );
+      setEditingStartTime(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update meeting time");
+    } finally {
+      setSavingStartTime(false);
     }
   };
 
@@ -2312,7 +2365,56 @@ function MeetingDetailView({
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs sm:text-sm text-stone-400">
-                  <span>{formatDate(detail.meeting.startTime)}</span>
+                  {editingStartTime ? (
+                    <form
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void saveStartTime();
+                      }}
+                      className="flex flex-wrap items-center gap-2"
+                    >
+                      <input
+                        type="datetime-local"
+                        value={startTimeInput}
+                        onChange={(event) => setStartTimeInput(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Escape") setEditingStartTime(false);
+                        }}
+                        aria-label="Meeting start time"
+                        autoFocus
+                        disabled={savingStartTime}
+                        className="rounded-md border border-lime-400/50 bg-stone-900 px-2 py-1 text-xs text-stone-100 focus:border-lime-400 focus:outline-none"
+                      />
+                      <button
+                        type="submit"
+                        disabled={savingStartTime}
+                        className="rounded-md bg-lime-400 px-2 py-1 text-xs font-semibold text-stone-950 transition hover:bg-lime-300 disabled:opacity-50"
+                      >
+                        {savingStartTime ? "Saving…" : "Save"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEditingStartTime(false)}
+                        disabled={savingStartTime}
+                        className="rounded-md border border-stone-700 px-2 py-1 text-xs text-stone-300 transition hover:border-stone-500 hover:text-stone-100 disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
+                    </form>
+                  ) : (
+                    <>
+                      <span>{formatDate(detail.meeting.startTime)}</span>
+                      <button
+                        type="button"
+                        onClick={startEditStartTime}
+                        className="rounded-md px-1 py-0.5 text-stone-500 transition hover:bg-stone-800 hover:text-lime-300"
+                        aria-label="Change meeting time"
+                        title="Change meeting time"
+                      >
+                        ✎
+                      </button>
+                    </>
+                  )}
                   <span>•</span>
                   <span>{formatDuration(detail.meeting.endTime - detail.meeting.startTime)}</span>
                   <span>•</span>

@@ -324,6 +324,98 @@ def update_meeting_title(
     return to_meeting(updated_row) if updated_row else None
 
 
+def update_meeting_start_time(
+    db: Engine,
+    meeting_id: str,
+    start_time_ms: int,
+    meetings_dir: str | None = None,
+) -> MeetingListItem | None:
+    """Shift a meeting's start time, preserving its duration.
+
+    The on-disk folder name embeds the UTC date stamp, so the folder is
+    moved atomically just like a title rename (rolled back if the DB
+    update fails). ``end_time`` shifts by the same delta as ``start_time``.
+    """
+    if not isinstance(start_time_ms, int) or isinstance(start_time_ms, bool):
+        try:
+            start_time_ms = int(start_time_ms)  # type: ignore[arg-type]
+        except (TypeError, ValueError) as exc:
+            raise ValueError("startTime must be epoch milliseconds") from exc
+    if start_time_ms < 0:
+        raise ValueError("startTime must be epoch milliseconds")
+
+    with db.connect() as conn:
+        meeting = (
+            conn.execute(
+                text("SELECT * FROM meetings WHERE id = :id"),
+                {"id": meeting_id},
+            )
+            .mappings()
+            .first()
+        )
+
+    if not meeting:
+        return None
+    if int(meeting["start_time"]) == start_time_ms:
+        return to_meeting(meeting)
+
+    duration_ms = int(meeting["end_time"]) - int(meeting["start_time"])
+    new_end = start_time_ms + duration_ms
+
+    old_folder = (
+        Path(meeting_paths(meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]).folder)
+        if meetings_dir
+        else None
+    )
+    new_folder = (
+        Path(meeting_paths(meetings_dir, start_time_ms, meeting["title"], meeting["id"]).folder)
+        if meetings_dir
+        else None
+    )
+    moved_folder = bool(old_folder and new_folder and old_folder != new_folder and old_folder.exists())
+
+    if moved_folder and old_folder and new_folder:
+        if new_folder.exists():
+            raise RuntimeError("Meeting folder already exists")
+        old_folder.rename(new_folder)
+
+    try:
+        now = int(time.time() * 1000)
+        with db.begin() as conn:
+            res = conn.execute(
+                text(
+                    "UPDATE meetings SET start_time = :start, end_time = :end, updated_at = :now "
+                    "WHERE id = :id AND start_time = :old_start"
+                ),
+                {
+                    "start": start_time_ms,
+                    "end": new_end,
+                    "now": now,
+                    "id": meeting_id,
+                    "old_start": int(meeting["start_time"]),
+                },
+            )
+            if res.rowcount != 1:
+                raise RuntimeError("Meeting was changed while its time was being updated")
+            updated_row = (
+                conn.execute(
+                    text("SELECT * FROM meetings WHERE id = :id"),
+                    {"id": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
+    except Exception:
+        if moved_folder and old_folder and new_folder and new_folder.exists():
+            try:
+                new_folder.rename(old_folder)
+            except Exception:
+                pass
+        raise
+
+    return to_meeting(updated_row) if updated_row else None
+
+
 def get_meeting(
     db: Engine,
     meeting_id: str,

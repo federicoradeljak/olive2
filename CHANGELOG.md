@@ -29,6 +29,10 @@ Olive is currently pre-1.0 (`0.2.0`); everything below shipped as part of the
   "This transcript only" alongside "Save to People", so one-off voices
   (e.g. an interview guest) can be relabeled in that meeting without
   creating a People entry, linking the meeting, or learning a voiceprint.
+- **Editable meeting time** — the meeting date on the detail page can now
+  be changed via an edit button next to it. The duration is preserved
+  (end time shifts with the start) and the on-disk folder is moved when
+  the UTC date stamp changes, so shifted imports can be corrected in place.
 
 ### Changed
 
@@ -50,6 +54,9 @@ Olive is currently pre-1.0 (`0.2.0`); everything below shipped as part of the
 - **Speaker re-identification works on Plaud transcripts** — re-running
   speaker matching no longer fails with "could not be parsed" on meetings
   whose transcript was already rewritten in Plaud's list format.
+- **Plaud timestamps parsed as UTC** — timezone-less `start_at` values from
+  Plaud are now interpreted as UTC instead of the server's local timezone,
+  so meetings no longer shift by the host UTC offset on ingest.
 
 ## [0.2.0] — 2026-10-14
 

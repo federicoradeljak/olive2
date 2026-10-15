@@ -12,7 +12,7 @@ import time
 import urllib.parse
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -70,6 +70,9 @@ def _parse_timestamp(value: str | int | float | None, fallback: int) -> int:
         try:
             iso = value.replace("Z", "+00:00")
             dt = datetime.fromisoformat(iso)
+            if dt.tzinfo is None:
+                # Plaud sends naive wall-clock timestamps that are already UTC.
+                dt = dt.replace(tzinfo=UTC)
             return int(round(dt.timestamp() * 1000))
         except Exception:
             pass
