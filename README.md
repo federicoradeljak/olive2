@@ -271,6 +271,9 @@ Loopback clients can connect without a token. Set `OLIVE_MCP_TOKEN` (or `OLIVE_I
 ## Development
 
 ```bash
+# Install tooling and git hooks (lefthook, managed via mise)
+mise install && lefthook install
+
 # Start backend with live reload
 cd backend && uv run uvicorn olive.main:app --reload --port 4471
 

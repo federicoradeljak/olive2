@@ -1,5 +1,6 @@
 [tools]
 "github:fatedier/frp" = "latest"
+lefthook = "latest"
 python = "3.12"
 node = "26"
 pnpm = "12"

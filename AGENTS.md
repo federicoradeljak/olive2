@@ -61,6 +61,10 @@ Olive is a two-part repository:
   - `python3 scripts/dev_config.py frp_url --hostname`
   - `python3 scripts/dev_config.py frp_url --file`
 
+## Git hooks
+
+Git hooks are managed with [lefthook](https://lefthook.dev) (`lefthook.yml` at repo root, binary via `mise.toml`). Contributors enable them with `mise install && lefthook install`. Active pre-commit jobs: backend `ruff` + `basedpyright`, frontend `pnpm run typecheck`, OpenAPI schema/TS-type regen (drift is auto-staged via `git add` — `stage_fixed` alone doesn't stage previously-unstaged files) — all gated to staged files via `glob`. Pre-push runs backend `pytest` when backend files changed.
+
 ## Verification policy
 
 Run the cheapest check that covers the change — never all checks reflexively.

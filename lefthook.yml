@@ -1,0 +1,51 @@
+# Lefthook git-hooks config (https://lefthook.dev).
+#
+# Setup (lefthook binary is managed via mise):
+#   mise install && lefthook install
+#
+# Each job mirrors the equivalent CI check in .github/workflows/ci.yml,
+# gated to staged files via `glob`. Bypass hooks with
+# `git commit --no-verify` / `git push --no-verify`.
+
+pre-commit:
+  parallel: true
+  jobs:
+    # --- Backend ---
+    - run: cd backend && uv run ruff check src tests eval
+      glob:
+        - "backend/**/*.py"
+      fail_text: "ruff failed — run `cd backend && uv run ruff check src tests eval` for details (bypass with `git commit --no-verify`)"
+
+    - run: cd backend && uv run basedpyright
+      glob:
+        - "backend/**/*.py"
+      fail_text: "basedpyright failed — run `cd backend && uv run basedpyright` for details (bypass with `git commit --no-verify`)"
+
+    # --- Frontend ---
+    - run: cd frontend && pnpm run typecheck
+      glob:
+        - "frontend/**/*.ts"
+        - "frontend/**/*.tsx"
+      fail_text: "tsc failed — run `cd frontend && pnpm run typecheck` for details (bypass with `git commit --no-verify`)"
+
+    # Regenerate the OpenAPI schema + TS types from the backend schemas so
+    # they stay in sync; any drift is staged into the commit automatically.
+    - run: >
+        cd backend && uv run python -c "import json; from olive.app import export_openapi_schema;
+        open('openapi.json', 'w').write(json.dumps(export_openapi_schema(), indent=2) + '\n')" &&
+        cd ../frontend && pnpm run generate:api &&
+        cd .. && git add backend/openapi.json frontend/src/api/schema.d.ts
+      glob:
+        - "backend/src/olive/schemas.py"
+        - "backend/src/olive/app.py"
+        - "backend/openapi.json"
+        - "frontend/src/api/schema.d.ts"
+      stage_fixed: true
+
+pre-push:
+  parallel: true
+  jobs:
+    - run: cd backend && uv run pytest
+      glob:
+        - "backend/**"
+      fail_text: "pytest failed — run `cd backend && uv run pytest` for details (bypass with `git push --no-verify`)"
