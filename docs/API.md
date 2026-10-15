@@ -117,7 +117,7 @@ Returns distinct meeting tags with meeting counts, sorted alphabetically:
 
 ## `/mcp`
 
-Provides Olive's Model Context Protocol endpoint on the same port as the HTTP API. Read tools (`list_meetings`, `list_tags`, `get_meeting`, `search_transcripts`, `get_action_items`, `list_speakers`, `get_speaker_profile`, `export_speaker_library`) are always available. Write tools are off by default and are listed and callable only when the server runs with `OLIVE_MCP_WRITE=1`: speaker edits (`update_speaker`, `merge_speakers`, `delete_speaker`), tags (`set_meeting_tags`, single or bulk via `meetingIds` up to 500), titles and lifecycle (`update_meeting_title`, `update_meeting_start_time`, `auto_title_meeting`, `summarize_meeting`, `delete_meeting`), and transcription (`transcribe_meeting`, `bulk_transcribe` up to 2000, `cancel_transcription`, `retry_meeting_audio`, `reidentify_speakers`).
+Provides Olive's Model Context Protocol endpoint on the same port as the HTTP API. Read tools (`list_meetings`, `list_tags`, `get_meeting`, `search_transcripts`, `get_action_items`, `list_speakers`, `get_speaker_profile`, `export_speaker_library`, `list_templates`, `get_template`, `get_transcription_status`, `list_active_transcriptions`, `get_summary_status`, `plaud_status`) are always available. Write tools are off by default and are listed and callable only when the server runs with `OLIVE_MCP_WRITE=1`: speaker edits (`update_speaker`, `merge_speakers`, `delete_speaker`, `reassign_speaker`), tags (`set_meeting_tags`, single or bulk via `meetingIds` up to 500), titles and lifecycle (`update_meeting_title`, `update_meeting_start_time`, `auto_title_meeting`, `summarize_meeting`, `delete_summary`, `set_primary_summary`, `delete_meeting`), and transcription + Plaud (`transcribe_meeting`, `bulk_transcribe` up to 2000, `cancel_transcription`, `retry_meeting_audio`, `reidentify_speakers`, `plaud_sync_trigger`).
 
 `list_meetings` accepts `search` plus the meeting filters: `tags` (exact,
 AND-combined), `source`, `status`, `speakerId`, `hasSummary`,
@@ -167,6 +167,18 @@ Every write tool accepts `dryRun: true` to preview without mutating, and an `exp
 - `update_meeting_start_time { meetingId, newStartTime, expectedStartTime?, dryRun? }` — shifts start (duration preserved, folder moved on date change).
 - `auto_title_meeting { meetingId, provider?, model?, expectedTitle?, dryRun? }` — LLM title + persist; `dryRun` validates without calling the LLM.
 - `summarize_meeting { meetingId, templateId?, provider?, model?, dryRun? }` — queues summary generation, returns generation status.
+- `delete_summary { meetingId, summaryId, expectedIsPrimary?, dryRun? }` — deletes one summary artifact (file + DB row; deleting the primary promotes the newest remaining summary); `summaryId` is `summaries[].id` from `get_meeting` (`artifactId` accepted as an alias); aborts unless the live primary flag matches `expectedIsPrimary`.
+- `set_primary_summary { meetingId, summaryId, expectedPrimarySummaryId?, dryRun? }` — promotes a summary to primary; aborts unless the live primary matches `expectedPrimarySummaryId`.
+- `reassign_speaker { meetingId, fromLabel, toSpeakerName?/toSpeakerId?, adoptVoiceprint?, localOnly?, segmentIndex?, scope?, expectedFromLabel?, dryRun? }` — moves transcript segments labelled `fromLabel` to a target speaker (creates by name or resolves by id); `adoptVoiceprint` (default true) grows the library from the matched audio.
+- `plaud_sync_trigger { dryRun? }` — triggers a Plaud Cloud poll cycle (202-style, background job).
+
+Read helpers that mirror the REST polling/debug surface (always available, no `OLIVE_MCP_WRITE=1` needed):
+
+- `list_templates {}` / `get_template { templateId }` — discover summary prompt templates.
+- `get_transcription_status { meetingId }` — per-meeting transcription progress (`GET /api/meetings/{id}/transcribe/progress` without SSE).
+- `list_active_transcriptions {}` — all active transcriptions (`GET /api/transcriptions/active`).
+- `get_summary_status { meetingId }` — summary generation status (`GET /api/meetings/{id}/summarize/status`).
+- `plaud_status {}` — Plaud sync state (`GET /api/plaud/status`).
 
 Recommended agent flow: `dryRun` first (or read via `get_speaker_profile` / `get_meeting`), show the plan to the user, then apply with the `expected*` values from the plan so concurrent edits abort instead of clobbering.
 

@@ -114,6 +114,9 @@ def test_write_tools_hidden_by_default(tmp_path: Path) -> None:
     assert "delete_speaker" not in names
     assert "set_meeting_tags" not in names
     assert "update_meeting_title" not in names
+    assert "summarize_meeting" not in names
+    assert "delete_summary" not in names
+    assert "set_primary_summary" not in names
     assert "import_speaker_library" not in names
 
     res = _call_tool(client, "update_speaker", {"speakerId": "x", "newName": "Y"})
@@ -636,4 +639,408 @@ def test_update_start_time_auto_title_summarize(tmp_path: Path) -> None:
 
     sm = _parse_text(_call_tool(client, "summarize_meeting", {"meetingId": "m-st-1"}))
     assert sm["started"] is True
+    handle.engine.dispose()
+
+
+def _seed_summaries(engine, meetings_dir: str, meeting_id: str) -> None:
+    from olive.layout import meeting_paths as _meeting_paths
+
+    now = 1_700_000_000_000
+    with engine.connect() as conn:
+        row = (
+            conn.execute(text("SELECT title, start_time FROM meetings WHERE id = :id"), {"id": meeting_id})
+            .mappings()
+            .first()
+        )
+        assert row is not None
+    paths = _meeting_paths(meetings_dir, int(row["start_time"]), str(row["title"]), meeting_id)
+    summaries_dir = Path(paths.folder) / "summaries"
+    summaries_dir.mkdir(parents=True, exist_ok=True)
+    (summaries_dir / "s1.md").write_text("# First\n", encoding="utf-8")
+    (summaries_dir / "s2.md").write_text("# Second\n", encoding="utf-8")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO artifacts (
+                  id, meeting_id, recording_id, kind, provider, format, path, created_at
+                ) VALUES
+                  ('sum-1', :mid, NULL, 'summary', 'test', 'md', 'summaries/s1.md', :now),
+                  ('sum-2', :mid, NULL, 'summary', 'test', 'md', 'summaries/s2.md', :now2)
+                """
+            ),
+            {"mid": meeting_id, "now": now, "now2": now + 1000},
+        )
+        conn.execute(
+            text("UPDATE meetings SET primary_summary_artifact_id = 'sum-1' WHERE id = :id"),
+            {"id": meeting_id},
+        )
+
+
+def test_delete_and_set_primary_summary_flow(tmp_path: Path) -> None:
+    handle = create_db(":memory:")
+    meetings_dir = str(tmp_path / "meetings")
+    _seed_meeting(handle.engine, meetings_dir, "m-sum-1", "Summary fixture", [])
+    _seed_summaries(handle.engine, meetings_dir, "m-sum-1")
+    app = _write_app(tmp_path, handle.engine)
+    client = TestClient(app)
+
+    _, list_body = _mcp_request(client, "tools/list")
+    names = [t["name"] for t in list_body["result"]["tools"]]
+    assert "delete_summary" in names
+    assert "set_primary_summary" in names
+    assert "reassign_speaker" in names
+    assert "plaud_sync_trigger" in names
+
+    # set_primary dryRun + guard + apply
+    sp_plan = _parse_text(
+        _call_tool(
+            client,
+            "set_primary_summary",
+            {"meetingId": "m-sum-1", "summaryId": "sum-2", "dryRun": True},
+        )
+    )
+    assert sp_plan["dryRun"] is True
+    assert sp_plan["currentPrimarySummaryId"] == "sum-1"
+    assert sp_plan["wouldUpdate"] is True
+
+    sp_err = _call_tool(
+        client,
+        "set_primary_summary",
+        {
+            "meetingId": "m-sum-1",
+            "summaryId": "sum-2",
+            "expectedPrimarySummaryId": "stale",
+        },
+    )
+    assert sp_err.get("isError") is True
+    assert "Precondition failed" in sp_err["content"][0]["text"]
+
+    sp_applied = _parse_text(
+        _call_tool(
+            client,
+            "set_primary_summary",
+            {
+                "meetingId": "m-sum-1",
+                "summaryId": "sum-2",
+                "expectedPrimarySummaryId": "sum-1",
+            },
+        )
+    )
+    assert sp_applied["updated"] is True
+    assert sp_applied["previousPrimarySummaryId"] == "sum-1"
+    assert sp_applied["primarySummaryId"] == "sum-2"
+
+    sp_same = _parse_text(
+        _call_tool(client, "set_primary_summary", {"meetingId": "m-sum-1", "summaryId": "sum-2"})
+    )
+    assert sp_same["updated"] is False
+
+    # delete non-primary dryRun + guard + apply
+    del_plan = _parse_text(
+        _call_tool(
+            client,
+            "delete_summary",
+            {"meetingId": "m-sum-1", "summaryId": "sum-1", "dryRun": True},
+        )
+    )
+    assert del_plan["dryRun"] is True
+    assert del_plan["isPrimary"] is False
+    assert del_plan["remainingSummaryIds"] == ["sum-2"]
+    assert del_plan["nextPrimarySummaryId"] == "sum-2"
+
+    del_err = _call_tool(
+        client,
+        "delete_summary",
+        {"meetingId": "m-sum-1", "summaryId": "sum-1", "expectedIsPrimary": True},
+    )
+    assert del_err.get("isError") is True
+    assert "Precondition failed" in del_err["content"][0]["text"]
+
+    deleted = _parse_text(
+        _call_tool(
+            client,
+            "delete_summary",
+            {"meetingId": "m-sum-1", "summaryId": "sum-1", "expectedIsPrimary": False},
+        )
+    )
+    assert deleted["deleted"] is True
+    assert deleted["wasPrimary"] is False
+    assert deleted["primarySummaryId"] == "sum-2"
+    assert deleted["remainingSummaryIds"] == ["sum-2"]
+
+    # delete primary falls back to None when nothing remains
+    del_primary_plan = _parse_text(
+        _call_tool(
+            client,
+            "delete_summary",
+            {"meetingId": "m-sum-1", "summaryId": "sum-2", "dryRun": True},
+        )
+    )
+    assert del_primary_plan["isPrimary"] is True
+    assert del_primary_plan["nextPrimarySummaryId"] is None
+
+    del_primary = _parse_text(
+        _call_tool(client, "delete_summary", {"meetingId": "m-sum-1", "summaryId": "sum-2"})
+    )
+    assert del_primary["wasPrimary"] is True
+    assert del_primary["primarySummaryId"] is None
+    assert del_primary["remainingSummaryIds"] == []
+
+    missing = _call_tool(client, "delete_summary", {"meetingId": "m-sum-1", "summaryId": "sum-9"})
+    assert missing.get("isError") is True
+    assert "not found" in missing["content"][0]["text"].lower()
+
+    missing_primary = _call_tool(
+        client,
+        "set_primary_summary",
+        {"meetingId": "m-sum-1", "summaryId": "sum-9"},
+    )
+    assert missing_primary.get("isError") is True
+    handle.engine.dispose()
+
+
+def _seed_transcript_with_speakers(engine, meetings_dir: str, meeting_id: str) -> None:
+    from olive.layout import meeting_paths as _meeting_paths
+
+    with engine.connect() as conn:
+        row = (
+            conn.execute(text("SELECT title, start_time FROM meetings WHERE id = :id"), {"id": meeting_id})
+            .mappings()
+            .first()
+        )
+        assert row is not None
+    paths = _meeting_paths(meetings_dir, int(row["start_time"]), str(row["title"]), meeting_id)
+    (Path(paths.folder) / "transcripts").mkdir(parents=True, exist_ok=True)
+    transcript = {
+        "segments": [
+            {"speaker": "Speaker 1", "text": "Hello", "startMs": 0, "endMs": 1000},
+            {"speaker": "Speaker 2", "text": "Hi", "startMs": 1000, "endMs": 2000},
+            {"speaker": "Speaker 1", "text": "How are you?", "startMs": 2000, "endMs": 3000},
+        ]
+    }
+    (Path(paths.folder) / "transcripts/local.json").write_text(json.dumps(transcript), encoding="utf-8")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO artifacts (id, meeting_id, recording_id, kind, provider, format, path, created_at) "
+                "VALUES ('art-tr-1', :mid, NULL, 'transcript', 'local', 'json', 'transcripts/local.json', :now)"
+            ),
+            {"mid": meeting_id, "now": 1_700_000_000_000},
+        )
+        conn.execute(
+            text("UPDATE meetings SET primary_transcript_artifact_id='art-tr-1' WHERE id=:id"),
+            {"id": meeting_id},
+        )
+
+
+class _StubSpeakerService:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def reassign_meeting_speaker(self, opts: dict[str, Any]) -> dict[str, Any]:
+        self.calls.append(dict(opts))
+        return {
+            "updatedSegmentsCount": 2,
+            "extractedVoiceprintsCount": 0,
+            "localName": opts.get("toSpeakerName"),
+        }
+
+    async def get_speaker(self, speaker_id: str) -> Any:
+        return None
+
+    async def list_speakers(self) -> list[Any]:
+        return []
+
+
+class _StubTranscriptionWithProgress:
+    def get_transcription_progress(self, meeting_id: str) -> Any:
+        from olive.schemas import TranscriptionProgressUpdate
+
+        return TranscriptionProgressUpdate(stage="transcribing", percent=42, message="decoding")
+
+    def get_all_active_transcription_progress(self) -> dict[str, Any]:
+        from olive.schemas import TranscriptionProgressUpdate
+
+        return {"m-a": TranscriptionProgressUpdate(stage="transcribing", percent=10, message="hi")}
+
+
+class _StubSummaryWithStatus:
+    def get_summary_generation_status(self, meeting_id: str) -> Any:
+        from olive.schemas import SummaryGenerationStatus
+
+        return SummaryGenerationStatus(meetingId=meeting_id, stage="running", startedAt=1_700_000_000_000)
+
+
+class _StubTemplateService:
+    async def list_templates(self) -> list[Any]:
+        from olive.schemas import Template
+
+        return [
+            Template(
+                id="tpl-1",
+                name="Default",
+                description="test",
+                systemPrompt="sys",
+                userPrompt="{{transcript}}",
+                isDefault=True,
+                isBuiltin=True,
+                createdAt=1_700_000_000_000,
+                updatedAt=1_700_000_000_000,
+            )
+        ]
+
+    async def get_template(self, template_id: str) -> Any:
+        from olive.schemas import Template
+
+        if template_id != "tpl-1":
+            return None
+        return Template(
+            id="tpl-1",
+            name="Default",
+            description="test",
+            systemPrompt="sys",
+            userPrompt="{{transcript}}",
+            isDefault=True,
+            isBuiltin=True,
+            createdAt=1_700_000_000_000,
+            updatedAt=1_700_000_000_000,
+        )
+
+
+class _StubPlaudPoller:
+    async def get_status(self) -> dict[str, Any]:
+        return {"connected": True, "lastPollAt": 1_700_000_000_000, "pcsPending": 0}
+
+    def trigger_background(self) -> bool:
+        return True
+
+
+def test_read_tools_include_new_batch(tmp_path: Path) -> None:
+    handle = create_db(":memory:")
+    meetings_dir = str(tmp_path / "meetings")
+    _seed_meeting(handle.engine, meetings_dir, "m-r-1", "Read batch", [])
+    _seed_transcript_with_speakers(handle.engine, meetings_dir, "m-r-1")
+    app = create_app(
+        {
+            "db": handle.engine,
+            "meetingsDir": meetings_dir,
+            "transcriptionService": _StubTranscriptionWithProgress(),
+            "summaryService": _StubSummaryWithStatus(),
+            "templateService": _StubTemplateService(),
+            "plaudPoller": _StubPlaudPoller(),
+        }
+    )
+    client = TestClient(app)
+    _, body = _mcp_request(client, "tools/list")
+    names = [t["name"] for t in body["result"]["tools"]]
+    for expected in [
+        "list_templates",
+        "get_template",
+        "get_transcription_status",
+        "list_active_transcriptions",
+        "get_summary_status",
+        "plaud_status",
+    ]:
+        assert expected in names, f"missing read tool {expected}"
+
+    # Exercise each read tool
+    tpl_list = _parse_text(_call_tool(client, "list_templates", {}))
+    assert len(tpl_list["templates"]) == 1
+    tpl_one = _parse_text(_call_tool(client, "get_template", {"templateId": "tpl-1"}))
+    assert tpl_one["template"]["id"] == "tpl-1"
+    missing_tpl = _call_tool(client, "get_template", {"templateId": "nope"})
+    assert missing_tpl.get("isError") is True
+
+    trs = _parse_text(_call_tool(client, "get_transcription_status", {"meetingId": "m-r-1"}))
+    assert trs["progress"]["percent"] == 42
+    assert _call_tool(client, "get_transcription_status", {"meetingId": "missing"}).get("isError") is True
+
+    active = _parse_text(_call_tool(client, "list_active_transcriptions", {}))
+    assert "m-a" in active["active"]
+
+    summ = _parse_text(_call_tool(client, "get_summary_status", {"meetingId": "m-r-1"}))
+    assert summ["generating"] is True
+    assert summ["status"]["stage"] == "running"
+
+    plaud = _parse_text(_call_tool(client, "plaud_status", {}))
+    assert plaud["connected"] is True
+    handle.engine.dispose()
+
+
+def test_reassign_and_plaud_trigger_write_flow(tmp_path: Path) -> None:
+    handle = create_db(":memory:")
+    meetings_dir = str(tmp_path / "meetings")
+    _seed_meeting(handle.engine, meetings_dir, "m-w-1", "Write batch", [])
+    _seed_transcript_with_speakers(handle.engine, meetings_dir, "m-w-1")
+    # seed a target speaker so toSpeakerId path has something to resolve (stub doesn't check DB)
+    _seed_speaker(handle.engine, "spk-target", "Bob")
+    speaker_stub = _StubSpeakerService()
+    plaud_stub = _StubPlaudPoller()
+    app = _write_app(tmp_path, handle.engine, speakerService=speaker_stub, plaudPoller=plaud_stub)
+    client = TestClient(app)
+
+    _, body = _mcp_request(client, "tools/list")
+    names = [t["name"] for t in body["result"]["tools"]]
+    assert "reassign_speaker" in names
+    assert "plaud_sync_trigger" in names
+
+    # dryRun paths
+    dry = _parse_text(
+        _call_tool(
+            client,
+            "reassign_speaker",
+            {"meetingId": "m-w-1", "fromLabel": "Speaker 1", "toSpeakerName": "Alice", "dryRun": True},
+        )
+    )
+    assert dry["dryRun"] is True
+    assert dry["wouldReassign"] is True
+    assert speaker_stub.calls == []
+
+    dry2 = _parse_text(_call_tool(client, "plaud_sync_trigger", {"dryRun": True}))
+    assert dry2["dryRun"] is True
+
+    # expectedFromLabel guard
+    err = _call_tool(
+        client,
+        "reassign_speaker",
+        {
+            "meetingId": "m-w-1",
+            "fromLabel": "Speaker 1",
+            "toSpeakerName": "Alice",
+            "expectedFromLabel": "Nobody",
+        },
+    )
+    assert err.get("isError") is True
+    assert "Precondition failed" in err["content"][0]["text"]
+
+    # missing target
+    bad = _call_tool(client, "reassign_speaker", {"meetingId": "m-w-1", "fromLabel": "Speaker 1"})
+    assert bad.get("isError") is True
+
+    # real apply paths
+    applied = _parse_text(
+        _call_tool(
+            client,
+            "reassign_speaker",
+            {"meetingId": "m-w-1", "fromLabel": "Speaker 1", "toSpeakerName": "Alice"},
+        )
+    )
+    assert applied["operation"] == "reassign_speaker"
+    assert applied["updatedSegmentsCount"] == 2
+    assert len(speaker_stub.calls) == 1
+
+    trig = _parse_text(_call_tool(client, "plaud_sync_trigger", {}))
+    assert trig["status"] == "started"
+    assert trig["alreadyRunning"] is False
+
+    # without plaud poller
+    handle2 = create_db(":memory:")
+    _seed_meeting(handle2.engine, str(tmp_path / "meetings2"), "m-x", "No poller", [])
+    app2 = _write_app(tmp_path, handle2.engine, speakerService=_StubSpeakerService())
+    client2 = TestClient(app2)
+    # plaud_status should error when poller missing (even though it's a read tool, it needs a poller)
+    ps_err = _call_tool(client2, "plaud_status", {})
+    assert ps_err.get("isError") is True
+    handle2.engine.dispose()
     handle.engine.dispose()

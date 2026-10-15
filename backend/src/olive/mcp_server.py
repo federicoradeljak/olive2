@@ -267,6 +267,62 @@ MCP_TOOLS_SPEC: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "name": "list_templates",
+        "description": "List summary prompt templates (built-in and custom).",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_template",
+        "description": "Get a summary prompt template by ID.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["templateId"],
+            "properties": {
+                "templateId": {"type": "string", "description": "Template ID"},
+            },
+        },
+    },
+    {
+        "name": "get_transcription_status",
+        "description": (
+            "Get transcription progress for a meeting (stage, percent, message). "
+            "Poll this instead of the SSE stream; mirrors GET /api/meetings/{id}/transcribe/progress."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["meetingId"],
+            "properties": {
+                "meetingId": {"type": "string", "description": "Meeting ID"},
+            },
+        },
+    },
+    {
+        "name": "list_active_transcriptions",
+        "description": (
+            "List currently active transcription jobs across all meetings "
+            "(mirrors GET /api/transcriptions/active)."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_summary_status",
+        "description": (
+            "Get summary generation status for a meeting (mirrors GET /api/meetings/{id}/summarize/status)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["meetingId"],
+            "properties": {
+                "meetingId": {"type": "string", "description": "Meeting ID"},
+            },
+        },
+    },
+    {
+        "name": "plaud_status",
+        "description": "Get Plaud Cloud sync status (connected, lastPollAt, pcsPending).",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
 ]
 
 MCP_WRITE_TOOLS_SPEC: list[dict[str, Any]] = [
@@ -645,6 +701,63 @@ MCP_WRITE_TOOLS_SPEC: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "delete_summary",
+        "description": (
+            "Delete an individual meeting summary artifact (file + DB row; when the primary "
+            "summary is deleted the newest remaining summary becomes primary). "
+            "Requires OLIVE_MCP_WRITE=1. Pass dryRun=true to preview; pass expectedIsPrimary "
+            "to abort unless the target's primary flag still matches."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["meetingId", "summaryId"],
+            "properties": {
+                "meetingId": {"type": "string", "description": "Meeting ID"},
+                "summaryId": {
+                    "type": "string",
+                    "description": "Summary artifact ID (summaries[].id from get_meeting; artifactId accepted as an alias)",
+                },
+                "expectedIsPrimary": {
+                    "type": "boolean",
+                    "description": "Optional live primary flag that must match or the delete aborts",
+                },
+                "dryRun": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "When true, return the plan without mutating",
+                },
+            },
+        },
+    },
+    {
+        "name": "set_primary_summary",
+        "description": (
+            "Change which summary is the meeting's primary (shown as summaryContent). "
+            "Requires OLIVE_MCP_WRITE=1. Pass dryRun=true to preview; pass "
+            "expectedPrimarySummaryId to abort unless the live primary still matches."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["meetingId", "summaryId"],
+            "properties": {
+                "meetingId": {"type": "string", "description": "Meeting ID"},
+                "summaryId": {
+                    "type": "string",
+                    "description": "Summary artifact ID to promote (summaries[].id from get_meeting; artifactId accepted as an alias)",
+                },
+                "expectedPrimarySummaryId": {
+                    "type": "string",
+                    "description": "Optional live primary summary ID that must match or the update aborts",
+                },
+                "dryRun": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "When true, return the plan without mutating",
+                },
+            },
+        },
+    },
+    {
         "name": "import_speaker_library",
         "description": (
             "Import a portable speaker library produced by export_speaker_library "
@@ -672,6 +785,79 @@ MCP_WRITE_TOOLS_SPEC: list[dict[str, Any]] = [
                     "default": False,
                     "description": "When true, return the plan without mutating",
                 },
+            },
+        },
+    },
+    {
+        "name": "reassign_speaker",
+        "description": (
+            "Move all transcript segments labelled `fromLabel` in one meeting to a target "
+            "speaker (by name or id). Optionally adopt a fresh voiceprint from those segments. "
+            "Requires OLIVE_MCP_WRITE=1. Pass dryRun=true to preview; "
+            "pass expectedFromLabel to abort unless the source label still exists."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["meetingId", "fromLabel"],
+            "properties": {
+                "meetingId": {"type": "string", "description": "Meeting ID"},
+                "fromLabel": {
+                    "type": "string",
+                    "description": "Source speaker label in the transcript (e.g. 'Speaker 1')",
+                },
+                "toSpeakerName": {
+                    "type": "string",
+                    "description": "Target speaker display name (creates if missing; exclusive with toSpeakerId)",
+                },
+                "toSpeakerId": {
+                    "type": "string",
+                    "description": "Existing target speaker ID (exclusive with toSpeakerName)",
+                },
+                "adoptVoiceprint": {
+                    "type": "boolean",
+                    "description": "Adopt a voiceprint sample from the matched segments (default true)",
+                    "default": True,
+                },
+                "localOnly": {
+                    "type": "boolean",
+                    "description": "Only rename in this meeting's transcript, don't grow the speaker library",
+                    "default": False,
+                },
+                "segmentIndex": {
+                    "type": "integer",
+                    "description": "When set with scope='single', reassign only this segment index",
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["all", "single"],
+                    "description": "all (default) reassigns every segment with the label; single reassigns one",
+                },
+                "expectedFromLabel": {
+                    "type": "string",
+                    "description": "Optional live label that must still match or the update aborts",
+                },
+                "dryRun": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "When true, return the plan without mutating",
+                },
+            },
+        },
+    },
+    {
+        "name": "plaud_sync_trigger",
+        "description": (
+            "Trigger a Plaud Cloud poll cycle (background job, returns 202-style status). "
+            "Requires OLIVE_MCP_WRITE=1. Pass dryRun=true to validate without triggering."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "dryRun": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "When true, validate without triggering",
+                }
             },
         },
     },
@@ -917,6 +1103,51 @@ async def _handle_transcription_mcp_tools(
     return None
 
 
+def _resolve_summary_id(arguments: dict[str, Any]) -> str:
+    """Summary artifact id from MCP args (accepts summaryId, artifactId alias)."""
+    for key in ("summaryId", "artifactId", "summaryArtifactId"):
+        raw = arguments.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+    return ""
+
+
+def _fetch_summary_state(db: Engine, meeting_id: str) -> tuple[str | None, list[dict[str, Any]]]:
+    """Authoritative summary list + live primary id from the DB."""
+    with db.connect() as conn:
+        meeting_row = (
+            conn.execute(
+                text("SELECT primary_summary_artifact_id FROM meetings WHERE id = :id"),
+                {"id": meeting_id},
+            )
+            .mappings()
+            .first()
+        )
+        rows = (
+            conn.execute(
+                text(
+                    """
+                SELECT id, provider, created_at FROM artifacts
+                WHERE meeting_id = :mid AND kind = 'summary'
+                ORDER BY created_at DESC
+                """
+                ),
+                {"mid": meeting_id},
+            )
+            .mappings()
+            .all()
+        )
+    primary_id = (
+        str(meeting_row["primary_summary_artifact_id"])
+        if meeting_row and meeting_row["primary_summary_artifact_id"]
+        else None
+    )
+    summaries = [
+        {"id": str(r["id"]), "provider": str(r["provider"]), "createdAt": int(r["created_at"])} for r in rows
+    ]
+    return primary_id, summaries
+
+
 async def _handle_lifecycle_mcp_tools(
     tool_name: str,
     arguments: dict[str, Any],
@@ -926,7 +1157,7 @@ async def _handle_lifecycle_mcp_tools(
     title_service: Any | None,
     summary_service: Any | None,
 ) -> dict[str, Any] | None:
-    """Meeting lifecycle edits (delete, start-time, auto-title, summarize)."""
+    """Meeting lifecycle edits (delete, start-time, auto-title, summarize, summary artifacts)."""
     if tool_name == "delete_meeting":
         dm_mid = str(arguments.get("meetingId") or "").strip()
         dm_expected = arguments.get("expectedTitle")
@@ -1117,10 +1348,152 @@ async def _handle_lifecycle_mcp_tools(
             }
         )
 
+    if tool_name == "delete_summary":
+        ds_mid = str(arguments.get("meetingId") or "").strip()
+        ds_sid = _resolve_summary_id(arguments)
+        ds_dry = bool(arguments.get("dryRun"))
+        ds_expected = arguments.get("expectedIsPrimary")
+        if not ds_mid:
+            return _error_result("meetingId is required")
+        if not ds_sid:
+            return _error_result(
+                "summaryId is required (summary artifact ID from get_meeting summaries[].id)"
+            )
+        ds_detail = get_meeting(db, ds_mid, meetings_dir)
+        if not ds_detail:
+            return _error_result("Meeting not found")
+        ds_primary, ds_summaries = _fetch_summary_state(db, ds_mid)
+        ds_ids = [s["id"] for s in ds_summaries]
+        if ds_sid not in ds_ids:
+            return _error_result(f"Summary artifact not found: {ds_sid}")
+        ds_is_primary = ds_primary == ds_sid
+        if ds_expected is not None and bool(ds_expected) != ds_is_primary:
+            return _error_result(
+                f"Precondition failed: expectedIsPrimary {bool(ds_expected)!r} does not match "
+                f"live value {ds_is_primary!r}; aborting without changes"
+            )
+        ds_remaining = [sid for sid in ds_ids if sid != ds_sid]
+        ds_next_primary = (
+            ds_remaining[0] if ds_remaining and ds_is_primary else ds_primary if not ds_is_primary else None
+        )
+        if ds_dry:
+            return _text_result(
+                {
+                    "dryRun": True,
+                    "operation": "delete_summary",
+                    "meetingId": ds_mid,
+                    "summaryId": ds_sid,
+                    "isPrimary": ds_is_primary,
+                    "primarySummaryId": ds_primary,
+                    "summaryIds": ds_ids,
+                    "remainingSummaryIds": ds_remaining,
+                    "nextPrimarySummaryId": ds_next_primary,
+                    "wouldDelete": True,
+                }
+            )
+        if summary_service is None:
+            return _error_result("Summary service unavailable")
+        ds_fn = getattr(summary_service, "delete_summary", None) or getattr(
+            summary_service, "deleteSummary", None
+        )
+        if not callable(ds_fn):
+            return _error_result("Summary service unavailable")
+        try:
+            ds_raw: Any = ds_fn(ds_mid, ds_sid)
+            if hasattr(ds_raw, "__await__"):
+                await ds_raw
+        except ValueError as exc:
+            return _error_result(str(exc))
+        ds_new_primary, ds_new_list = _fetch_summary_state(db, ds_mid)
+        return _text_result(
+            {
+                "operation": "delete_summary",
+                "meetingId": ds_mid,
+                "summaryId": ds_sid,
+                "deleted": True,
+                "wasPrimary": ds_is_primary,
+                "primarySummaryId": ds_new_primary,
+                "remainingSummaryIds": [s["id"] for s in ds_new_list],
+            }
+        )
+
+    if tool_name == "set_primary_summary":
+        sp_mid = str(arguments.get("meetingId") or "").strip()
+        sp_sid = _resolve_summary_id(arguments)
+        sp_dry = bool(arguments.get("dryRun"))
+        sp_expected = arguments.get("expectedPrimarySummaryId")
+        if sp_expected is None:
+            sp_expected = arguments.get("expectedPrimaryArtifactId")
+        if not sp_mid:
+            return _error_result("meetingId is required")
+        if not sp_sid:
+            return _error_result(
+                "summaryId is required (summary artifact ID from get_meeting summaries[].id)"
+            )
+        sp_detail = get_meeting(db, sp_mid, meetings_dir)
+        if not sp_detail:
+            return _error_result("Meeting not found")
+        sp_primary, sp_summaries = _fetch_summary_state(db, sp_mid)
+        sp_ids = [s["id"] for s in sp_summaries]
+        if sp_sid not in sp_ids:
+            return _error_result(f"Summary artifact not found: {sp_sid}")
+        if sp_expected is not None and str(sp_expected) != str(sp_primary or ""):
+            return _error_result(
+                f"Precondition failed: expectedPrimarySummaryId {str(sp_expected)!r} does not match "
+                f"live primary {str(sp_primary or '')!r}; aborting without changes"
+            )
+        if sp_dry:
+            return _text_result(
+                {
+                    "dryRun": True,
+                    "operation": "set_primary_summary",
+                    "meetingId": sp_mid,
+                    "summaryId": sp_sid,
+                    "currentPrimarySummaryId": sp_primary,
+                    "isAlreadyPrimary": sp_primary == sp_sid,
+                    "wouldUpdate": sp_primary != sp_sid,
+                }
+            )
+        if sp_primary == sp_sid:
+            return _text_result(
+                {
+                    "operation": "set_primary_summary",
+                    "meetingId": sp_mid,
+                    "summaryId": sp_sid,
+                    "previousPrimarySummaryId": sp_primary,
+                    "primarySummaryId": sp_primary,
+                    "updated": False,
+                }
+            )
+        if summary_service is None:
+            return _error_result("Summary service unavailable")
+        sp_fn = getattr(summary_service, "set_primary_summary", None) or getattr(
+            summary_service, "setPrimarySummary", None
+        )
+        if not callable(sp_fn):
+            return _error_result("Summary service unavailable")
+        try:
+            sp_raw: Any = sp_fn(sp_mid, sp_sid)
+            if hasattr(sp_raw, "__await__"):
+                await sp_raw
+        except ValueError as exc:
+            return _error_result(str(exc))
+        sp_final, _ = _fetch_summary_state(db, sp_mid)
+        return _text_result(
+            {
+                "operation": "set_primary_summary",
+                "meetingId": sp_mid,
+                "summaryId": sp_sid,
+                "previousPrimarySummaryId": sp_primary,
+                "primarySummaryId": sp_final,
+                "updated": True,
+            }
+        )
+
     return None
 
 
-async def execute_mcp_tool(
+async def execute_mcp_tool(  # pyright: ignore[reportGeneralTypeIssues]
     tool_name: str,
     arguments: dict[str, Any],
     *,
@@ -1132,6 +1505,7 @@ async def execute_mcp_tool(
     summary_service: Any | None = None,
     title_service: Any | None = None,
     plaud_poller: Any | None = None,
+    template_service: Any | None = None,
 ) -> dict[str, Any]:
     try:
         if tool_name in MCP_WRITE_TOOL_NAMES and not is_mcp_write_enabled(write_enabled):
@@ -1246,6 +1620,110 @@ async def execute_mcp_tool(
             exp_res: Any = exp_fn(exp_opts)
             library = await exp_res if hasattr(exp_res, "__await__") else exp_res
             return _text_result({"library": library})
+
+        if tool_name == "list_templates":
+            if template_service is None:
+                return _error_result("Template service unavailable")
+            t_fn = getattr(template_service, "list_templates", None) or getattr(
+                template_service, "listTemplates", None
+            )
+            if not callable(t_fn):
+                return _error_result("Template service unavailable")
+            t_res: Any = t_fn()
+            if hasattr(t_res, "__await__"):
+                t_res = await t_res
+            templates: list[Any] = []
+            for t in t_res or []:
+                templates.append(t.model_dump() if hasattr(t, "model_dump") else t)
+            return _text_result({"templates": templates})
+
+        if tool_name == "get_template":
+            tid = str(arguments.get("templateId") or arguments.get("template_id") or "").strip()
+            if not tid:
+                return _error_result("templateId is required")
+            if template_service is None:
+                return _error_result("Template service unavailable")
+            tpl_fn = getattr(template_service, "get_template", None) or getattr(
+                template_service, "getTemplate", None
+            )
+            if not callable(tpl_fn):
+                return _error_result("Template service unavailable")
+            tpl_res: Any = tpl_fn(tid)
+            if hasattr(tpl_res, "__await__"):
+                tpl_res = await tpl_res
+            if not tpl_res:
+                return _error_result("Template not found")
+            tpl = tpl_res.model_dump() if hasattr(tpl_res, "model_dump") else tpl_res
+            return _text_result({"template": tpl})
+
+        if tool_name == "get_transcription_status":
+            trs_mid = str(arguments.get("meetingId") or "").strip()
+            if not trs_mid:
+                return _error_result("meetingId is required")
+            trs_detail = get_meeting(db, trs_mid, meetings_dir)
+            if not trs_detail:
+                return _error_result("Meeting not found")
+            if transcription_service is None:
+                return _error_result("Transcription service unavailable")
+            trs_fn = getattr(transcription_service, "get_transcription_progress", None) or getattr(
+                transcription_service, "getTranscriptionProgress", None
+            )
+            if not callable(trs_fn):
+                return _error_result("Transcription service unavailable")
+            trs_res: Any = trs_fn(trs_mid)
+            if hasattr(trs_res, "__await__"):
+                trs_res = await trs_res
+            trs_dict = trs_res.model_dump(exclude_none=True) if hasattr(trs_res, "model_dump") else trs_res
+            return _text_result({"meetingId": trs_mid, "progress": trs_dict})
+
+        if tool_name == "list_active_transcriptions":
+            if transcription_service is None:
+                return _error_result("Transcription service unavailable")
+            la_fn = getattr(transcription_service, "get_all_active_transcription_progress", None) or getattr(
+                transcription_service, "getAllActiveTranscriptionProgress", None
+            )
+            if not callable(la_fn):
+                return _error_result("Transcription service unavailable")
+            la_res: Any = la_fn()
+            if hasattr(la_res, "__await__"):
+                la_res = await la_res
+            active: dict[str, Any] = {}
+            if isinstance(la_res, dict):
+                for kv_k, kv_v in la_res.items():
+                    active[kv_k] = kv_v.model_dump(exclude_none=True) if hasattr(kv_v, "model_dump") else kv_v
+            return _text_result({"active": active})
+
+        if tool_name == "get_summary_status":
+            ss_mid = str(arguments.get("meetingId") or "").strip()
+            if not ss_mid:
+                return _error_result("meetingId is required")
+            ss_detail = get_meeting(db, ss_mid, meetings_dir)
+            if not ss_detail:
+                return _error_result("Meeting not found")
+            if summary_service is None:
+                return _error_result("Summary service unavailable")
+            ss_fn = getattr(summary_service, "get_summary_generation_status", None) or getattr(
+                summary_service, "getSummaryGenerationStatus", None
+            )
+            if not callable(ss_fn):
+                return _error_result("Summary service unavailable")
+            ss_res: Any = ss_fn(ss_mid)
+            if hasattr(ss_res, "__await__"):
+                ss_res = await ss_res
+            ss_dict = ss_res.model_dump(exclude_none=True) if hasattr(ss_res, "model_dump") else ss_res
+            ss_generating = isinstance(ss_dict, dict) and ss_dict.get("stage") == "running"
+            return _text_result({"meetingId": ss_mid, "generating": ss_generating, "status": ss_dict})
+
+        if tool_name == "plaud_status":
+            if plaud_poller is None:
+                return _error_result("Plaud sync is not configured")
+            ps_fn = getattr(plaud_poller, "get_status", None) or getattr(plaud_poller, "getStatus", None)
+            if not callable(ps_fn):
+                return _error_result("Plaud sync is not configured")
+            ps_res: Any = ps_fn()
+            if hasattr(ps_res, "__await__"):
+                ps_res = await ps_res
+            return _text_result(ps_res if isinstance(ps_res, dict) else {"status": ps_res})
 
         if tool_name == "update_speaker":
             sid = str(arguments.get("speakerId") or "").strip()
@@ -1464,6 +1942,119 @@ async def execute_mcp_tool(
                 return _error_result(str(exc))
             return _text_result({"operation": "import_speaker_library", **imported})
 
+        if tool_name == "reassign_speaker":
+            rs_mid = str(arguments.get("meetingId") or "").strip()
+            rs_from = str(arguments.get("fromLabel") or "").strip()
+            rs_to_name = arguments.get("toSpeakerName")
+            rs_to_id = arguments.get("toSpeakerId")
+            rs_adopt = arguments.get("adoptVoiceprint")
+            rs_local = bool(arguments.get("localOnly"))
+            rs_seg = arguments.get("segmentIndex")
+            rs_scope = arguments.get("scope")
+            rs_expected = arguments.get("expectedFromLabel")
+            rs_dry = bool(arguments.get("dryRun"))
+            if not rs_mid:
+                return _error_result("meetingId is required")
+            if not rs_from:
+                return _error_result("fromLabel is required")
+            if rs_expected is not None and str(rs_expected).strip() != rs_from:
+                return _error_result(
+                    f"Precondition failed: expectedFromLabel {str(rs_expected)!r} does not match "
+                    f"live fromLabel {rs_from!r}; aborting without changes"
+                )
+            if rs_to_name is not None and not isinstance(rs_to_name, str):
+                return _error_result("toSpeakerName must be a string")
+            if rs_to_id is not None and not isinstance(rs_to_id, str):
+                return _error_result("toSpeakerId must be a string")
+            rs_has_name = isinstance(rs_to_name, str) and rs_to_name.strip() != ""
+            rs_has_id = isinstance(rs_to_id, str) and rs_to_id.strip() != ""
+            if not rs_has_name and not rs_has_id:
+                return _error_result("Provide toSpeakerName or toSpeakerId")
+            if rs_has_name and rs_has_id:
+                return _error_result("Provide either toSpeakerName or toSpeakerId, not both")
+            rs_detail = get_meeting(db, rs_mid, meetings_dir)
+            if not rs_detail:
+                return _error_result("Meeting not found")
+            rs_adopt_bool = True if rs_adopt is None else bool(rs_adopt)
+            if rs_dry:
+                return _text_result(
+                    {
+                        "dryRun": True,
+                        "operation": "reassign_speaker",
+                        "meetingId": rs_mid,
+                        "fromLabel": rs_from,
+                        "toSpeakerName": rs_to_name.strip() if rs_has_name else None,
+                        "toSpeakerId": rs_to_id.strip() if rs_has_id else None,
+                        "adoptVoiceprint": rs_adopt_bool,
+                        "localOnly": rs_local,
+                        "segmentIndex": rs_seg,
+                        "scope": rs_scope,
+                        "wouldReassign": True,
+                    }
+                )
+            if speaker_service is None:
+                return _error_result("Speaker service unavailable")
+            rs_fn = getattr(speaker_service, "reassign_meeting_speaker", None) or getattr(
+                speaker_service, "reassignMeetingSpeaker", None
+            )
+            if not callable(rs_fn):
+                return _error_result("Speaker service unavailable")
+            rs_opts: dict[str, Any] = {
+                "meetingId": rs_mid,
+                "fromLabel": rs_from,
+                "adoptVoiceprint": rs_adopt_bool,
+                "localOnly": rs_local,
+            }
+            if rs_has_name:
+                rs_opts["toSpeakerName"] = rs_to_name.strip()
+            if rs_has_id:
+                rs_opts["toSpeakerId"] = rs_to_id.strip()
+            if rs_seg is not None:
+                rs_opts["segmentIndex"] = rs_seg
+            if isinstance(rs_scope, str) and rs_scope.strip():
+                rs_opts["scope"] = rs_scope.strip()
+            try:
+                rs_raw: Any = rs_fn(rs_opts)
+                rs_res = await rs_raw if hasattr(rs_raw, "__await__") else rs_raw
+            except Exception as exc:
+                return _error_result(str(exc))
+            if isinstance(rs_res, dict):
+                return _text_result({"operation": "reassign_speaker", "meetingId": rs_mid, **rs_res})
+            return _text_result({"operation": "reassign_speaker", "meetingId": rs_mid, "result": rs_res})
+
+        if tool_name == "plaud_sync_trigger":
+            ps_dry = bool(arguments.get("dryRun"))
+            if plaud_poller is None:
+                return _error_result("Plaud sync is not configured")
+            if ps_dry:
+                return _text_result({"dryRun": True, "operation": "plaud_sync_trigger", "wouldTrigger": True})
+            ps_bg_fn = getattr(plaud_poller, "trigger_background", None) or getattr(
+                plaud_poller, "triggerBackground", None
+            )
+            if callable(ps_bg_fn):
+                try:
+                    ps_started = bool(ps_bg_fn())
+                    return _text_result(
+                        {
+                            "operation": "plaud_sync_trigger",
+                            "status": "started",
+                            "alreadyRunning": not ps_started,
+                        }
+                    )
+                except Exception as exc:
+                    return _error_result(str(exc))
+            ps_fn2 = getattr(plaud_poller, "trigger", None)
+            if not callable(ps_fn2):
+                return _error_result("Plaud sync is not configured")
+            try:
+                ps_raw2: Any = ps_fn2()
+                ps_res2 = await ps_raw2 if hasattr(ps_raw2, "__await__") else ps_raw2
+                if isinstance(ps_res2, dict):
+                    return _text_result({"operation": "plaud_sync_trigger", **ps_res2})
+                return _text_result({"operation": "plaud_sync_trigger", "result": ps_res2})
+            except Exception as exc:
+                return _error_result(str(exc))
+
         if tool_name == "set_meeting_tags":
             raw_single_id = arguments.get("meetingId")
             raw_bulk_ids = arguments.get("meetingIds")
@@ -1679,6 +2270,7 @@ async def handle_mcp_request(
     summary_service: Any | None = None,
     title_service: Any | None = None,
     plaud_poller: Any | None = None,
+    template_service: Any | None = None,
 ) -> Response:
     resolved_write_enabled = is_mcp_write_enabled(write_enabled)
     # 1. Host / Origin validation when bound to loopback
@@ -1752,6 +2344,7 @@ async def handle_mcp_request(
             summary_service=summary_service,
             title_service=title_service,
             plaud_poller=plaud_poller,
+            template_service=template_service,
         )
         return JSONResponse({"jsonrpc": "2.0", "id": rpc_id, "result": tool_res})
 

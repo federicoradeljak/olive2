@@ -524,6 +524,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             summary_service=get_summary_service(),
             title_service=get_title_service(),
             plaud_poller=plaud_poller,
+            template_service=template_service,
         )
 
     if (
