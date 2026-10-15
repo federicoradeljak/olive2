@@ -43,6 +43,7 @@ RUN --mount=type=cache,id=uv,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 
 COPY --from=web-builder /frontend/dist /app/frontend/dist
+COPY CHANGELOG.md /app/CHANGELOG.md
 
 ENV PORT=4470 \
     OLIVE_DOCKER=1 \

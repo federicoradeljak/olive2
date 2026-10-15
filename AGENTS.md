@@ -70,6 +70,13 @@ Run the cheapest check that covers the change — never all checks reflexively.
 - Never run `eval/run_ami_eval.py` unless explicitly asked (real corpus, real models, minutes–hours).
 - Never write ad-hoc repro scripts that import the ML stack (`torch`, `pyannote`, `onnxruntime`, DBOS runners); validate via the pytest suite instead.
 
+## Changelog policy
+
+`CHANGELOG.md` (repo root, Keep a Changelog format) is user-facing and served in-app via `GET /api/changelog` + the header "What's New" button. Keep it up to date:
+- Every user-visible change (feature, fix, behavior change) gets an entry under `## [Unreleased]` in the same commit/PR — under `Added`, `Changed`, or `Fixed`. One bullet per change, user-facing language, no commit SHAs.
+- Infra-only, chore, and docs changes: add an entry only if they affect users/operators (Docker, deploy, backup, models); otherwise skip.
+- When cutting a release: rename `## [Unreleased]` to `## [<version>] — <YYYY-MM-DD>`, bump `__version__` (`backend/src/olive/__init__.py`), `backend/pyproject.toml`, `frontend/package.json`, and the FastAPI `version=` in `backend/src/olive/app.py`, then start a fresh empty `## [Unreleased]` section. The Dockerfile already bundles `CHANGELOG.md` into the image — no packaging change needed.
+
 ## Invariants & rules
 
 1. **Never touch `~/.config/olive` in tests.** All tests must use `:memory:` SQLite databases and `tmp_path` directories for `configDir`, `meetingsDir`, and `backupsDir`.
