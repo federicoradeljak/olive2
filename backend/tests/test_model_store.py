@@ -57,6 +57,10 @@ def test_download_failure_names_the_model(monkeypatch: pytest.MonkeyPatch, tmp_p
 
     monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake_hf_download)
     monkeypatch.setattr(model_store, "_download_aligner", offline)
+    # Unrelated steps are stubbed so the test doesn't pay for a real
+    # transformers/AutoProcessor load (seconds) inside the Cohere step.
+    monkeypatch.setattr(model_store, "_download_pyannote", lambda _t: None)
+    monkeypatch.setattr(model_store, "_download_cohere", lambda _t: None)
 
     with pytest.raises(ModelStorageError, match="could not download ctc-forced-aligner.*network unreachable"):
         download_local_models(None)

@@ -50,6 +50,7 @@ dev = [
   "respx>=0.22.0",
   "ruff>=0.9.0",
   "basedpyright>=1.28.0",
+  "pytest-xdist>=3.8.0",
 ]
 
 [build-system]
@@ -73,6 +74,7 @@ torchaudio = [
 ]
 
 [tool.pytest.ini_options]
+addopts = "-n 4"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
