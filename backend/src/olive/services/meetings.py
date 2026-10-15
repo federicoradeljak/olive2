@@ -126,25 +126,33 @@ def list_meetings(
         if search:
             matching_ids = set()
             pattern = f"%{search}%"
-            title_tag_rows = conn.execute(
-                text("SELECT id FROM meetings WHERE title LIKE :pat OR tags LIKE :pat"),
-                {"pat": pattern},
-            ).mappings().all()
+            title_tag_rows = (
+                conn.execute(
+                    text("SELECT id FROM meetings WHERE title LIKE :pat OR tags LIKE :pat"),
+                    {"pat": pattern},
+                )
+                .mappings()
+                .all()
+            )
             for m in title_tag_rows:
                 matching_ids.add(m["id"])
 
             if meetings_dir:
-                content_artifacts = conn.execute(
-                    text(
-                        """
+                content_artifacts = (
+                    conn.execute(
+                        text(
+                            """
                         SELECT artifacts.meeting_id, artifacts.path, meetings.start_time,
                                meetings.title, meetings.id AS m_id
                         FROM artifacts
                         INNER JOIN meetings ON meetings.id = artifacts.meeting_id
                         WHERE artifacts.kind IN ('transcript', 'summary')
                         """
+                        )
                     )
-                ).mappings().all()
+                    .mappings()
+                    .all()
+                )
                 search_lower = search.lower()
                 for a in content_artifacts:
                     if a["meeting_id"] in matching_ids:
@@ -187,10 +195,16 @@ def list_meetings(
 
         where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
-        rows = conn.execute(
-            text(f"SELECT * FROM meetings {where_sql} ORDER BY start_time DESC LIMIT :limit OFFSET :offset"),
-            params,
-        ).mappings().all()
+        rows = (
+            conn.execute(
+                text(
+                    f"SELECT * FROM meetings {where_sql} ORDER BY start_time DESC LIMIT :limit OFFSET :offset"
+                ),
+                params,
+            )
+            .mappings()
+            .all()
+        )
 
         total = conn.execute(
             text(f"SELECT COUNT(id) FROM meetings {where_sql}"),
@@ -220,10 +234,14 @@ def update_meeting_tags(db: Engine, meeting_id: str, tags: list[str]) -> Meeting
             text("UPDATE meetings SET tags = :tags, updated_at = :now WHERE id = :id"),
             {"tags": json.dumps(seen), "now": now, "id": meeting_id},
         )
-        row = conn.execute(
-            text("SELECT * FROM meetings WHERE id = :id"),
-            {"id": meeting_id},
-        ).mappings().first()
+        row = (
+            conn.execute(
+                text("SELECT * FROM meetings WHERE id = :id"),
+                {"id": meeting_id},
+            )
+            .mappings()
+            .first()
+        )
 
     return to_meeting(row) if row else None
 
@@ -239,10 +257,14 @@ def update_meeting_title(
         raise ValueError("title must be a non-empty string")
 
     with db.connect() as conn:
-        meeting = conn.execute(
-            text("SELECT * FROM meetings WHERE id = :id"),
-            {"id": meeting_id},
-        ).mappings().first()
+        meeting = (
+            conn.execute(
+                text("SELECT * FROM meetings WHERE id = :id"),
+                {"id": meeting_id},
+            )
+            .mappings()
+            .first()
+        )
 
     if not meeting:
         return None
@@ -259,9 +281,7 @@ def update_meeting_title(
         if meetings_dir
         else None
     )
-    moved_folder = bool(
-        old_folder and new_folder and old_folder != new_folder and old_folder.exists()
-    )
+    moved_folder = bool(old_folder and new_folder and old_folder != new_folder and old_folder.exists())
 
     if moved_folder and old_folder and new_folder:
         if new_folder.exists():
@@ -285,10 +305,14 @@ def update_meeting_title(
             )
             if res.rowcount != 1:
                 raise RuntimeError("Meeting was changed while it was being renamed")
-            updated_row = conn.execute(
-                text("SELECT * FROM meetings WHERE id = :id"),
-                {"id": meeting_id},
-            ).mappings().first()
+            updated_row = (
+                conn.execute(
+                    text("SELECT * FROM meetings WHERE id = :id"),
+                    {"id": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
     except Exception:
         if moved_folder and old_folder and new_folder and new_folder.exists():
             try:
@@ -306,29 +330,49 @@ def get_meeting(
     meetings_dir: str | None = None,
 ) -> MeetingDetailAggregate | None:
     with db.connect() as conn:
-        meeting_row = conn.execute(
-            text("SELECT * FROM meetings WHERE id = :id"),
-            {"id": meeting_id},
-        ).mappings().first()
+        meeting_row = (
+            conn.execute(
+                text("SELECT * FROM meetings WHERE id = :id"),
+                {"id": meeting_id},
+            )
+            .mappings()
+            .first()
+        )
         if not meeting_row:
             return None
 
-        recording_rows = conn.execute(
-            text("SELECT * FROM recordings WHERE meeting_id = :id ORDER BY created_at ASC"),
-            {"id": meeting_id},
-        ).mappings().all()
-        artifact_rows = conn.execute(
-            text("SELECT * FROM artifacts WHERE meeting_id = :id ORDER BY created_at ASC"),
-            {"id": meeting_id},
-        ).mappings().all()
-        ms_rows = conn.execute(
-            text("SELECT * FROM meeting_speakers WHERE meeting_id = :id"),
-            {"id": meeting_id},
-        ).mappings().all()
-        stage_run_rows = conn.execute(
-            text("SELECT * FROM stage_runs WHERE meeting_id = :id ORDER BY created_at ASC"),
-            {"id": meeting_id},
-        ).mappings().all()
+        recording_rows = (
+            conn.execute(
+                text("SELECT * FROM recordings WHERE meeting_id = :id ORDER BY created_at ASC"),
+                {"id": meeting_id},
+            )
+            .mappings()
+            .all()
+        )
+        artifact_rows = (
+            conn.execute(
+                text("SELECT * FROM artifacts WHERE meeting_id = :id ORDER BY created_at ASC"),
+                {"id": meeting_id},
+            )
+            .mappings()
+            .all()
+        )
+        ms_rows = (
+            conn.execute(
+                text("SELECT * FROM meeting_speakers WHERE meeting_id = :id"),
+                {"id": meeting_id},
+            )
+            .mappings()
+            .all()
+        )
+        stage_run_rows = (
+            conn.execute(
+                text("SELECT * FROM stage_runs WHERE meeting_id = :id ORDER BY created_at ASC"),
+                {"id": meeting_id},
+            )
+            .mappings()
+            .all()
+        )
 
         speaker_ids = [r["speaker_id"] for r in ms_rows]
         speaker_rows: list[Mapping[Any, Any]] = []
@@ -339,7 +383,9 @@ def get_meeting(
                 conn.execute(
                     text(f"SELECT * FROM speakers WHERE id IN ({placeholders})"),
                     sparams,
-                ).mappings().all()
+                )
+                .mappings()
+                .all()
             )
 
     transcript_content: str | None = None
@@ -417,9 +463,7 @@ def get_meeting(
 
     # Generic labels ("Speaker 1", ...) are transcript labels, not people:
     # never surface them as meeting speakers (covers rows persisted earlier).
-    active_speaker_rows = [
-        s for s in active_speaker_rows if not is_generic_speaker_label(str(s["name"]))
-    ]
+    active_speaker_rows = [s for s in active_speaker_rows if not is_generic_speaker_label(str(s["name"]))]
 
     return MeetingDetailAggregate(
         meeting=to_meeting(meeting_row),
@@ -433,16 +477,69 @@ def get_meeting(
     )
 
 
+def _canonical_plaud_file_id(file_id: str) -> str:
+    """Stable Plaud recording identity (mirrors plaud.sdk.canonical_plaud_file_id).
+
+    Kept local so meetings.py never imports the Plaud SDK (and its httpx
+    dependency) just for deletion tombstoning.
+    """
+    return file_id[len("of_") :] if file_id.startswith("of_") else file_id
+
+
 def delete_meeting(db: Engine, meeting_id: str, meetings_dir: str | None = None) -> bool:
     with db.connect() as conn:
-        meeting_row = conn.execute(
-            text("SELECT * FROM meetings WHERE id = :id"),
-            {"id": meeting_id},
-        ).mappings().first()
+        meeting_row = (
+            conn.execute(
+                text("SELECT * FROM meetings WHERE id = :id"),
+                {"id": meeting_id},
+            )
+            .mappings()
+            .first()
+        )
     if not meeting_row:
         return False
 
     with db.begin() as conn:
+        # Tombstone Plaud cloud IDs before wiping ingest state, or the next
+        # poll re-discovers the same cloud file and resurrects the meeting.
+        # Stored canonical (of_-stripped) so both ID forms stay suppressed.
+        try:
+            plaud_ids: set[str] = set()
+            for row in (
+                conn.execute(
+                    text("SELECT plaud_file_id FROM plaud_ingest_state WHERE meeting_id = :id"),
+                    {"id": meeting_id},
+                )
+                .mappings()
+                .all()
+            ):
+                if row.get("plaud_file_id"):
+                    plaud_ids.add(_canonical_plaud_file_id(str(row["plaud_file_id"])))
+            for row in (
+                conn.execute(
+                    text(
+                        "SELECT provider_recording_id FROM recordings "
+                        "WHERE meeting_id = :id AND provider = 'plaud'"
+                    ),
+                    {"id": meeting_id},
+                )
+                .mappings()
+                .all()
+            ):
+                if row.get("provider_recording_id"):
+                    plaud_ids.add(_canonical_plaud_file_id(str(row["provider_recording_id"])))
+            if plaud_ids:
+                now = int(time.time() * 1000)
+                for fid in plaud_ids:
+                    conn.execute(
+                        text(
+                            "INSERT OR IGNORE INTO plaud_deleted_files "
+                            "(plaud_file_id, deleted_at) VALUES (:fid, :now)"
+                        ),
+                        {"fid": fid, "now": now},
+                    )
+        except Exception:
+            pass
         conn.execute(
             text(
                 "UPDATE meetings SET primary_transcript_artifact_id = NULL, "

@@ -275,6 +275,24 @@ async def _default_fetch(url: str) -> _DefaultHttpResponse:
         return _DefaultHttpResponse(res.status_code, res.content, dict(res.headers))
 
 
+def _is_plaud_deleted(conn: Any, file_id: str, canonical_id: str) -> bool:
+    """True when a Plaud file was tombstoned by meeting deletion.
+
+    Tolerant of databases predating the ``plaud_deleted_files`` table
+    (returns False) so old test fixtures never break discovery.
+    """
+    try:
+        row = conn.execute(
+            text(
+                "SELECT plaud_file_id FROM plaud_deleted_files WHERE plaud_file_id IN (:fid, :canon) LIMIT 1"
+            ),
+            {"fid": file_id, "canon": canonical_id},
+        ).first()
+        return row is not None
+    except Exception:
+        return False
+
+
 class PlaudPoller:
     def __init__(self, options: dict[str, Any] | None = None, **kwargs: Any) -> None:
         opts = {**(options or {}), **kwargs}
@@ -545,8 +563,9 @@ class PlaudPoller:
                     ),
                     {"fid": file_id, "canon": canonical_id},
                 ).first()
+                deleted = _is_plaud_deleted(conn, file_id, canonical_id)
 
-            if existing_rec or existing_state:
+            if existing_rec or existing_state or deleted:
                 continue
 
             seen_at = self.now()
@@ -564,6 +583,8 @@ class PlaudPoller:
                     {"fid": file_id, "canon": canonical_id},
                 ).first()
                 if already:
+                    continue
+                if _is_plaud_deleted(conn, file_id, canonical_id):
                     continue
                 conn.execute(
                     text(

@@ -79,6 +79,7 @@ CREATE_TABLE_STATEMENTS: list[str] = [
     pcs_deadline_at INTEGER NOT NULL,
     pcs_resolved INTEGER NOT NULL DEFAULT 0
   )""",
+    """CREATE TABLE IF NOT EXISTS plaud_deleted_files (\n    plaud_file_id TEXT PRIMARY KEY,\n    deleted_at INTEGER NOT NULL\n  )""",
     """CREATE TABLE IF NOT EXISTS sync_state (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL

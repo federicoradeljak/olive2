@@ -107,6 +107,13 @@ class PlaudIngestStateModel(Base):
     )
 
 
+class PlaudDeletedFileModel(Base):
+    __tablename__ = "plaud_deleted_files"
+
+    plaud_file_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    deleted_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
 class SyncStateModel(Base):
     __tablename__ = "sync_state"
 
@@ -199,6 +206,7 @@ __all__ = [
     "MeetingModel",
     "MeetingSpeakerModel",
     "PlaudIngestStateModel",
+    "PlaudDeletedFileModel",
     "RecordingModel",
     "SpeakerModel",
     "StageRunModel",

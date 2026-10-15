@@ -25,6 +25,9 @@ Olive is currently pre-1.0 (`0.2.0`); everything below shipped as part of the
 
 ### Fixed
 
+- **Deleted Plaud recordings stay deleted** — deleting a Plaud-synced
+  meeting now tombstones its cloud recording ID, so the next poll or
+  restart no longer re-imports the same recording as a new meeting.
 - **Human-verified voiceprints always enroll** — confirming a speaker turn,
   reassigning a voice, or rapid-enrolling checked samples now trains the
   voiceprint even when the clip scores below the outlier threshold; a low
