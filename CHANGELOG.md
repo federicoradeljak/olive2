@@ -10,6 +10,12 @@ Olive is currently pre-1.0 (`0.2.0`); everything below shipped as part of the
 
 <!-- Add new entries here under Added / Changed / Fixed. See AGENTS.md "Changelog policy". -->
 
+### Added
+
+- **Auto-title meetings** — generate a concise meeting title from the
+  transcript with the configured default LLM via the Auto-title button
+  next to the meeting title.
+
 ## [0.2.0] — 2026-10-14
 
 Covers the full history from project start (2026-08-11) through 2026-10-14,
