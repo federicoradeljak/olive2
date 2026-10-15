@@ -3202,7 +3202,10 @@ function RapidEnrollModal({
   const [error, setError] = useState<string | null>(null);
   const [selectedSamples, setSelectedSamples] = useState<Record<string, number[]>>({});
   const [targets, setTargets] = useState<Record<string, { speakerId: string; customName: string }>>({});
-  const [busyLabel, setBusyLabel] = useState<string | null>(null);
+  // Labels with an in-flight assign request. Assigns run in the background
+  // so the user can keep enrolling other voices while embeddings train.
+  const [pendingLabels, setPendingLabels] = useState<Record<string, string>>({});
+  const [failedLabels, setFailedLabels] = useState<Record<string, string>>({});
   const [completions, setCompletions] = useState<RapidEnrollCompletion[]>([]);
 
   useEffect(() => {
@@ -3248,7 +3251,7 @@ function RapidEnrollModal({
     });
   };
 
-  const handleAssign = async (group: RapidEnrollCandidateGroup) => {
+  const handleAssign = (group: RapidEnrollCandidateGroup) => {
     const target = targets[group.label] ?? { speakerId: "", customName: "" };
     let toSpeakerId: string | undefined;
     let toSpeakerName: string | undefined;
@@ -3266,36 +3269,58 @@ function RapidEnrollModal({
     const segmentIndices = (group.samples ?? [])
       .map((s) => s.segmentIndex)
       .filter((idx) => (selectedSamples[group.label] ?? []).includes(idx));
+    const displayName = toSpeakerName ?? knownSpeakers.find((s) => s.id === toSpeakerId)?.name ?? "speaker";
 
-    setBusyLabel(group.label);
-    try {
-      const res = await fetch(`/api/meetings/${meetingId}/speakers/rapid-enroll`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ fromLabel: group.label, toSpeakerId, toSpeakerName, segmentIndices })
+    // Optimistic update: remove the group immediately so the UI stays
+    // interactive while enrollment trains in the background.
+    setGroups((prev) => (prev ?? []).filter((g) => g.label !== group.label));
+    setPendingLabels((prev) => ({ ...prev, [group.label]: displayName }));
+    setFailedLabels((prev) => {
+      if (!(group.label in prev)) return prev;
+      const next = { ...prev };
+      delete next[group.label];
+      return next;
+    });
+
+    void fetch(`/api/meetings/${meetingId}/speakers/rapid-enroll`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ fromLabel: group.label, toSpeakerId, toSpeakerName, segmentIndices })
+    })
+      .then(async (res) => {
+        const data = (await res.json().catch(() => ({}))) as RapidEnrollAssignResponse & { error?: string };
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        setCompletions((prev) => [
+          {
+            label: group.label,
+            targetName: data.speaker?.name ?? displayName,
+            updatedSegmentsCount: data.updatedSegmentsCount ?? 0,
+            enrolledSamplesCount: data.enrolledSamplesCount ?? 0,
+            sampleCount: segmentIndices.length,
+            notes: (data.sampleResults ?? [])
+              .filter((r) => !r.voiceprintEnrolled && r.statusReason)
+              .map((r) => r.statusReason as string)
+          },
+          ...prev
+        ]);
+        onAssigned();
+      })
+      .catch((err) => {
+        // Restore the group so the user can retry.
+        setGroups((prev) => (prev ? [...prev, group] : [group]));
+        setFailedLabels((prev) => ({
+          ...prev,
+          [group.label]: err instanceof Error ? err.message : String(err)
+        }));
+      })
+      .finally(() => {
+        setPendingLabels((prev) => {
+          if (!(group.label in prev)) return prev;
+          const next = { ...prev };
+          delete next[group.label];
+          return next;
+        });
       });
-      const data = (await res.json().catch(() => ({}))) as RapidEnrollAssignResponse & { error?: string };
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      setGroups((prev) => (prev ?? []).filter((g) => g.label !== group.label));
-      setCompletions((prev) => [
-        {
-          label: group.label,
-          targetName: data.speaker?.name ?? toSpeakerName ?? "speaker",
-          updatedSegmentsCount: data.updatedSegmentsCount ?? 0,
-          enrolledSamplesCount: data.enrolledSamplesCount ?? 0,
-          sampleCount: segmentIndices.length,
-          notes: (data.sampleResults ?? [])
-            .filter((r) => !r.voiceprintEnrolled && r.statusReason)
-            .map((r) => r.statusReason as string)
-        },
-        ...prev
-      ]);
-      onAssigned();
-    } catch (err) {
-      alert(`Failed to assign ${group.label}: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setBusyLabel(null);
-    }
   };
 
   return (
@@ -3308,11 +3333,26 @@ function RapidEnrollModal({
 
       {error && <div className="rounded-xl border border-red-900 bg-red-950/40 p-4 text-sm text-red-200">{error}</div>}
       {groups === null && !error && <p className="text-sm text-stone-400">Finding candidate speakers…</p>}
-      {groups !== null && groups.length === 0 && completions.length === 0 && (
+      {groups !== null && groups.length === 0 && completions.length === 0 && Object.keys(pendingLabels).length === 0 && (
         <p className="rounded-xl border border-stone-800 bg-stone-950/50 p-4 text-sm text-stone-300">
           🎉 Nothing to enroll — every speaker in this meeting is matched and verified.
         </p>
       )}
+
+      {Object.entries(pendingLabels).map(([label, targetName]) => (
+        <div key={`pending-${label}`} className="rounded-xl border border-amber-400/40 bg-amber-400/10 p-4 text-sm text-amber-200">
+          <p className="font-semibold">
+            ⏳ “{label}” is {targetName} — renaming now, enrolling voiceprint in the background…
+          </p>
+        </div>
+      ))}
+
+      {Object.entries(failedLabels).map(([label, message]) => (
+        <div key={`failed-${label}`} className="rounded-xl border border-red-900 bg-red-950/40 p-4 text-sm text-red-200">
+          <p className="font-semibold">Failed to assign “{label}”: {message}</p>
+          <p className="mt-1 text-xs">The voice has been restored to the list so you can retry.</p>
+        </div>
+      ))}
 
       {completions.map((c) => (
         <div key={`${c.label}-${c.targetName}`} className="rounded-xl border border-lime-500/40 bg-lime-500/10 p-4 text-sm text-lime-200">
@@ -3416,11 +3456,10 @@ function RapidEnrollModal({
               )}
               <button
                 type="button"
-                disabled={busyLabel === group.label}
-                onClick={() => void handleAssign(group)}
+                onClick={() => handleAssign(group)}
                 className="inline-flex min-h-[44px] shrink-0 items-center justify-center rounded-lg bg-lime-400 px-4 py-2 text-sm font-semibold text-stone-950 shadow-md transition hover:bg-lime-300 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {busyLabel === group.label ? "Enrolling…" : targetName ? `This is ${targetName}` : "Assign & enroll"}
+                {targetName ? `This is ${targetName}` : "Assign & enroll"}
               </button>
             </div>
           </section>
