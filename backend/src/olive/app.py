@@ -181,6 +181,21 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
     mcp_token = (
         opts.get("mcpToken") or opts.get("mcp_token") or os.environ.get("OLIVE_MCP_TOKEN") or ingest_token
     )
+    _mcp_write_opt = opts.get("mcpWriteEnabled", opts.get("mcp_write_enabled", None))
+    if isinstance(_mcp_write_opt, bool):
+        mcp_write_enabled = _mcp_write_opt
+    elif isinstance(_mcp_write_opt, str):
+        mcp_write_enabled = _mcp_write_opt.strip().lower() in ("1", "true", "yes", "on", "y")
+    elif _mcp_write_opt is not None:
+        mcp_write_enabled = bool(_mcp_write_opt)
+    else:
+        mcp_write_enabled = os.environ.get("OLIVE_MCP_WRITE", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+            "y",
+        )
     bind_host = str(
         opts.get("bindHost") or opts.get("bind_host") or os.environ.get("OLIVE_BIND_HOST") or "127.0.0.1"
     )
@@ -504,6 +519,11 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             speaker_service=get_speaker_service(),
             mcp_token=mcp_token,
             bind_host=bind_host,
+            write_enabled=mcp_write_enabled,
+            transcription_service=get_transcription_service(),
+            summary_service=get_summary_service(),
+            title_service=get_title_service(),
+            plaud_poller=plaud_poller,
         )
 
     if (

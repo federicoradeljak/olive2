@@ -117,7 +117,7 @@ Returns distinct meeting tags with meeting counts, sorted alphabetically:
 
 ## `/mcp`
 
-Provides Olive's read-only Model Context Protocol endpoint on the same port as the HTTP API. It supports `list_meetings`, `list_tags`, `get_meeting`, `search_transcripts`, `get_action_items`, `list_speakers`, and `get_speaker_profile`.
+Provides Olive's Model Context Protocol endpoint on the same port as the HTTP API. Read tools (`list_meetings`, `list_tags`, `get_meeting`, `search_transcripts`, `get_action_items`, `list_speakers`, `get_speaker_profile`) are always available. Write tools are off by default and are listed and callable only when the server runs with `OLIVE_MCP_WRITE=1`: speaker edits (`update_speaker`, `merge_speakers`, `delete_speaker`), tags (`set_meeting_tags`, single or bulk via `meetingIds` up to 500), titles and lifecycle (`update_meeting_title`, `update_meeting_start_time`, `auto_title_meeting`, `summarize_meeting`, `delete_meeting`), and transcription (`transcribe_meeting`, `bulk_transcribe` up to 2000, `cancel_transcription`, `retry_meeting_audio`, `reidentify_speakers`).
 
 `list_meetings` accepts `search` plus the meeting filters: `tags` (exact,
 AND-combined), `source`, `status`, `speakerId`, `hasSummary`,
@@ -149,6 +149,25 @@ trade-offs are recorded:
 exact + full-text search proves insufficient.
 
 Authentication uses `Authorization: Bearer <OLIVE_MCP_TOKEN>`. If `OLIVE_MCP_TOKEN` is unset, `OLIVE_INGEST_TOKEN` is used as a fallback. When Olive binds to loopback, the endpoint may be used without a token; non-loopback binds require one.
+
+### MCP writes: plan then apply
+
+Every write tool accepts `dryRun: true` to preview without mutating, and an `expected*` guard validated against live data before any mutation:
+
+- `update_speaker { speakerId, newName, expectedName?, dryRun? }` — rename; aborts unless the live name matches `expectedName`.
+- `merge_speakers { sourceSpeakerId, targetSpeakerId, expectedSourceName?, expectedTargetName?, dryRun? }` — moves meeting links, voiceprints, and clips into the target, then deletes the source; `dryRun` lists the meetings that would move.
+- `delete_speaker { speakerId, expectedName?, dryRun? }` — deletes the speaker and its meeting links; `dryRun` lists affected meetings.
+- `set_meeting_tags { meetingId?, meetingIds?, tags, expectedTags?, dryRun? }` — replaces tags (single, or bulk up to 500 via `meetingIds`); single aborts unless live tags match `expectedTags` (order-insensitive). For bulk tagging, scope with `list_meetings` or pass `meetingIds` directly.
+- `update_meeting_title { meetingId, newTitle, expectedTitle?, dryRun? }` — renames the title and its on-disk folder; aborts unless the live title matches `expectedTitle`.
+- `transcribe_meeting { meetingId, provider?, language?, force?, dryRun? }` — queues (re)transcription async, returns `jobId`; `dryRun` validates the meeting/recording without queueing.
+- `bulk_transcribe { provider, meetingIds?, search?, tags?, status?, speakerId?, hasSummary?, hasTranscript?, startTime?, endTime?, force?, language?, dryRun? }` — queues one engine for up to 2000 meetings; `dryRun` resolves the target list without queueing.
+- `cancel_transcription { meetingId, dryRun? }`, `retry_meeting_audio { meetingId, dryRun? }` (Plaud re-download), `reidentify_speakers { meetingId, dryRun? }` (re-match labels to voiceprints) — all async with `dryRun` validation.
+- `delete_meeting { meetingId, expectedTitle?, dryRun? }` — deletes recordings, artifacts, and folder; aborts unless the live title matches.
+- `update_meeting_start_time { meetingId, newStartTime, expectedStartTime?, dryRun? }` — shifts start (duration preserved, folder moved on date change).
+- `auto_title_meeting { meetingId, provider?, model?, expectedTitle?, dryRun? }` — LLM title + persist; `dryRun` validates without calling the LLM.
+- `summarize_meeting { meetingId, templateId?, provider?, model?, dryRun? }` — queues summary generation, returns generation status.
+
+Recommended agent flow: `dryRun` first (or read via `get_speaker_profile` / `get_meeting`), show the plan to the user, then apply with the `expected*` values from the plan so concurrent edits abort instead of clobbering.
 
 ## `GET /api/meetings/:id`
 

@@ -22,7 +22,7 @@ Olive is a two-part repository:
     - `pipeline.py` & `worker.py`: `LocalTranscriptionPipeline` and `LocalTranscriptionWorkerRunner`.
   - `src/olive/providers/speechmatics/`: Speechmatics batch client and json-v2 normalizer.
   - `src/olive/plaud/`: Vendored Plaud Cloud OAuth 2.0 PKCE client (`sdk.py`, `client.py`, `auth.py`), 429 retry backoff (`retry.py`), and background poller (`poller.py`).
-  - `src/olive/mcp_server.py`: Read-only Model Context Protocol server mounted at `/mcp`.
+  - `src/olive/mcp_server.py`: Model Context Protocol server mounted at `/mcp` (read tools always on; write tools gated by `OLIVE_MCP_WRITE=1`).
   - `src/olive/workflows/`: Durable DBOS job-queue system — **the SOLE acceptable path for enqueuing background work** (see rule 5).
     - `queues.py`: Named queues and worker concurrency (`STAGE_QUEUE_SPECS`): `pipeline` (2), `plaud_sync` (1), `ffmpeg` (2), `diarize` (1), `speaker_embed` (1), `asr` (1), `align` (1), `speechmatics` (2), `assemblyai` (2), `summarize` (2).
     - `transcription_workflow.py`: `enqueue_stage_job(queue, fn, deduplication_id=..., workflow_id=..., label=..., meeting_id=...)` wraps any callable as a durable queued workflow; `cancel_dbos_workflows_for_meeting()` cancels queued/running workflows per meeting; `runtime.py` launches the SQLite-backed DBOS runtime (pytest-aware: temp dirs under test, never `~/.config/olive`).

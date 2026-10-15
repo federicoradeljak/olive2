@@ -134,7 +134,7 @@ SOURCES                           PIPELINE & ARTIFACT STORE                     
                     │ • MMS CTC Forced Aligner│                 │ • Gemini / Claude / GPT │
                     │ • pyannote community-1  │                 │ • Local Ollama / vLLM   │
                     │ • WeSpeaker ResNet293   │                 │ • Structured Templates  │
-                    │ • Cloud: Speechmatics   │                 │ • Read-only /mcp Server │
+                    │ • Cloud: Speechmatics   │                 │ • /mcp Server (opt-in writes) │
                     └─────────────────────────┘                 └─────────────────────────┘
                                  │                                           │
                                  └─────────────────────┬─────────────────────┘
@@ -212,6 +212,7 @@ Olive stores runtime settings in `<configDir>/settings.json` and accepts environ
 | `HF_TOKEN` | *(optional)* | Hugging Face token for gated `pyannote` models (overrides `hfToken` in Settings UI) |
 | `OLIVE_INGEST_TOKEN` | *(optional)* | Bearer token required for `POST /api/ingest` |
 | `OLIVE_MCP_TOKEN` | *(optional)* | Bearer token for `/mcp`; falls back to `OLIVE_INGEST_TOKEN` and is required for non-loopback binds |
+| `OLIVE_MCP_WRITE` | `0` | Set to `1` to enable MCP write tools (speakers, tags incl. bulk, titles, meeting lifecycle, transcription, summaries); off by default |
 | `PLAUD_TOKEN_PATH` | `<configDir>/plaud-tokens.json` | OAuth token file for Plaud Cloud (migrates `~/.plaud/tokens.json` automatically if present) |
 | `SPEECHMATICS_API_KEY` | *(optional)* | API key for Speechmatics cloud batch transcription (overrides the key in Settings UI) |
 | `ASSEMBLY_API_KEY` | *(optional)* | API key for AssemblyAI cloud transcription (Universal-3.5 Pro; `ASSEMBLYAI_API_KEY` also accepted; overrides the key in Settings UI) |
@@ -220,7 +221,7 @@ Olive stores runtime settings in `<configDir>/settings.json` and accepts environ
 
 ### MCP endpoint
 
-Olive exposes a read-only Model Context Protocol server at `/mcp` on the main HTTP port (`list_meetings`, `get_meeting`, `search_transcripts`, `get_action_items`, `list_speakers`, `get_speaker_profile`).
+Olive exposes a Model Context Protocol server at `/mcp` on the main HTTP port. Read tools are always available (`list_meetings`, `get_meeting`, `search_transcripts`, `get_action_items`, `list_speakers`, `get_speaker_profile`). Write tools are off by default and appear only when the server runs with `OLIVE_MCP_WRITE=1`: speaker edits (`update_speaker`, `merge_speakers`, `delete_speaker`), tags incl. bulk (`set_meeting_tags` with `meetingId` or `meetingIds`), titles and lifecycle (`update_meeting_title`, `update_meeting_start_time`, `auto_title_meeting`, `summarize_meeting`, `delete_meeting`), and transcription (`transcribe_meeting`, `bulk_transcribe`, `cancel_transcription`, `retry_meeting_audio`, `reidentify_speakers`). Every write tool accepts `dryRun` to preview without mutating plus `expected*` guards that abort when live data no longer matches (long-running ops queue async and return job status), so agents can plan a cleanup and apply on confirm.
 
 Loopback clients can connect without a token. Set `OLIVE_MCP_TOKEN` (or `OLIVE_INGEST_TOKEN`) when binding to a non-loopback interface.
 
