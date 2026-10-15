@@ -40,6 +40,10 @@
       "type": "command",
       "command": "python3 scripts/deploy_staging.py"
     },
+    "docker:publish": {
+      "type": "command",
+      "command": "gh workflow run docker-publish.yml --ref main -f tag=${TAG:-latest}"
+    },
     "backup": {
       "type": "command",
       "command": "cd backend && uv run olive backup"
