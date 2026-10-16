@@ -50,7 +50,9 @@ pre-push:
         piped: true
         jobs:
           - name: refresh
-            run: npx -y skills update -y || true
+            skip:
+              - run: scripts/skills-throttle.sh
+            run: scripts/refresh-skills.sh || true
 
           - name: commit
             run: scripts/commit-skills.sh
