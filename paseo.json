@@ -3,7 +3,6 @@
     "setup": [
       "mise trust && mise install",
       "test -f lefthook.yml && mise exec -- lefthook install",
-      "test -f skills-lock.json && mise exec -- npx -y skills experimental_install",
       "if [ -f \"$PASEO_SOURCE_CHECKOUT_PATH/.env\" ] && [ ! -f .env ]; then cp \"$PASEO_SOURCE_CHECKOUT_PATH/.env\" .env; fi",
       "cd backend && uv sync --frozen",
       "cd frontend && pnpm install --frozen-lockfile"
