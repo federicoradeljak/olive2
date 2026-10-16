@@ -154,6 +154,16 @@ _MEETING_FILTER_PROPERTIES: dict[str, Any] = {
     "hasTranscript": {"type": "boolean", "description": "Only meetings with/without a transcript"},
     "startTime": {"type": "number"},
     "endTime": {"type": "number"},
+    "includeDetails": {
+        "type": "boolean",
+        "description": (
+            "Default false: each meeting is slim { id, title, startTime, endTime, source, tags } "
+            "(~65% smaller, enough for listing, matching, and counting). Pass true only when you need "
+            "status, artifact ids, timestamps, lastError, audioStatus, or canRetryAudio — e.g. before "
+            "fetching an artifact or showing processing state. Prefer get_meeting for full detail on one "
+            "meeting instead of includeDetails on a whole list."
+        ),
+    },
     "limit": {
         "type": "integer",
         "minimum": 1,
@@ -195,6 +205,9 @@ def _pagination_hints(limit: int, offset: int, total: int) -> dict[str, Any]:
 
 
 def _meeting_filter_args(arguments: dict[str, Any]) -> dict[str, Any]:
+    include_details = arguments.get("includeDetails")
+    if include_details is None:
+        include_details = arguments.get("include_details")
     return {
         "search": arguments.get("search"),
         "tags": arguments.get("tags"),
@@ -205,6 +218,7 @@ def _meeting_filter_args(arguments: dict[str, Any]) -> dict[str, Any]:
         "hasTranscript": arguments.get("hasTranscript"),
         "startTime": arguments.get("startTime"),
         "endTime": arguments.get("endTime"),
+        "includeDetails": include_details,
         "limit": arguments.get("limit"),
         "offset": arguments.get("offset"),
     }
@@ -215,7 +229,10 @@ MCP_TOOLS_SPEC: list[dict[str, Any]] = [
         "name": "list_meetings",
         "description": (
             "List Olive meetings (newest-first) with optional text, tag, speaker, status, and date filters. "
-            "Paginated: limit defaults to 50 (max 100); response includes "
+            "By default each meeting is slim { id, title, startTime, endTime, source, tags } — enough for "
+            "listing, matching, and counting. Pass includeDetails=true only when you need status, artifact "
+            "ids, timestamps, lastError, audioStatus, or canRetryAudio; prefer get_meeting for full detail "
+            "on one meeting. Paginated: limit defaults to 50 (max 100); response includes "
             "pagination { limit, offset, total, hasMore, nextOffset }. "
             "When hasMore is true, call again with offset=nextOffset until all results are retrieved."
         ),
@@ -231,12 +248,32 @@ MCP_TOOLS_SPEC: list[dict[str, Any]] = [
     },
     {
         "name": "get_meeting",
-        "description": "Get a complete Olive meeting record, including transcript and summaries.",
+        "description": (
+            "Get a complete Olive meeting record, including transcript and summaries. "
+            "Full text is large: pass includeTranscript=false when you only need metadata/recordings/artifacts, "
+            "includeSummaries=false to skip all summary bodies, and leave includeVoiceprints=false (default) "
+            "unless you need raw speaker vectors — meeting speakers carry identity without them."
+        ),
         "inputSchema": {
             "type": "object",
             "required": ["meetingId"],
             "properties": {
                 "meetingId": {"type": "string", "description": "Meeting ID"},
+                "includeTranscript": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "Include transcriptContent (default true; set false for metadata-only fetches)",
+                },
+                "includeSummaries": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "Include summaryContent and summaries[] bodies (default true)",
+                },
+                "includeVoiceprints": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Embed raw voiceprint vectors in speakers (default false; use export_speaker_library for vectors)",
+                },
             },
         },
     },
@@ -244,7 +281,8 @@ MCP_TOOLS_SPEC: list[dict[str, Any]] = [
         "name": "search_transcripts",
         "description": (
             "Search transcript text across Olive meetings and return matching snippets. "
-            "Paginated: limit defaults to 50; response includes "
+            "Nested meeting objects are slim { id, title, startTime, endTime, source, tags } unless "
+            "includeDetails=true. Paginated: limit defaults to 50; response includes "
             "pagination { limit, offset, total, hasMore, nextOffset }. "
             "When hasMore is true, call again with offset=nextOffset."
         ),
@@ -261,6 +299,8 @@ MCP_TOOLS_SPEC: list[dict[str, Any]] = [
         "name": "get_action_items",
         "description": (
             "Extract checklist-style action items from Olive meeting summaries. "
+            "Each item carries meetingId/meetingTitle (slim meeting identity); pass includeDetails=true "
+            "only if you also need full meeting detail — otherwise use get_meeting per meeting. "
             "Paginated: limit defaults to 50; response includes "
             "pagination { limit, offset, total, hasMore, nextOffset }. "
             "When hasMore is true, call again with offset=nextOffset."
@@ -276,17 +316,39 @@ MCP_TOOLS_SPEC: list[dict[str, Any]] = [
     },
     {
         "name": "list_speakers",
-        "description": "List Olive speaker profiles and meeting counts.",
-        "inputSchema": {"type": "object", "properties": {}},
+        "description": (
+            "List Olive speaker profiles and meeting counts. "
+            "By default each speaker is slim { id, name, enrolled, voiceprintCounts, enrolledAt, createdAt, meetingCount } — "
+            "no voiceprint vectors. Pass includeVoiceprints=true only to inspect raw providerIds/enrollmentClipPaths; "
+            "bulk vectors live in export_speaker_library."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "includeVoiceprints": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Embed raw voiceprint vectors (default false)",
+                },
+            },
+        },
     },
     {
         "name": "get_speaker_profile",
-        "description": "Get a speaker profile and associated meetings.",
+        "description": (
+            "Get a speaker profile and associated meetings. "
+            "Slim by default (no vectors); pass includeVoiceprints=true only when raw vectors are needed."
+        ),
         "inputSchema": {
             "type": "object",
             "required": ["speakerId"],
             "properties": {
                 "speakerId": {"type": "string", "description": "Speaker ID"},
+                "includeVoiceprints": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Embed raw voiceprint vectors (default false)",
+                },
             },
         },
     },
@@ -1647,7 +1709,16 @@ async def execute_mcp_tool(  # pyright: ignore[reportGeneralTypeIssues]
 
         if tool_name == "get_meeting":
             meeting_id = str(arguments.get("meetingId") or "")
-            detail = get_meeting(db, meeting_id, meetings_dir)
+            detail = get_meeting(
+                db,
+                meeting_id,
+                meetings_dir,
+                {
+                    "includeTranscript": arguments.get("includeTranscript", True),
+                    "includeSummaries": arguments.get("includeSummaries", True),
+                    "includeVoiceprints": arguments.get("includeVoiceprints", False),
+                },
+            )
             if not detail:
                 return _error_result("Meeting not found")
             return _text_result(detail.model_dump())
@@ -1682,7 +1753,7 @@ async def execute_mcp_tool(  # pyright: ignore[reportGeneralTypeIssues]
             limit = int(arguments.get("limit") or 50)
             offset = int(arguments.get("offset") or 0)
             if meeting_id:
-                d = get_meeting(db, str(meeting_id), meetings_dir)
+                d = get_meeting(db, str(meeting_id), meetings_dir, {"includeTranscript": False})
                 if not d:
                     return _error_result("Meeting not found")
                 meetings_list = [d.meeting.model_dump()]
@@ -1694,7 +1765,8 @@ async def execute_mcp_tool(  # pyright: ignore[reportGeneralTypeIssues]
                 )
             action_items: list[dict[str, Any]] = []
             for m in meetings_list:
-                d = get_meeting(db, m["id"], meetings_dir)
+                # Only the summary text is parsed; skip transcript reads.
+                d = get_meeting(db, m["id"], meetings_dir, {"includeTranscript": False})
                 for item in _parse_summary_action_items(d.summaryContent if d else None):
                     if include_completed or not item["completed"]:
                         action_items.append(
@@ -1712,23 +1784,25 @@ async def execute_mcp_tool(  # pyright: ignore[reportGeneralTypeIssues]
             )
 
         if tool_name == "list_speakers":
+            include_vectors = bool(arguments.get("includeVoiceprints", False))
             list_fn = getattr(speaker_service, "list_speakers", None) or getattr(
                 speaker_service, "listSpeakers", None
             )
             if not callable(list_fn):
                 return _error_result("Speaker service unavailable")
-            s_res: Any = list_fn()
+            s_res: Any = list_fn({"includeVoiceprints": include_vectors})
             speakers = await s_res if hasattr(s_res, "__await__") else s_res
             return _text_result({"speakers": speakers})
 
         if tool_name == "get_speaker_profile":
             speaker_id = str(arguments.get("speakerId") or "")
+            include_vectors = bool(arguments.get("includeVoiceprints", False))
             get_fn = getattr(speaker_service, "get_speaker", None) or getattr(
                 speaker_service, "getSpeaker", None
             )
             if not callable(get_fn):
                 return _error_result("Speaker service unavailable")
-            g_res: Any = get_fn(speaker_id)
+            g_res: Any = get_fn(speaker_id, {"includeVoiceprints": include_vectors})
             spk = await g_res if hasattr(g_res, "__await__") else g_res
             if not spk:
                 return _error_result("Speaker not found")
@@ -1787,7 +1861,9 @@ async def execute_mcp_tool(  # pyright: ignore[reportGeneralTypeIssues]
             trs_mid = str(arguments.get("meetingId") or "").strip()
             if not trs_mid:
                 return _error_result("meetingId is required")
-            trs_detail = get_meeting(db, trs_mid, meetings_dir)
+            trs_detail = get_meeting(
+                db, trs_mid, meetings_dir, {"includeTranscript": False, "includeSummaries": False}
+            )
             if not trs_detail:
                 return _error_result("Meeting not found")
             if transcription_service is None:
@@ -1824,7 +1900,9 @@ async def execute_mcp_tool(  # pyright: ignore[reportGeneralTypeIssues]
             ss_mid = str(arguments.get("meetingId") or "").strip()
             if not ss_mid:
                 return _error_result("meetingId is required")
-            ss_detail = get_meeting(db, ss_mid, meetings_dir)
+            ss_detail = get_meeting(
+                db, ss_mid, meetings_dir, {"includeTranscript": False, "includeSummaries": False}
+            )
             if not ss_detail:
                 return _error_result("Meeting not found")
             if summary_service is None:

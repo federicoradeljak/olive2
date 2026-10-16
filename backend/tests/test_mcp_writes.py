@@ -880,10 +880,10 @@ class _StubSpeakerService:
             "localName": opts.get("toSpeakerName"),
         }
 
-    async def get_speaker(self, speaker_id: str) -> Any:
+    async def get_speaker(self, speaker_id: str, options: dict[str, Any] | None = None) -> Any:
         return None
 
-    async def list_speakers(self) -> list[Any]:
+    async def list_speakers(self, options: dict[str, Any] | None = None) -> list[Any]:
         return []
 
 

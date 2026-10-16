@@ -112,6 +112,46 @@ def _to_speaker_dict(row: Mapping[Any, Any]) -> dict[str, Any]:
     ).model_dump()
 
 
+def _parse_include_voiceprints(options: dict[str, Any] | None) -> bool:
+    """Whether speaker payloads should embed raw voiceprint vectors (default False)."""
+    if not options:
+        return False
+    raw = options.get("includeVoiceprints")
+    if raw is None:
+        raw = options.get("include_voiceprints")
+    if isinstance(raw, bool):
+        return raw
+    if raw is None:
+        return False
+    return str(raw).strip().lower() in ("true", "1", "yes")
+
+
+def _to_speaker_summary(row: Mapping[Any, Any]) -> dict[str, Any]:
+    """Slim speaker: identity + enrollment signal, no voiceprint vectors.
+
+    Each 256-float voiceprint is ~2-3KB of JSON, so list/profile payloads
+    carry counts plus an `enrolled` flag instead of `providerIds` /
+    `enrollmentClipPaths`. Raw vectors live behind `includeVoiceprints=true`
+    and the `export_speaker_library` tool.
+    """
+    pids = _parse_json_field(row.get("provider_ids"), {})
+    counts: dict[str, int] = {}
+    total = 0
+    if isinstance(pids, dict):
+        for provider, vecs in pids.items():
+            n = len(vecs) if isinstance(vecs, list) else 0
+            counts[str(provider)] = n
+            total += n
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "enrolled": total > 0 or row.get("enrolled_at") is not None,
+        "voiceprintCounts": counts,
+        "enrolledAt": int(row["enrolled_at"]) if row.get("enrolled_at") is not None else None,
+        "createdAt": int(row["created_at"]),
+    }
+
+
 def _extract_transcript_segments(parsed_data: Any) -> dict[str, Any]:
     if isinstance(parsed_data, dict) and isinstance(parsed_data.get("segments"), list):
         segs = [
@@ -480,7 +520,8 @@ class SpeakerService:
             "updatedSpeakerRow": updated_row,
         }
 
-    async def list_speakers(self) -> list[dict[str, Any]]:
+    async def list_speakers(self, options: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        include_vectors = _parse_include_voiceprints(options)
         with self.db.connect() as conn:
             rows = conn.execute(text("SELECT * FROM speakers ORDER BY name ASC")).mappings().all()
             counts = (
@@ -497,18 +538,21 @@ class SpeakerService:
         # Unidentified clusters ("Speaker 1", "S1", "Unknown", ...) are not
         # people: hide any such rows (incl. ones persisted before this rule)
         # from the People screen, assignment modal and MCP speaker lists.
-        return [
-            {
-                **_to_speaker_dict(r),
-                "meetingCount": count_map.get(r["id"], 0),
-            }
-            for r in rows
-            if not _is_placeholder_name(str(r["name"]))
-        ]
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            if _is_placeholder_name(str(r["name"])):
+                continue
+            if include_vectors:
+                out.append({**_to_speaker_dict(r), "meetingCount": count_map.get(r["id"], 0)})
+            else:
+                out.append({**_to_speaker_summary(r), "meetingCount": count_map.get(r["id"], 0)})
+        return out
 
     listSpeakers = list_speakers
 
-    async def get_speaker(self, speaker_id: str) -> dict[str, Any] | None:
+    async def get_speaker(
+        self, speaker_id: str, options: dict[str, Any] | None = None
+    ) -> dict[str, Any] | None:
         with self.db.connect() as conn:
             row = (
                 conn.execute(
@@ -538,8 +582,11 @@ class SpeakerService:
                 .all()
             )
 
+        speaker_payload = (
+            _to_speaker_dict(row) if _parse_include_voiceprints(options) else _to_speaker_summary(row)
+        )
         return {
-            "speaker": _to_speaker_dict(row),
+            "speaker": speaker_payload,
             "meetings": [
                 {
                     "id": m["id"],

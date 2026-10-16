@@ -1068,6 +1068,8 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
     const params = new URLSearchParams({
       limit: String(MEETINGS_PAGE_SIZE),
       offset: String(offset),
+      // Full detail: the list view needs status, audioStatus, and artifact ids.
+      includeDetails: "true",
     });
     const q = query.trim();
     if (q) params.set("search", q);

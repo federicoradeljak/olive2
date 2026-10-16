@@ -64,13 +64,18 @@ Returns HTTP 200 with:
 {"status":"ok"}
 ```
 
-## `GET /api/meetings?limit&offset&search&tags&status&speakerId&hasSummary&hasTranscript`
+## `GET /api/meetings?limit&offset&search&tags&status&speakerId&hasSummary&hasTranscript&includeDetails`
 
 Returns HTTP 200 with a stable envelope. `meetings` is always an array, including when the
 database is empty. `limit` defaults to `50` and is capped at `100`; `offset` defaults to `0`.
 Results are newest-first. Every response includes
 `pagination: { limit, offset, total, hasMore, nextOffset }` — while `hasMore`
 is true, fetch the next page with `offset=nextOffset` until all results are loaded.
+
+By default each meeting is slim `{ id, title, startTime, endTime, source, tags }`
+(~65% smaller — enough for listing, matching, and counting). Pass
+`includeDetails=true` only when you need `status`, artifact ids, timestamps,
+`lastError`, `audioStatus`, or `canRetryAudio` (the web UI always does).
 
 * `tags`: exact tag match (case-insensitive), repeatable (`?tags=acme&tags=q3`, AND semantics)
   or comma-separated (`?tags=acme,q3`). Unlike `search`, never matches transcript text —
@@ -127,12 +132,18 @@ Provides Olive's Model Context Protocol endpoint on the same port as the HTTP AP
 `list_meetings` accepts `search` plus the meeting filters: `tags` (exact,
 AND-combined), `source`, `status`, `speakerId`, `hasSummary`,
 `hasTranscript`, `startTime`, `endTime`, plus `limit` / `offset`.
+Each meeting is slim `{ id, title, startTime, endTime, source, tags }` by default
+(~65% smaller — enough for listing, matching, and counting). Pass
+`includeDetails: true` only when you need `status`, artifact ids, timestamps,
+`lastError`, `audioStatus`, or `canRetryAudio`; prefer `get_meeting` for full
+detail on one meeting instead of `includeDetails` on a whole list.
 All three paginated tools (`list_meetings`, `search_transcripts`,
 `get_action_items`) return `pagination: { limit, offset, total, hasMore,
 nextOffset }` — while `hasMore` is true, call again with
 `offset=nextOffset` until everything is retrieved.
 `search_transcripts` takes `query` (the transcript text to find) plus the same
-filters *except* `search`, and `get_action_items` takes the same filters
+filters *except* `search` (nested meetings are slim unless `includeDetails`),
+and `get_action_items` takes the same filters
 *except* `search` — one free-text field per tool, so agents never have to
 guess which one scopes what. Point an agent at a tagged subset (e.g.
 `{"tags": ["acme"]}`) to review one client or project without keyword
@@ -188,12 +199,14 @@ Read helpers that mirror the REST polling/debug surface (always available, no `O
 - `list_active_transcriptions {}` — all active transcriptions (`GET /api/transcriptions/active`).
 - `get_summary_status { meetingId }` — summary generation status (`GET /api/meetings/{id}/summarize/status`).
 - `plaud_status {}` — Plaud sync state (`GET /api/plaud/status`).
+- `list_speakers { includeVoiceprints? }` / `get_speaker_profile { speakerId, includeVoiceprints? }` — speakers are slim `{ id, name, enrolled, voiceprintCounts, enrolledAt, createdAt, meetingCount }` by default (no voiceprint vectors); pass `includeVoiceprints: true` only to inspect raw vectors. Bulk vectors live in `export_speaker_library`.
+- `get_meeting { meetingId, includeTranscript?, includeSummaries?, includeVoiceprints? }` — transcript/summaries default to included; pass `includeTranscript: false` / `includeSummaries: false` for metadata-only fetches. Meeting speakers are vector-free by default.
 
 Recommended agent flow: `dryRun` first (or read via `get_speaker_profile` / `get_meeting`), show the plan to the user, then apply with the `expected*` values from the plan so concurrent edits abort instead of clobbering.
 
 ## `GET /api/meetings/:id`
 
-Returns HTTP 200 with the full meeting aggregate:
+Returns HTTP 200 with the full meeting aggregate (all sections included by default):
 
 ```json
 {
@@ -206,6 +219,11 @@ Returns HTTP 200 with the full meeting aggregate:
   "summaryContent": "..."
 }
 ```
+
+Large sections are opt-out via query flags: `?includeTranscript=false` skips
+`transcriptContent`, `?includeSummaries=false` skips `summaryContent` and
+`summaries[]` bodies, `?includeVoiceprints=false` strips raw voiceprint vectors
+from `speakers` (identity + `enrolledAt` kept).
 
 ## `POST /api/meetings/:id/transcribe`
 

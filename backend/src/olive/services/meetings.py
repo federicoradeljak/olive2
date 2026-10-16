@@ -27,6 +27,11 @@ from ..speaker_labels import is_generic_speaker_label
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 100
 
+# Slim listing shape (default for list_meetings): the six fields needed for
+# listing, matching, and counting. Everything else (status, artifact ids,
+# timestamps, audioStatus, ...) requires includeDetails=true.
+SLIM_MEETING_KEYS = ("id", "title", "startTime", "endTime", "source", "tags")
+
 
 def normalize_tag_list(value: Any) -> list[str]:
     """Normalize a tags filter value to a deduped list of non-empty strings.
@@ -210,6 +215,10 @@ def list_meetings(
     has_transcript = parse_bool_filter(
         q.get("hasTranscript") if q.get("hasTranscript") is not None else q.get("has_transcript")
     )
+    include_details_raw = (
+        q.get("includeDetails") if q.get("includeDetails") is not None else q.get("include_details")
+    )
+    include_details = parse_bool_filter(include_details_raw) is True
 
     matching_ids: set[str] | None = None
 
@@ -333,7 +342,7 @@ def list_meetings(
         ).scalar()
 
         recordings_by_meeting: dict[str, list[Any]] = {}
-        if rows:
+        if include_details and rows:
             rec_placeholders = ", ".join(f":rmid_{i}" for i in range(len(rows)))
             rec_params = {f"rmid_{i}": r["id"] for i, r in enumerate(rows)}
             rec_rows = (
@@ -349,6 +358,18 @@ def list_meetings(
 
     items = []
     for r in rows:
+        if not include_details:
+            items.append(
+                {
+                    "id": r["id"],
+                    "title": r["title"],
+                    "startTime": int(r["start_time"]),
+                    "endTime": int(r["end_time"]),
+                    "source": r["source"],
+                    "tags": parse_tags(r.get("tags")),
+                }
+            )
+            continue
         audio_status, can_retry = resolve_audio_status(
             r, recordings_by_meeting.get(r["id"], []), meetings_dir
         )
@@ -587,11 +608,59 @@ def update_meeting_start_time(
     return to_meeting(updated_row) if updated_row else None
 
 
+def _meeting_detail_flag(options: dict[str, Any] | None, *keys: str, default: bool) -> bool:
+    """Parse an opt-out section flag from get_meeting options (default when absent)."""
+    if not options:
+        return default
+    for key in keys:
+        if options.get(key) is not None:
+            raw = options[key]
+            if isinstance(raw, bool):
+                return raw
+            return str(raw).strip().lower() in ("true", "1", "yes")
+    return default
+
+
+def _to_speaker_summary(row: Mapping[Any, Any]) -> Speaker:
+    """Meeting-detail speaker without voiceprint vectors or clip paths.
+
+    `providerIds.local` entries are JSON-stringified 256-float embeddings
+    (~2-3KB each), so embedding them per speaker per meeting balloons the
+    payload. The summary keeps identity (`enrolledAt` still signals an
+    enrolled voiceprint); per-speaker enrollment detail lives behind
+    `get_speaker_profile { includeVoiceprints: true }` and raw vectors in
+    `export_speaker_library`.
+    """
+    return Speaker(
+        id=row["id"],
+        name=row["name"],
+        providerIds={},
+        enrolledAt=int(row["enrolled_at"]) if row.get("enrolled_at") is not None else None,
+        enrollmentClipPaths=[],
+        createdAt=int(row["created_at"]),
+    )
+
+
 def get_meeting(
     db: Engine,
     meeting_id: str,
     meetings_dir: str | None = None,
+    options: dict[str, Any] | None = None,
 ) -> MeetingDetailAggregate | None:
+    """Load one meeting's full detail aggregate.
+
+    Sections are opt-out: `includeTranscript` / `includeSummaries` default
+    True (pass False to skip the large text payloads when you only need
+    metadata, recordings, or artifacts), `includeVoiceprints` defaults False
+    (meeting speakers carry enrollment counts, not raw vectors).
+    """
+    include_transcript = _meeting_detail_flag(
+        options, "includeTranscript", "include_transcript", default=True
+    )
+    include_summaries = _meeting_detail_flag(options, "includeSummaries", "include_summaries", default=True)
+    include_voiceprints = _meeting_detail_flag(
+        options, "includeVoiceprints", "include_voiceprints", default=False
+    )
     with db.connect() as conn:
         meeting_row = (
             conn.execute(
@@ -666,7 +735,7 @@ def get_meeting(
         )
         primary_t_id = meeting_row.get("primary_transcript_artifact_id")
         primary_transcript = next((a for a in artifact_rows if a["id"] == primary_t_id), None)
-        if primary_transcript:
+        if primary_transcript and include_transcript:
             try:
                 transcript_content = (folder / primary_transcript["path"]).read_text(encoding="utf-8")
             except Exception:
@@ -674,7 +743,7 @@ def get_meeting(
 
         primary_s_id = meeting_row.get("primary_summary_artifact_id")
         primary_summary = next((a for a in artifact_rows if a["id"] == primary_s_id), None)
-        if primary_summary:
+        if primary_summary and include_summaries:
             try:
                 summary_content = (folder / primary_summary["path"]).read_text(encoding="utf-8")
             except Exception:
@@ -682,6 +751,8 @@ def get_meeting(
 
         for sa in artifact_rows:
             if sa["kind"] != "summary":
+                continue
+            if not include_summaries:
                 continue
             try:
                 content = (folder / sa["path"]).read_text(encoding="utf-8")
@@ -730,11 +801,13 @@ def get_meeting(
 
     audio_status, can_retry = resolve_audio_status(meeting_row, list(recording_rows), meetings_dir)
 
+    speaker_serializer = to_speaker if include_voiceprints else _to_speaker_summary
+
     return MeetingDetailAggregate(
         meeting=to_meeting(meeting_row, audio_status, can_retry),
         recordings=[to_recording(r) for r in recording_rows],
         artifacts=[to_artifact(a) for a in artifact_rows],
-        speakers=[to_speaker(s) for s in active_speaker_rows],
+        speakers=[speaker_serializer(s) for s in active_speaker_rows],
         stageRuns=[StageRunRow.model_validate(dict(sr)) for sr in stage_run_rows],
         transcriptContent=transcript_content,
         summaryContent=summary_content,

@@ -101,7 +101,11 @@ def test_plaud_pending_meeting_reports_retrieving(tmp_path: Path) -> None:
         )
     client, _ = _make_app(handle, meetings_dir)
 
-    lst = client.get("/api/meetings").json()["meetings"]
+    slim = client.get("/api/meetings").json()["meetings"]
+    assert len(slim) == 1
+    assert set(slim[0].keys()) == {"id", "title", "startTime", "endTime", "source", "tags"}
+
+    lst = client.get("/api/meetings?includeDetails=true").json()["meetings"]
     assert len(lst) == 1
     assert lst[0]["audioStatus"] == "retrieving"
     assert lst[0]["canRetryAudio"] is True
@@ -128,7 +132,7 @@ def test_ready_meeting_with_file_on_disk(tmp_path: Path) -> None:
         _insert_recording(conn, rid="rec-1", mid="up-ready", rel_path=rel, now=now, provider="upload")
     client, _ = _make_app(handle, meetings_dir)
 
-    lst = client.get("/api/meetings").json()["meetings"]
+    lst = client.get("/api/meetings?includeDetails=true").json()["meetings"]
     assert lst[0]["audioStatus"] == "ready"
     assert lst[0]["canRetryAudio"] is False
     handle.engine.dispose()
