@@ -23,6 +23,7 @@ every section newer than the previous tag into the GitHub release notes.
 
 ### Fixed
 
+- **Split meeting controls wrapped oddly** — the scissors icon in the audio-player "Split Meeting" button, the split-panel header, the transcript hover "Split meeting here" chip, and the split-turn modal title now sit inline with their labels instead of stacking above them.
 - **Auto-title failing on reasoning models** — generating a meeting title no longer sends a 32-token output cap, so reasoning models that spend their budget on internal reasoning before emitting the title no longer fail with "LLM returned an unusable title". The LLM connection test (`POST /api/llm/test`) no longer caps output either.
 - **Split audio preview still played the full recording** — splitting a meeting rewrote the original audio but left the cached voice-enhanced file (`audio/{recordingId}.enhanced.mp3`) untouched, and the player defaults to the enhanced stream — so it kept showing the pre-split duration (e.g. 2:27:18 on a 24-minute half). Splitting now deletes the stale enhanced cache so it rebuilds from the cut audio, the audio endpoint rebuilds the cache whenever the source is newer than it, and the UI reloads the player and drops its cached duration after a split.
 - **Upload durations (`0m 0s`)** — `POST /api/ingest` now reads `durationMs` (or `duration`) off the multipart form and the server probes the audio with `ffprobe` when the client doesn't send one, so uploaded meetings get a real `end_time` and recording `duration_ms` instead of showing 0m 0s.
