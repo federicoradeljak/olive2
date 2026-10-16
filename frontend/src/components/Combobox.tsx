@@ -92,20 +92,20 @@ export function Combobox({
         aria-controls={listId}
         aria-label={ariaLabel ?? placeholder}
         onClick={() => setOpen((v) => !v)}
-        className={`flex min-h-[44px] w-full items-center justify-between gap-2 rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-left text-base text-stone-100 transition focus:border-lime-400 focus:outline-none sm:min-h-0 sm:text-sm ${triggerClassName}`}
+        className={`btn w-full justify-between font-normal ${selected ? "" : "text-base-content/50"} ${triggerClassName}`}
       >
         <span className="flex min-w-0 flex-1 items-center gap-2">
           {selected?.icon}
-          <span className={`truncate ${selected ? "" : "text-stone-500"}`}>
+          <span className={`truncate ${selected ? "" : "text-base-content/50"}`}>
             {selected?.label ?? placeholder}
           </span>
         </span>
-        <ChevronsUpDown className="h-4 w-4 shrink-0 text-stone-500" aria-hidden="true" />
+        <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" aria-hidden="true" />
       </button>
 
       {open && (
-        <div className="absolute z-40 mt-1.5 w-full overflow-hidden rounded-lg border border-stone-700 bg-stone-950 shadow-2xl">
-          <div className="border-b border-stone-800 p-2">
+        <div className="absolute z-50 mt-1.5 w-full overflow-hidden rounded-box border border-base-300 bg-base-100 shadow-lg">
+          <div className="border-b border-base-300 p-2">
             <input
               ref={searchRef}
               type="search"
@@ -127,12 +127,12 @@ export function Combobox({
               }}
               placeholder={searchPlaceholder}
               aria-label={searchPlaceholder}
-              className="w-full rounded-md border border-stone-800 bg-stone-900 px-3 py-2 text-sm text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none"
+              className="input input-sm w-full"
             />
           </div>
           <div id={listId} role="listbox" aria-label={ariaLabel ?? placeholder} className="max-h-64 overflow-y-auto p-1.5">
             {filtered.length === 0 ? (
-              <p className="px-3 py-6 text-center text-sm text-stone-500">{emptyText}</p>
+              <p className="px-3 py-6 text-center text-sm text-base-content/50">{emptyText}</p>
             ) : (
               filtered.map((option, index) => {
                 const active = option.value === value;
@@ -145,9 +145,9 @@ export function Combobox({
                     aria-selected={active}
                     onMouseEnter={() => setHighlight(index)}
                     onClick={() => choose(option.value)}
-                    className={`flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition ${
-                      highlighted ? "bg-stone-800" : "bg-transparent"
-                    } ${active ? "text-lime-300" : "text-stone-200"}`}
+                    className={`flex w-full items-center gap-2 rounded-field px-2.5 py-2 text-left text-sm transition ${
+                      highlighted ? "bg-base-200" : "bg-transparent"
+                    } ${active ? "text-primary" : ""}`}
                   >
                     <Check
                       className={`h-4 w-4 shrink-0 ${active ? "opacity-100" : "opacity-0"}`}
@@ -159,7 +159,7 @@ export function Combobox({
                         {option.icon}
                       </span>
                       {option.description && (
-                        <span className="block truncate text-xs text-stone-500">{option.description}</span>
+                        <span className="block truncate text-xs text-base-content/50">{option.description}</span>
                       )}
                     </span>
                   </button>

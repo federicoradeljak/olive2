@@ -21,25 +21,25 @@ export const TRANSCRIBE_PROVIDER_OPTIONS: ComboboxOption[] = [
     value: "assemblyai",
     label: "AssemblyAI (Cloud)",
     keywords: "cloud",
-    icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-sky-300" aria-hidden="true" />,
+    icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-info" aria-hidden="true" />,
   },
   {
     value: "muse",
     label: "Muse Voice (Cloud)",
     keywords: "cloud meta",
-    icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-sky-300" aria-hidden="true" />,
+    icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-info" aria-hidden="true" />,
   },
   {
     value: "speechmatics",
     label: "Speechmatics (Cloud)",
     keywords: "cloud",
-    icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-sky-300" aria-hidden="true" />,
+    icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-info" aria-hidden="true" />,
   },
   {
     value: "local",
     label: "Local (Cohere + Diarization)",
     keywords: "local on-device cohere",
-    icon: <Cpu className="h-3.5 w-3.5 shrink-0 text-lime-300" aria-hidden="true" />,
+    icon: <Cpu className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden="true" />,
   },
 ];
 
@@ -68,25 +68,25 @@ export const ENGINE_OPTIONS: ComboboxOption[] = [
     value: "local:cohere",
     label: "Local (Cohere + Diarization) (Default)",
     keywords: "local on-device default",
-    icon: <Cpu className="h-3.5 w-3.5 shrink-0 text-lime-300" aria-hidden="true" />,
+    icon: <Cpu className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden="true" />,
   },
   {
     value: "speechmatics",
     label: "Speechmatics (Cloud)",
     keywords: "cloud",
-    icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-sky-300" aria-hidden="true" />,
+    icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-info" aria-hidden="true" />,
   },
   {
     value: "assemblyai",
     label: "AssemblyAI (Cloud)",
     keywords: "cloud",
-    icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-sky-300" aria-hidden="true" />,
+    icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-info" aria-hidden="true" />,
   },
   {
     value: "muse",
     label: "Muse Voice (Cloud)",
     keywords: "cloud meta",
-    icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-sky-300" aria-hidden="true" />,
+    icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-info" aria-hidden="true" />,
   },
 ];
 
@@ -114,9 +114,9 @@ export function templateOptions(templates: TemplateLike[]): ComboboxOption[] {
     description: t.isDefault ? "Default template" : t.isBuiltin ? "Built-in" : "Custom",
     keywords: `${t.isDefault ? "default" : ""} ${t.isBuiltin ? "builtin" : "custom"}`,
     icon: t.isDefault ? (
-      <BadgeCheck className="h-3.5 w-3.5 shrink-0 text-lime-300" aria-hidden="true" />
+      <BadgeCheck className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden="true" />
     ) : t.isBuiltin ? undefined : (
-      <Star className="h-3.5 w-3.5 shrink-0 text-amber-300" aria-hidden="true" />
+      <Star className="h-3.5 w-3.5 shrink-0 text-warning" aria-hidden="true" />
     ),
   }));
 }
@@ -167,9 +167,9 @@ export function llmProviderOptions(providers: LlmProviderLike[]): ComboboxOption
     description: `${p.modelCount} models · ${p.isConfigured ? "Key configured" : "Needs API key"}`,
     keywords: p.isConfigured ? "configured" : "unconfigured",
     icon: p.isConfigured ? (
-      <CircleCheck className="h-3.5 w-3.5 shrink-0 text-lime-300" aria-hidden="true" />
+      <CircleCheck className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden="true" />
     ) : (
-      <CircleX className="h-3.5 w-3.5 shrink-0 text-stone-500" aria-hidden="true" />
+      <CircleX className="h-3.5 w-3.5 shrink-0 text-base-content/50" aria-hidden="true" />
     ),
   }));
 }
@@ -178,22 +178,22 @@ export const LOG_LEVEL_OPTIONS: ComboboxOption[] = [
   {
     value: "debug",
     label: "All Levels (DEBUG+)",
-    icon: <Bug className="h-3.5 w-3.5 shrink-0 text-stone-400" aria-hidden="true" />,
+    icon: <Bug className="h-3.5 w-3.5 shrink-0 text-base-content/70" aria-hidden="true" />,
   },
   {
     value: "info",
     label: "INFO and above",
-    icon: <Info className="h-3.5 w-3.5 shrink-0 text-sky-300" aria-hidden="true" />,
+    icon: <Info className="h-3.5 w-3.5 shrink-0 text-info" aria-hidden="true" />,
   },
   {
     value: "warn",
     label: "WARN and ERROR only",
-    icon: <TriangleAlert className="h-3.5 w-3.5 shrink-0 text-amber-300" aria-hidden="true" />,
+    icon: <TriangleAlert className="h-3.5 w-3.5 shrink-0 text-warning" aria-hidden="true" />,
   },
   {
     value: "error",
     label: "ERROR only",
-    icon: <CircleX className="h-3.5 w-3.5 shrink-0 text-red-300" aria-hidden="true" />,
+    icon: <CircleX className="h-3.5 w-3.5 shrink-0 text-error" aria-hidden="true" />,
   },
 ];
 
@@ -203,7 +203,7 @@ export function logCategoryOptions(categories: string[]): ComboboxOption[] {
     ...categories.map((c) => ({
       value: c,
       label: c,
-      icon: <Tag className="h-3.5 w-3.5 shrink-0 text-stone-500" aria-hidden="true" />,
+      icon: <Tag className="h-3.5 w-3.5 shrink-0 text-base-content/50" aria-hidden="true" />,
     })),
   ];
 }
