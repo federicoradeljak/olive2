@@ -871,6 +871,15 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
 
         if request.query_params.get("enhanced") == "true":
             enhanced_full = folder / "audio" / f"{recording['id']}.enhanced.mp3"
+            # Guard against a stale cache: if the source audio was rewritten
+            # after the enhanced file was built (e.g. a meeting split
+            # overwrote Part A in place), rebuild instead of serving it.
+            if enhanced_full.exists():
+                try:
+                    if full_path.stat().st_mtime > enhanced_full.stat().st_mtime:
+                        enhanced_full.unlink(missing_ok=True)
+                except OSError:
+                    pass
             if not enhanced_full.exists():
                 await enhance_audio_file_async(full_path, enhanced_full)
             if enhanced_full.exists():

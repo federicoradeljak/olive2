@@ -1902,6 +1902,12 @@ function MeetingDetailView({
       setSplitMs(null);
       setSplitResult({ newMeetingId: data.newMeeting.id, newTitle: data.newMeeting.title });
       await fetchDetail();
+      // The audio file changed on disk: drop the cached duration (which
+      // otherwise keeps splitTotalMs pinned to the pre-split length) and
+      // force the <audio> element to re-request instead of replaying its
+      // buffered/stale source.
+      setAudioDurationMs(null);
+      if (audioRef.current) audioRef.current.load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to split meeting");
     } finally {

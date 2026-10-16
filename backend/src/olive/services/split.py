@@ -41,6 +41,31 @@ def _codec_args(ext: str) -> list[str]:
     return _EXT_TO_CODEC.get(ext.lower(), ["-c:a", "aac"])
 
 
+def _delete_stale_enhanced_files(folder: Path, recording_id: str) -> None:
+    """Remove cached voice-enhanced derivatives for a recording.
+
+    The audio route serves ``audio/{recording_id}.enhanced.mp3`` whenever it
+    exists (see ``app.get_meeting_audio_route``), and the enhancer never
+    rebuilds an existing file. Any caller that rewrites the source audio
+    in place — e.g. this split service overwriting Part A — must delete
+    the stale derivative or playback keeps serving the pre-split audio.
+    """
+    try:
+        candidates = [folder / "audio" / f"{recording_id}.enhanced.mp3"]
+        candidates += sorted((folder / "audio").glob(f"{recording_id}.enhanced.*"))
+        seen: set[Path] = set()
+        for path in candidates:
+            if path in seen:
+                continue
+            seen.add(path)
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+    except Exception:
+        pass
+
+
 def _probe_duration_ms(path: Path) -> int | None:
     try:
         proc = subprocess.run(
@@ -392,6 +417,9 @@ def split_meeting(db: Engine, meetings_dir: str, meeting_id: str, split_ms: int)
     part_b_rel = f"audio/{new_recording_id}.{ext}"
     (new_folder / part_b_rel).write_bytes(bytes_b)
     src_audio.write_bytes(bytes_a)
+    # The source audio was rewritten in place: drop the cached voice-enhanced
+    # derivative or the audio route keeps serving the pre-split full recording.
+    _delete_stale_enhanced_files(folder, str(recording["id"]))
     sha_a = hashlib.sha256(bytes_a).hexdigest()
     sha_b = hashlib.sha256(bytes_b).hexdigest()
 
