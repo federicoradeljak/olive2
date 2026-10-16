@@ -3847,7 +3847,7 @@ function GenerateSummaryModal({
               id="setPrimarySummary"
               checked={setPrimary}
               onChange={(e) => setSetPrimary(e.target.checked)}
-              className="input input-md w-full rounded text-primary focus:ring-primary"
+              className="checkbox checkbox-primary"
             />
             <label htmlFor="setPrimarySummary" className="text-xs text-base-content cursor-pointer">
               Set as primary summary for this meeting
@@ -5420,7 +5420,7 @@ function TemplateEditorModal({
             id="isDefaultCheckbox"
             checked={isDefault}
             onChange={(e) => setIsDefault(e.target.checked)}
-            className="input input-md w-full rounded text-primary focus:ring-primary"
+            className="checkbox checkbox-primary"
           />
           <label htmlFor="isDefaultCheckbox" className="text-xs text-base-content cursor-pointer">
             Set as default summary template
