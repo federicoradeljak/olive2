@@ -190,7 +190,9 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           mapfile -t CALVER_TAGS < <(git tag --list | grep -E '^[0-9]{4}\.[0-9]{2}\.[0-9]{2}(\.[0-9]+)?$' || true)
           if [ "${#CALVER_TAGS[@]}" -gt 0 ]; then
-            PREV=$(printf '%s\n' "${CALVER_TAGS[@]}" | sort -V | awk -v tag="${TAG}" '{ if ($0 == tag) { print prev; exit } prev = $0 }')
+            # TAG is included in the sort so the lookup is the predecessor by
+            # version order (deduped, so identical when the tag already exists).
+            PREV=$(printf '%s\n' "${CALVER_TAGS[@]}" "${TAG}" | sort -V -u | awk -v tag="${TAG}" '{ if ($0 == tag) { print prev; exit } prev = $0 }')
           else
             PREV=""
           fi

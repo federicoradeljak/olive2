@@ -12,10 +12,12 @@ IMAGE="ghcr.io/$(git remote get-url origin | sed -E 's#.*github.com[:/]([^.]+)(\
 
 # Same previous-tag resolution as .github/workflows/docker-publish.yml:
 # newest CalVer tag strictly older than TAG by version sort (empty = first release).
+# TAG itself is included in the sort so the lookup also works before the tag
+# exists (i.e. when previewing a release that hasn't been cut yet).
 mapfile -t CALVER_TAGS < <(git tag --list | grep -E '^[0-9]{4}\.[0-9]{2}\.[0-9]{2}(\.[0-9]+)?$' || true)
 PREV=""
 if [ "${#CALVER_TAGS[@]}" -gt 0 ]; then
-  PREV="$(printf '%s\n' "${CALVER_TAGS[@]}" | sort -V | awk -v tag="${TAG}" '{ if ($0 == tag) { print prev; exit } prev = $0 }')"
+  PREV="$(printf '%s\n' "${CALVER_TAGS[@]}" "${TAG}" | sort -V -u | awk -v tag="${TAG}" '{ if ($0 == tag) { print prev; exit } prev = $0 }')"
 fi
 
 ARGS=(--tag "${TAG}" --image "${IMAGE}")
