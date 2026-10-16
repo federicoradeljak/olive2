@@ -43,24 +43,7 @@ pre-commit:
       stage_fixed: true
 
 pre-push:
-  parallel: true
   jobs:
-    - name: vendored-skills
-      group:
-        piped: true
-        jobs:
-          - name: refresh
-            skip:
-              - run: scripts/skills-throttle.sh
-            run: scripts/refresh-skills.sh || true
-
-          - name: commit
-            run: scripts/commit-skills.sh
-
-          - name: push
-            only:
-              - run: test -f .agents/skills/.needs-repush
-            run: rm .agents/skills/.needs-repush && git push --no-verify
     - run: cd backend && uv run pytest
       glob:
         - "backend/**"
