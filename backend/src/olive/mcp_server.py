@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -666,6 +667,36 @@ MCP_WRITE_TOOLS_SPEC: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "split_meeting",
+        "description": (
+            "Split a meeting in two at splitMs milliseconds from the start (audio cut with "
+            "ffmpeg, transcripts divided on the same boundary without re-transcription, "
+            "summaries on both halves deleted as stale). The second half becomes a new "
+            '"(Part 2)" meeting. Requires OLIVE_MCP_WRITE=1. Pass dryRun=true to preview; '
+            "pass expectedTitle to abort unless the live title matches."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["meetingId", "splitMs"],
+            "properties": {
+                "meetingId": {"type": "string", "description": "Meeting ID"},
+                "splitMs": {
+                    "type": "number",
+                    "description": "Split point in milliseconds from the start of the audio",
+                },
+                "expectedTitle": {
+                    "type": "string",
+                    "description": "Optional live title that must match or the split aborts",
+                },
+                "dryRun": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "When true, return the plan without mutating",
+                },
+            },
+        },
+    },
+    {
         "name": "update_meeting_start_time",
         "description": (
             "Shift a meeting's start time (duration preserved, on-disk folder moved when the date "
@@ -1198,7 +1229,62 @@ async def _handle_lifecycle_mcp_tools(
     title_service: Any | None,
     summary_service: Any | None,
 ) -> dict[str, Any] | None:
-    """Meeting lifecycle edits (delete, start-time, auto-title, summarize, summary artifacts)."""
+    """Meeting lifecycle edits (delete, split, start-time, auto-title, summarize, summary artifacts)."""
+    if tool_name == "split_meeting":
+        sp_mid = str(arguments.get("meetingId") or "").strip()
+        sp_raw = arguments.get("splitMs")
+        sp_expected = arguments.get("expectedTitle")
+        sp_dry = bool(arguments.get("dryRun"))
+        if not sp_mid:
+            return _error_result("meetingId is required")
+        if not isinstance(sp_raw, (int, float)) or isinstance(sp_raw, bool):
+            return _error_result("splitMs must be milliseconds from the start")
+        sp_split = int(sp_raw)
+        if sp_split <= 0:
+            return _error_result("splitMs must be positive")
+        sp_detail = get_meeting(db, sp_mid, meetings_dir)
+        if not sp_detail:
+            return _error_result("Meeting not found")
+        sp_title = str(sp_detail.meeting.title or "")
+        if sp_expected is not None and str(sp_expected) != sp_title:
+            return _error_result(
+                f"Precondition failed: expectedTitle {str(sp_expected)!r} does not match "
+                f"live title {sp_title!r}; aborting without changes"
+            )
+        sp_recs = sp_detail.recordings or []
+        sp_total = sp_recs[0].durationMs if sp_recs else None
+        if sp_total is None:
+            return _error_result(
+                "Audio duration unknown; transcribe the meeting first so a split point can be validated"
+            )
+        if sp_split < 5000 or sp_split > sp_total - 5000:
+            return _error_result(
+                f"splitMs must be between 5000ms and {sp_total - 5000}ms (audio is {sp_total}ms)"
+            )
+        if sp_dry:
+            return _text_result(
+                {
+                    "dryRun": True,
+                    "operation": "split_meeting",
+                    "meetingId": sp_mid,
+                    "title": sp_title,
+                    "splitMs": sp_split,
+                    "part1RangeMs": [0, sp_split],
+                    "part2RangeMs": [sp_split, sp_total],
+                    "summariesDropped": True,
+                    "wouldSplit": True,
+                }
+            )
+        from .services.split import split_meeting as _split_meeting
+
+        try:
+            sp_res = await asyncio.to_thread(_split_meeting, db, meetings_dir, sp_mid, sp_split)
+        except ValueError as exc:
+            return _error_result(str(exc))
+        except Exception as exc:
+            return _error_result(str(exc))
+        return _text_result({"operation": "split_meeting", **sp_res})
+
     if tool_name == "delete_meeting":
         dm_mid = str(arguments.get("meetingId") or "").strip()
         dm_expected = arguments.get("expectedTitle")

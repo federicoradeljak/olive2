@@ -797,6 +797,28 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=500)
 
+    @app.post("/api/meetings/{meeting_id}/split")
+    async def post_meeting_split_route(meeting_id: str, request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "JSON body required"}, status_code=400)
+
+        raw = body.get("splitMs", body.get("split_ms")) if isinstance(body, dict) else None
+        if not isinstance(raw, (int, float)) or isinstance(raw, bool):
+            return JSONResponse({"error": "splitMs must be milliseconds from the start"}, status_code=400)
+        try:
+            from .services.split import split_meeting
+
+            result = await asyncio.to_thread(split_meeting, db, meetings_dir, meeting_id, int(raw))
+            return JSONResponse(result)
+        except ValueError as exc:
+            msg = str(exc)
+            code = 404 if "not found" in msg.lower() else 400
+            return JSONResponse({"error": msg}, status_code=code)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
     @app.put("/api/meetings/{meeting_id}/tags")
     async def put_meeting_tags_route(meeting_id: str, request: Request) -> JSONResponse:
         try:

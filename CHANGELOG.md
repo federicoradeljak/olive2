@@ -10,6 +10,10 @@ every section newer than the previous tag into the GitHub release notes.
 
 ## [2026-10-16]
 
+### Added
+
+- **Split meeting in two** — over-long recordings (meeting + forgotten commute) can be cut at any point via `POST /api/meetings/{id}/split { splitMs }`. The audio is cut with ffmpeg, every JSON transcript is divided on the same boundary and re-anchored (no re-transcription), summaries are discarded on both halves as stale, and the second half becomes a new "(Part 2)" meeting. In the app, drag the split slider under the audio player (or "Use current position"), or hover between transcript turns and hit "✂ Split meeting here", then confirm — delete the half you don't want afterwards. Also available to agents as the opt-in MCP write tool `split_meeting { meetingId, splitMs, expectedTitle?, dryRun? }` (`OLIVE_MCP_WRITE=1`).
+
 ### Fixed
 
 - **Upload durations (`0m 0s`)** — `POST /api/ingest` now reads `durationMs` (or `duration`) off the multipart form and the server probes the audio with `ffprobe` when the client doesn't send one, so uploaded meetings get a real `end_time` and recording `duration_ms` instead of showing 0m 0s.

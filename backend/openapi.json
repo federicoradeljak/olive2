@@ -258,6 +258,43 @@
         }
       }
     },
+    "/api/meetings/{meeting_id}/split": {
+      "post": {
+        "summary": "Post Meeting Split Route",
+        "operationId": "post_meeting_split_route_api_meetings__meeting_id__split_post",
+        "parameters": [
+          {
+            "name": "meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/meetings/{meeting_id}/tags": {
       "put": {
         "summary": "Put Meeting Tags Route",

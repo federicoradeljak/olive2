@@ -1814,6 +1814,11 @@ function MeetingDetailView({
   const [mobileSection, setMobileSection] = useState<"summary" | "transcript" | null>(null);
   const [retryingAudio, setRetryingAudio] = useState(false);
   const [audioRetryNotice, setAudioRetryNotice] = useState<string | null>(null);
+  const [audioDurationMs, setAudioDurationMs] = useState<number | null>(null);
+  const [splitMs, setSplitMs] = useState<number | null>(null);
+  const [showSplitConfirm, setShowSplitConfirm] = useState(false);
+  const [splittingMeeting, setSplittingMeeting] = useState(false);
+  const [splitResult, setSplitResult] = useState<{ newMeetingId: string; newTitle: string } | null>(null);
 
   const audioStatus = detail?.meeting.audioStatus ?? (detail && detail.recordings.length === 0 ? "retrieving" : "ready");
   const hasNoAudio = !!detail && audioStatus !== "ready";
@@ -1832,6 +1837,41 @@ function MeetingDetailView({
       setAudioRetryNotice(err instanceof Error ? err.message : "Failed to queue audio refetch");
     } finally {
       setRetryingAudio(false);
+    }
+  };
+
+  const splitTotalMs =
+    audioDurationMs ?? detail?.recordings[0]?.durationMs ?? null;
+  const splitValid =
+    splitMs !== null &&
+    splitTotalMs !== null &&
+    splitMs >= 5000 &&
+    splitMs <= splitTotalMs - 5000;
+
+  const confirmSplitMeeting = async () => {
+    if (splitMs === null || splittingMeeting) return;
+    setSplittingMeeting(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/meetings/${meetingId}/split`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ splitMs })
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        newMeeting?: { id: string; title: string };
+      };
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (!data.newMeeting) throw new Error("Split returned no new meeting");
+      setShowSplitConfirm(false);
+      setSplitMs(null);
+      setSplitResult({ newMeetingId: data.newMeeting.id, newTitle: data.newMeeting.title });
+      await fetchDetail();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to split meeting");
+    } finally {
+      setSplittingMeeting(false);
     }
   };
 
@@ -3011,12 +3051,36 @@ function MeetingDetailView({
                   <span>{enhancedAudio ? "✨ Voice Enhanced (Active)" : "🔉 Original Raw Audio"}</span>
                 </button>
               </div>
+              {splitResult && (
+                <div className="flex flex-wrap items-center gap-2 rounded-lg border border-lime-500/40 bg-lime-500/10 px-3 py-2 text-xs text-lime-200">
+                  <span>✓ Split complete — Part 2 created as “{splitResult.newTitle}”.</span>
+                  <button
+                    type="button"
+                    onClick={() => window.location.assign(`/meetings/${splitResult.newMeetingId}`)}
+                    className="rounded-md bg-lime-400 px-2 py-1 font-semibold text-stone-950 hover:bg-lime-300"
+                  >
+                    Open Part 2 →
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSplitResult(null)}
+                    className="text-lime-300/70 hover:text-lime-200"
+                    aria-label="Dismiss split notice"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              )}
               <div className="rounded-xl bg-stone-800 p-1.5">
               <audio
                 ref={audioRef}
                 controls
                 src={`/api/meetings/${meetingId}/audio?enhanced=${enhancedAudio}`}
                 className="block w-full max-w-full h-10 sm:h-11 rounded-full [color-scheme:dark]"
+                onLoadedMetadata={() => {
+                  const secs = audioRef.current?.duration;
+                  if (secs && Number.isFinite(secs)) setAudioDurationMs(Math.round(secs * 1000));
+                }}
                 onTimeUpdate={() => {
                   if (audioRef.current && playbackStopMsRef.current !== null) {
                     if (audioRef.current.currentTime >= playbackStopMsRef.current / 1000) {
@@ -3036,6 +3100,52 @@ function MeetingDetailView({
                 }}
               />
               </div>
+              {splitTotalMs !== null && splitTotalMs > 15000 && (
+                <div className="space-y-2 rounded-lg border border-stone-800 bg-stone-950/60 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <span className="font-semibold uppercase tracking-wider text-stone-400">✂ Split meeting</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const secs = audioRef.current?.currentTime;
+                        if (secs && Number.isFinite(secs)) setSplitMs(Math.round(secs * 1000));
+                      }}
+                      className="text-stone-400 hover:text-lime-300"
+                      title="Set the split point to the current playback position"
+                    >
+                      Use current position
+                    </button>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={Math.floor(splitTotalMs / 1000)}
+                    step={1}
+                    value={splitMs !== null ? Math.floor(splitMs / 1000) : 0}
+                    onChange={(e) => setSplitMs(Number(e.target.value) * 1000)}
+                    aria-label="Split point in seconds"
+                    className="w-full accent-lime-400"
+                  />
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-stone-400">
+                    <span>
+                      {splitMs !== null ? (
+                        <>Split at <span className="font-mono font-semibold text-stone-200">{formatTimeOffset(splitMs)}</span> → Part 1: {formatTimeOffset(splitMs)} · Part 2: {formatTimeOffset(splitTotalMs - splitMs)}</>
+                      ) : (
+                        <>Drag to choose where Part 1 ends and Part 2 begins (total {formatTimeOffset(splitTotalMs)})</>
+                      )}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={!splitValid}
+                      onClick={() => setShowSplitConfirm(true)}
+                      className="rounded-lg bg-lime-400 px-3 py-1.5 font-semibold text-stone-950 hover:bg-lime-300 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                      title={!splitValid ? "Drag the slider at least 5 seconds from either edge" : undefined}
+                    >
+                      Split meeting…
+                    </button>
+                  </div>
+                </div>
+              )}
             </section>
           )}
 
@@ -3272,8 +3382,25 @@ function MeetingDetailView({
             {parsedTranscriptSegments.length > 0 ? (
               <div className="space-y-3 sm:space-y-4 rounded-xl border border-stone-800 bg-stone-900/60 p-3 sm:p-6 w-full max-w-full min-w-0">
                 {parsedTranscriptSegments.map((seg, idx) => (
+                  <Fragment key={idx}>
+                    {idx > 0 && (
+                      <div className="group/split flex items-center gap-2 opacity-60 hover:opacity-100 transition focus-within:opacity-100">
+                        <div className="h-px flex-1 bg-stone-800" />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSplitMs(seg.startMs);
+                            setShowSplitConfirm(true);
+                          }}
+                          title={`Split meeting before this turn (${formatTimeOffset(seg.startMs)})`}
+                          className="rounded-full border border-stone-700 bg-stone-900 px-2.5 py-1 text-[11px] font-medium text-stone-500 transition hover:border-lime-400/50 hover:text-lime-300"
+                        >
+                          ✂ Split meeting here · {formatTimeOffset(seg.startMs)}
+                        </button>
+                        <div className="h-px flex-1 bg-stone-800" />
+                      </div>
+                    )}
                   <div
-                    key={idx}
                     className="group rounded-xl border border-stone-800/70 bg-stone-900/40 p-3 sm:p-4 transition hover:border-stone-700 hover:bg-stone-900/80 space-y-2 w-full max-w-full min-w-0"
                   >
                     {/* Header: Play/Timestamp + Speaker Badge + Action Buttons */}
@@ -3326,6 +3453,7 @@ function MeetingDetailView({
                     {/* Turn Content */}
                     <p className="text-sm leading-relaxed text-stone-200 pl-0.5 break-words">{seg.text}</p>
                   </div>
+                  </Fragment>
                 ))}
               </div>
             ) : detail.transcriptContent ? (
@@ -3372,6 +3500,50 @@ function MeetingDetailView({
                 onSpeakerUpdated();
               }}
             />
+          )}
+
+          {/* Split Meeting Confirm Modal */}
+          {showSplitConfirm && splitMs !== null && splitTotalMs !== null && (
+            <Modal onClose={() => setShowSplitConfirm(false)} title="Split meeting in two" ariaLabel="Split meeting confirmation" maxWidth="max-w-md">
+              <div className="space-y-4">
+                <p className="text-sm text-stone-300">
+                  Split at <span className="font-mono font-semibold text-stone-100">{formatTimeOffset(splitMs)}</span>? The
+                  transcript is divided on the same boundary — no re-transcription needed.
+                </p>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="rounded-lg border border-stone-700 bg-stone-900 p-3">
+                    <p className="font-semibold text-stone-200">Part 1 (this meeting)</p>
+                    <p className="mt-1 font-mono text-stone-400">00:00 → {formatTimeOffset(splitMs)}</p>
+                  </div>
+                  <div className="rounded-lg border border-stone-700 bg-stone-900 p-3">
+                    <p className="font-semibold text-stone-200">Part 2 (new meeting)</p>
+                    <p className="mt-1 font-mono text-stone-400">{formatTimeOffset(splitMs)} → {formatTimeOffset(splitTotalMs)}</p>
+                  </div>
+                </div>
+                <p className="text-xs text-amber-300/90">
+                  Summaries on both parts are deleted (they described the whole recording). Delete the unwanted half
+                  afterwards if you only want one.
+                </p>
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowSplitConfirm(false)}
+                    disabled={splittingMeeting}
+                    className="rounded-lg border border-stone-700 px-3.5 py-2 text-sm text-stone-300 hover:border-stone-500 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void confirmSplitMeeting()}
+                    disabled={splittingMeeting || !splitValid}
+                    className="rounded-lg bg-lime-400 px-3.5 py-2 text-sm font-semibold text-stone-950 hover:bg-lime-300 disabled:opacity-50"
+                  >
+                    {splittingMeeting ? "Splitting…" : "Split meeting"}
+                  </button>
+                </div>
+              </div>
+            </Modal>
           )}
 
           {/* Rapid Enroll Modal */}

@@ -449,6 +449,7 @@ def test_write_tools_list_includes_second_wave(tmp_path: Path) -> None:
         "retry_meeting_audio",
         "reidentify_speakers",
         "delete_meeting",
+        "split_meeting",
         "update_meeting_start_time",
         "auto_title_meeting",
         "summarize_meeting",
@@ -592,6 +593,39 @@ def test_delete_meeting_guard_and_apply(tmp_path: Path) -> None:
     )
     assert done["deleted"] is True
     assert not folder.exists()
+    handle.engine.dispose()
+
+
+def test_split_meeting_dry_run_and_guards(tmp_path: Path) -> None:
+    handle = create_db(":memory:")
+    meetings_dir = str(tmp_path / "meetings")
+    _seed_meeting(handle.engine, meetings_dir, "m-split-1", "Split me", [])
+    _seed_recording(handle.engine, "m-split-1")
+    app = _write_app(tmp_path, handle.engine)
+    client = TestClient(app)
+
+    plan = _parse_text(
+        _call_tool(client, "split_meeting", {"meetingId": "m-split-1", "splitMs": 30_000, "dryRun": True})
+    )
+    assert plan["dryRun"] is True
+    assert plan["wouldSplit"] is True
+    assert plan["part1RangeMs"] == [0, 30_000]
+    assert plan["part2RangeMs"] == [30_000, 60_000]
+    assert plan["summariesDropped"] is True
+
+    err = _call_tool(
+        client, "split_meeting", {"meetingId": "m-split-1", "splitMs": 30_000, "expectedTitle": "Stale"}
+    )
+    assert err.get("isError") is True
+
+    err = _call_tool(client, "split_meeting", {"meetingId": "m-split-1", "splitMs": 1000, "dryRun": True})
+    assert err.get("isError") is True
+
+    err = _call_tool(client, "split_meeting", {"meetingId": "m-split-1"})
+    assert err.get("isError") is True
+
+    err = _call_tool(client, "split_meeting", {"meetingId": "missing", "splitMs": 30_000})
+    assert err.get("isError") is True
     handle.engine.dispose()
 
 
