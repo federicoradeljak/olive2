@@ -131,7 +131,7 @@ async def test_generate_title_uses_default_llm_and_sanitizes(tmp_path: Path) -> 
     # None provider/model falls through to the configured default LLM.
     assert captured.get("provider") is None
     assert captured.get("model") is None
-    assert captured.get("maxTokens") == 32
+    assert captured.get("maxTokens") is None
     assert res["title"] == "Quarterly Planning Review"
     assert res["provider"] == "google"
 
