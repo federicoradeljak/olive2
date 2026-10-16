@@ -10,6 +10,10 @@ every section newer than the previous tag into the GitHub release notes.
 
 ## [2026-10-16]
 
+### Changed
+
+- **Interface moved to daisyUI components with light + dark themes** — buttons, inputs, badges, cards, tables, tabs, modals, alerts, progress, skeletons, and the mobile navigation now use shared daisyUI components instead of one-off styling, so theming and future changes land in one place. The header has a sun/moon toggle switching between the default dark `olive-dark` theme and a new `olive-light` theme (remembered per browser). Native `alert()`/`confirm()` popups are replaced with in-app toasts and confirmation dialogs, the meeting chat is now a side drawer that closes on navigation, and the mobile tab bar is a 5-item dock with Logs/Backup under More.
+
 ### Added
 
 - **Split meeting in two** — over-long recordings (meeting + forgotten commute) can be cut at any point via `POST /api/meetings/{id}/split { splitMs }`. The audio is cut with ffmpeg, every JSON transcript is divided on the same boundary and re-anchored (no re-transcription), summaries are discarded on both halves as stale, and the second half becomes a new "(Part 2)" meeting. In the app, drag the split slider under the audio player (or "Use current position"), or hover between transcript turns and hit "✂ Split meeting here", then confirm — delete the half you don't want afterwards. Also available to agents as the opt-in MCP write tool `split_meeting { meetingId, splitMs, expectedTitle?, dryRun? }` (`OLIVE_MCP_WRITE=1`).

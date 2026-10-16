@@ -1,6 +1,14 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="olive-dark">
   <head>
+    <script>
+      try {
+        var t = window.localStorage.getItem("olive-theme");
+        if (t === "olive-light" || t === "olive-dark") {
+          document.documentElement.setAttribute("data-theme", t);
+        }
+      } catch (e) {}
+    </script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#0c0a09" />

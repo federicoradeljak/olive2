@@ -15,13 +15,13 @@ export function SpeakerStatusIcon({ speaker }: { speaker: Pick<Speaker, "provide
   const enrolled = isSpeakerEnrolled(speaker);
   return enrolled ? (
     <Fingerprint
-      className="h-3.5 w-3.5 shrink-0 text-lime-300"
+      className="h-3.5 w-3.5 shrink-0 text-primary"
       aria-label="Voiceprint enrolled"
       role="img"
     />
   ) : (
     <CircleDashed
-      className="h-3.5 w-3.5 shrink-0 text-stone-500"
+      className="h-3.5 w-3.5 shrink-0 text-base-content/50"
       aria-label="Discovered, no voiceprint"
       role="img"
     />
@@ -66,7 +66,7 @@ export function SpeakerCombobox({
               {
                 value: "new",
                 label: createLabel,
-                icon: <UserPlus className="h-3.5 w-3.5 shrink-0 text-lime-300" aria-hidden="true" />,
+                icon: <UserPlus className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden="true" />,
               },
             ]
           : []),
@@ -103,7 +103,7 @@ export function SpeakerStatusBadges({
   if (!hasLocalVoiceprint && !hasSmVoiceprint) {
     return (
       <span
-        className="inline-flex items-center gap-1 rounded-full border border-stone-700 bg-stone-800 px-2 py-0.5 text-[10px] font-medium text-stone-400"
+        className="badge badge-sm gap-1 font-medium"
         title="Discovered — no voiceprint enrolled yet"
       >
         <CircleDashed className="h-3 w-3" aria-hidden="true" />
@@ -117,13 +117,7 @@ export function SpeakerStatusBadges({
     <>
       {hasLocalVoiceprint && (
         <span
-          className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium ${
-            clips >= 8
-              ? "border-lime-400/40 bg-lime-400/20 font-semibold text-lime-300"
-              : clips >= 5
-                ? "border-lime-400/30 bg-lime-400/15 text-lime-300"
-                : "border-lime-400/20 bg-lime-400/10 text-lime-400"
-          }`}
+          className={`badge badge-sm badge-success badge-soft gap-1 font-medium ${clips >= 8 ? "font-semibold" : ""}`}
           title={
             clips >= 8
               ? "Profile optimal (8/8 clips enrolled with anchor protection)"
@@ -141,7 +135,7 @@ export function SpeakerStatusBadges({
       )}
       {hasSmVoiceprint && (
         <span
-          className="inline-flex items-center gap-1 rounded-full border border-blue-400/20 bg-blue-400/10 px-2 py-0.5 text-[10px] font-medium text-blue-300"
+          className="badge badge-sm badge-info badge-soft gap-1 font-medium"
           title="Speechmatics voiceprint active"
         >
           <Cloud className="h-3 w-3" aria-hidden="true" />

@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import type { ReactElement, ReactNode } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import { Sparkles } from "lucide-react";
+import { Check, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, Download, Ellipsis, Eye, FileText, Info, Link2, Mic, Pause, Pencil, Play, RefreshCw, RotateCw, Save, Scissors, Settings, Sparkles, Star, Trash2, VolumeX, X, XCircle, Zap } from "lucide-react";
 import {
   AssistantRuntimeProvider,
   ComposerPrimitive,
@@ -15,6 +15,7 @@ import {
 } from "@assistant-ui/react";
 import "./styles.css";
 import { Combobox } from "./components/Combobox";
+import { ConfirmHostRoot, Modal as UiModal, ThemeToggle, ToastProvider, confirmAction, notify } from "./components/ui";
 import { SpeakerCombobox, SpeakerStatusBadges } from "./components/SpeakerCombobox";
 import {
   ENGINE_OPTIONS,
@@ -140,7 +141,7 @@ function MarkdownRenderer({ content, className = "" }: { content: string; classN
 
   return (
     <div
-      className={`prose prose-invert prose-stone max-w-none text-stone-200 prose-headings:font-semibold prose-headings:tracking-tight prose-headings:text-stone-100 prose-h1:text-xl prose-h1:border-b prose-h1:border-stone-800 prose-h1:pb-2 prose-h2:text-lg prose-h2:border-b prose-h2:border-stone-800/60 prose-h2:pb-1.5 prose-h3:text-base prose-h4:text-sm prose-p:leading-relaxed prose-p:my-3 prose-ul:my-2 prose-ul:list-disc prose-ol:my-2 prose-ol:list-decimal prose-li:my-1 prose-a:text-lime-400 hover:prose-a:text-lime-300 prose-strong:text-stone-100 prose-blockquote:border-l-2 prose-blockquote:border-lime-400/40 prose-blockquote:bg-stone-900/60 prose-blockquote:py-1 prose-blockquote:px-4 prose-blockquote:rounded-r prose-blockquote:text-stone-300 prose-blockquote:not-italic prose-code:text-lime-300 prose-code:bg-stone-800/90 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:font-mono prose-code:text-xs prose-code:before:content-none prose-code:after:content-none prose-pre:bg-stone-950 prose-pre:border prose-pre:border-stone-800 prose-pre:rounded-xl prose-table:my-4 prose-table:w-full prose-table:text-left prose-th:border-b prose-th:border-stone-700 prose-th:py-2 prose-th:px-3 prose-th:text-stone-300 prose-th:font-semibold prose-td:border-b prose-td:border-stone-800 prose-td:py-2 prose-td:px-3 prose-hr:border-stone-800 ${className}`}
+      className={`prose prose-invert prose-stone max-w-none text-base-content prose-headings:font-semibold prose-headings:tracking-tight prose-headings:text-base-content prose-h1:text-xl prose-h1:border-b prose-h1:border-base-300 prose-h1:pb-2 prose-h2:text-lg prose-h2:border-b prose-h2:border-base-300/60 prose-h2:pb-1.5 prose-h3:text-base prose-h4:text-sm prose-p:leading-relaxed prose-p:my-3 prose-ul:my-2 prose-ul:list-disc prose-ol:my-2 prose-ol:list-decimal prose-li:my-1 prose-a:text-primary hover:prose-a:text-primary prose-strong:text-base-content prose-blockquote:border-l-2 prose-blockquote:border-primary/40 prose-blockquote:bg-base-200/60 prose-blockquote:py-1 prose-blockquote:px-4 prose-blockquote:rounded-r prose-blockquote:text-base-content prose-blockquote:not-italic prose-code:text-primary prose-code:bg-base-300/90 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:font-mono prose-code:text-xs prose-code:before:content-none prose-code:after:content-none prose-pre:bg-base-100 prose-pre:border prose-pre:border-base-300 prose-pre:rounded-xl prose-table:my-4 prose-table:w-full prose-table:text-left prose-th:border-b prose-th:border-base-300 prose-th:py-2 prose-th:px-3 prose-th:text-base-content prose-th:font-semibold prose-td:border-b prose-td:border-base-300 prose-td:py-2 prose-td:px-3 prose-hr:border-base-300 ${className}`}
       dangerouslySetInnerHTML={{ __html: renderedHtml }}
     />
   );
@@ -174,6 +175,13 @@ function parseChatStreamBlock(block: string): { event: string; data: string } | 
     if (line.startsWith("data:")) data += line.slice(5).trim();
   }
   return data ? { event, data } : null;
+}
+
+function ChatTitleReporter({ title, onChatTitle }: { title: string; onChatTitle: (title: string) => void }): ReactElement | null {
+  useEffect(() => {
+    onChatTitle(title);
+  }, [title, onChatTitle]);
+  return null;
 }
 
 function MeetingChatPanel({ meetingId, meetingTitle, onClose }: { meetingId: string; meetingTitle: string; onClose: () => void }): ReactElement {
@@ -213,40 +221,37 @@ function MeetingChatPanel({ meetingId, meetingTitle, onClose }: { meetingId: str
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label={`Chat with ${meetingTitle}`}>
-      <button type="button" aria-label="Close chat" onClick={onClose} className="absolute inset-0 cursor-default bg-black/60" />
-      <aside className="relative flex h-[100dvh] w-full max-w-xl flex-col border-l border-stone-800 bg-stone-950 shadow-2xl">
-        <div className="flex items-center justify-between border-b border-stone-800 bg-stone-900/95 px-4 py-3">
-          <div className="min-w-0">
-            <p className="text-xs font-semibold uppercase tracking-wider text-lime-400">Chat with Meeting</p>
-            <h2 className="truncate text-sm font-medium text-stone-200">{meetingTitle}</h2>
-          </div>
+    <aside className="flex h-full w-full max-w-xl flex-col bg-base-100" role="dialog" aria-modal="true" aria-label={`Chat with ${meetingTitle}`}>
+      <div className="flex items-center justify-between border-b border-base-300 bg-base-200 px-4 py-3">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase tracking-wider text-primary">Chat with Meeting</p>
+          <h2 className="truncate text-sm font-medium">{meetingTitle}</h2>
+        </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => {
-                if (!confirm("Clear this meeting's chat history?")) return;
+              onClick={async () => {
+                if (!(await confirmAction({ title: "Clear chat history", message: "Clear this meeting's chat history?", confirmLabel: "Clear", danger: true }))) return;
                 void fetch(`/api/meetings/${meetingId}/chat/messages`, { method: "DELETE" }).then((response) => {
                   if (!response.ok) throw new Error("Failed to clear chat history");
                   onClose();
-                }).catch((error) => alert(error instanceof Error ? error.message : String(error)));
+                }).catch((error) => notify("error", error instanceof Error ? error.message : String(error)));
               }}
-              className="min-h-[44px] rounded-lg px-3 text-xs text-stone-400 hover:bg-stone-800 hover:text-stone-200"
+              className="btn btn-ghost btn-sm min-h-[44px]"
             >
               Clear
             </button>
-            <button type="button" onClick={onClose} className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-lg leading-none text-stone-400 hover:bg-stone-800 hover:text-white" aria-label="Close chat">×</button>
+            <button type="button" onClick={onClose} className="btn btn-ghost inline-flex min-h-[44px] min-w-[44px] items-center justify-center text-lg leading-none hover:text-white" aria-label="Close chat"><X className="h-4 w-4 shrink-0" aria-hidden="true" /></button>
           </div>
         </div>
 
-        {loading ? <div className="flex flex-1 items-center justify-center text-sm text-stone-500">Loading conversation…</div> : loadError ? <div className="m-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">{loadError}</div> : initialMessages ? (
+        {loading ? <div className="flex flex-1 items-center justify-center text-sm text-base-content/50">Loading conversation…</div> : loadError ? <div className="m-4 alert alert-soft alert-error p-3 text-sm">{loadError}</div> : initialMessages ? (
           <MeetingChatRuntime
             meetingId={meetingId}
             initialMessages={initialMessages}
           />
         ) : null}
       </aside>
-    </div>
   );
 }
 
@@ -300,25 +305,25 @@ function MeetingChatRuntime({ meetingId, initialMessages }: { meetingId: string;
           <ThreadPrimitive.Messages components={{
             UserMessage: () => (
               <MessagePrimitive.Root className="mb-4 flex justify-end">
-                <div className="max-w-[85%] rounded-2xl rounded-br-md bg-lime-400 px-3.5 py-2.5 text-sm text-stone-950">
+                <div className="max-w-[85%] rounded-2xl rounded-br-md bg-primary px-3.5 py-2.5 text-sm text-primary-content">
                   <MessagePrimitive.Content />
                 </div>
               </MessagePrimitive.Root>
             ),
             AssistantMessage: () => (
               <MessagePrimitive.Root className="mb-4 flex justify-start">
-                <div className="max-w-[90%] rounded-2xl rounded-bl-md border border-stone-800 bg-stone-900 px-3.5 py-2.5 text-sm text-stone-200 prose prose-invert prose-sm max-w-none">
+                <div className="max-w-[90%] rounded-2xl rounded-bl-md border border-base-300 bg-base-200 px-3.5 py-2.5 text-sm text-base-content prose prose-invert prose-sm max-w-none">
                   <MessagePrimitive.Content />
                 </div>
               </MessagePrimitive.Root>
             )
           }} />
         </ThreadPrimitive.Viewport>
-        <div className="border-t border-stone-800 bg-stone-900/80 pb-safe">
+        <div className="border-t border-base-300 bg-base-200/80 pb-safe">
           <ComposerPrimitive.Root className="p-3">
-            <ComposerPrimitive.Input placeholder="Ask about this meeting…" className="min-h-20 w-full resize-none rounded-xl border border-stone-700 bg-stone-950 px-3 py-2 text-base text-stone-100 outline-none placeholder:text-stone-500 focus:border-lime-400 sm:text-sm" />
+            <ComposerPrimitive.Input placeholder="Ask about this meeting…" className="min-h-20 w-full resize-none rounded-xl border border-base-300 bg-base-100 px-3 py-2 text-base text-base-content outline-none placeholder:text-base-content/50 focus:border-primary sm:text-sm" />
             <div className="mt-2 flex justify-end">
-              <ComposerPrimitive.Send className="min-h-[44px] rounded-lg bg-lime-400 px-4 text-sm font-semibold text-stone-950 hover:bg-lime-300 disabled:cursor-not-allowed disabled:opacity-40">Send</ComposerPrimitive.Send>
+              <ComposerPrimitive.Send className="btn btn-primary min-h-[44px] text-sm disabled:cursor-not-allowed">Send</ComposerPrimitive.Send>
             </div>
           </ComposerPrimitive.Root>
         </div>
@@ -428,12 +433,19 @@ export function App(): ReactElement {
   // Changelog
   const [showChangelogModal, setShowChangelogModal] = useState(false);
 
+  // Meeting chat drawer (App-level so it overlays nav + content via drawer-side)
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatTitle, setChatTitle] = useState("");
+  const [showMoreNav, setShowMoreNav] = useState(false);
+
   const isTabActive = (key: TabKey) => (key === "meetings" ? activeTab === "meetings" && !selectedMeetingId : activeTab === key);
 
   const navigate = (path: string) => {
     const route = parseLocation(path);
     setActiveTab(route.tab);
     setSelectedMeetingId(route.meetingId);
+    setChatOpen(false);
+    setShowMoreNav(false);
     if (typeof window !== "undefined" && window.location.pathname !== path) {
       window.history.pushState({}, "", path);
     }
@@ -493,8 +505,16 @@ export function App(): ReactElement {
   }, []);
 
   return (
-    <div className="min-h-screen bg-stone-950 text-stone-100 selection:bg-lime-400 selection:text-stone-950 w-full overflow-x-clip">
-      <nav className="border-b border-stone-800 bg-stone-900/80 backdrop-blur sticky top-0 z-30 px-3 sm:px-6 py-2.5 sm:py-3.5 w-full">
+    <div className="drawer drawer-end w-full">
+      <input
+        id="olive-chat-drawer"
+        type="checkbox"
+        className="drawer-toggle"
+        checked={chatOpen}
+        onChange={(e) => setChatOpen(e.target.checked)}
+      />
+      <div className="drawer-content min-h-screen bg-base-100 text-base-content selection:bg-primary selection:text-primary-content w-full overflow-x-clip">
+      <nav className="border-b border-base-300 bg-base-200/80 backdrop-blur sticky top-0 z-30 px-3 sm:px-6 py-2.5 sm:py-3.5 w-full">
         <div className="mx-auto flex max-w-6xl flex-nowrap items-center justify-between gap-2 sm:gap-4">
           <div className="flex min-w-0 items-center gap-3 sm:gap-4 lg:gap-6">
             <a
@@ -505,12 +525,12 @@ export function App(): ReactElement {
               }}
               className="flex shrink-0 items-center gap-2 cursor-pointer hover:opacity-90 transition"
             >
-              <span className="flex h-7 w-7 sm:h-8 sm:w-8 items-center justify-center rounded-lg bg-lime-400 font-bold text-stone-950 text-sm sm:text-base">
+              <span className="flex h-7 w-7 sm:h-8 sm:w-8 items-center justify-center rounded-lg bg-primary font-bold text-primary-content text-sm sm:text-base">
                 O
               </span>
               <span className="text-lg sm:text-xl font-semibold tracking-tight">Olive</span>
             </a>
-            <div className="hidden sm:flex min-w-0 flex-nowrap items-center gap-0.5 overflow-x-auto rounded-lg bg-stone-800/80 p-1 text-xs lg:text-sm font-medium">
+            <div className="hidden sm:flex min-w-0 flex-nowrap items-center gap-0.5 overflow-x-auto rounded-lg bg-base-200 p-1 text-xs lg:text-sm font-medium">
               {NAV_TABS.map((tab) => (
                 <a
                   key={tab.key}
@@ -520,8 +540,8 @@ export function App(): ReactElement {
                     navigate(tab.path);
                     if (tab.key === "speakers") void refreshSpeakers();
                   }}
-                  className={`shrink-0 whitespace-nowrap rounded-md px-2 lg:px-3 py-1.5 transition ${
-                    isTabActive(tab.key) ? "bg-stone-900 text-lime-400 shadow" : "text-stone-400 hover:text-stone-200"
+                  className={`shrink-0 whitespace-nowrap rounded-field px-2 lg:px-3 py-1.5 transition ${
+                    isTabActive(tab.key) ? "bg-base-100 text-primary shadow" : "text-base-content/60 hover:text-base-content"
                   }`}
                 >
                   {tab.key === "speakers" ? `People (${knownSpeakers.length})` : tab.label}
@@ -534,17 +554,17 @@ export function App(): ReactElement {
               type="button"
               onClick={() => setShowChangelogModal(true)}
               title="What's new in Olive"
-              className="flex items-center gap-1.5 rounded-full border border-stone-700 bg-stone-800/80 px-2.5 py-1 text-[11px] sm:text-xs font-medium text-stone-300 hover:border-stone-500 hover:text-white transition shrink-0"
+              className="btn btn-ghost btn-sm shrink-0"
             >
-              <span aria-hidden="true">✨</span>
+              <span aria-hidden="true" className="inline-flex"><Sparkles className="h-3.5 w-3.5" aria-hidden="true" /></span>
               <span className="hidden md:inline">What's New</span>
             </button>
             <button
               type="button"
               onClick={() => setShowLlmModal(true)}
-              className="flex min-w-0 max-w-[110px] lg:max-w-[150px] xl:max-w-none items-center gap-1.5 rounded-full border border-stone-700 bg-stone-800/80 px-2.5 py-1 text-[11px] sm:text-xs font-medium text-stone-300 hover:border-stone-500 hover:text-white transition"
+              className="btn btn-ghost btn-sm max-w-[110px] lg:max-w-[150px] xl:max-w-none"
             >
-              <span className="h-2 w-2 rounded-full bg-cyan-400 shrink-0" />
+              <span className="h-2 w-2 rounded-full bg-accent shrink-0" />
               <span className="truncate">AI: {llmConfig ? `${llmConfig.defaultProvider}/${llmConfig.defaultModel}` : "Config"}</span>
             </button>
             <button
@@ -553,52 +573,77 @@ export function App(): ReactElement {
                 setShowPlaudModal(true);
                 void refreshPlaudStatus();
               }}
-              className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] sm:text-xs font-medium transition shrink-0 ${
+              className={`btn btn-sm shrink-0 ${
                 plaudStatus?.connected
-                  ? "border-lime-400/30 bg-lime-400/10 text-lime-300 hover:bg-lime-400/20"
-                  : "border-amber-400/30 bg-amber-400/10 text-amber-300 hover:bg-amber-400/20"
+                  ? "border-primary/30 bg-primary/10 text-primary hover:bg-primary/20"
+                  : "border-warning/30 bg-warning/10 text-warning hover:bg-warning/20"
               }`}
             >
-              <span className={`h-2 w-2 rounded-full shrink-0 ${plaudStatus?.connected ? "bg-lime-400" : "bg-amber-400"}`} />
+              <span className={`h-2 w-2 rounded-full shrink-0 ${plaudStatus?.connected ? "bg-primary" : "bg-warning"}`} />
               <span>{plaudStatus?.connected ? "Plaud" : "Connect"}</span>
             </button>
+            <ThemeToggle />
           </div>
         </div>
       </nav>
 
       <nav
         aria-label="Primary"
-        className="fixed inset-x-0 bottom-0 z-30 border-t border-stone-800 bg-stone-900/95 backdrop-blur pb-safe sm:hidden"
+        className="dock dock-md z-30 pb-safe sm:hidden"
       >
-        <div className="mx-auto grid max-w-6xl grid-cols-6">
-          {NAV_TABS.map((tab) => {
-            const active = isTabActive(tab.key);
-            return (
-              <a
-                key={tab.key}
-                href={tab.path}
-                aria-current={active ? "page" : undefined}
-                onClick={(e) => {
-                  e.preventDefault();
-                  navigate(tab.path);
-                  if (tab.key === "speakers") void refreshSpeakers();
-                }}
-                className={`relative flex min-h-[56px] min-w-0 flex-col items-center justify-center gap-1 px-0.5 transition ${
-                  active ? "text-lime-400" : "text-stone-400 active:text-stone-200"
-                }`}
-              >
-                <TabIcon name={tab.key} />
-                <span className="max-w-full truncate text-[10px] leading-none font-medium">{tab.label}</span>
-                {tab.key === "speakers" && knownSpeakers.length > 0 && (
-                  <span className="absolute right-[22%] top-1.5 rounded-full bg-stone-700 px-1 text-[9px] leading-tight text-stone-200">
-                    {knownSpeakers.length}
-                  </span>
-                )}
-              </a>
-            );
-          })}
-        </div>
+        {(NAV_TABS.filter((t) => t.key === "meetings" || t.key === "speakers" || t.key === "templates" || t.key === "usage")).map((tab) => {
+          const active = isTabActive(tab.key);
+          return (
+            <button
+              key={tab.key}
+              type="button"
+              aria-current={active ? "page" : undefined}
+              onClick={() => {
+                setShowMoreNav(false);
+                navigate(tab.path);
+                if (tab.key === "speakers") void refreshSpeakers();
+              }}
+              className={active ? "dock-active" : ""}
+            >
+              <TabIcon name={tab.key} />
+              <span className="dock-label">{tab.key === "speakers" ? `People${knownSpeakers.length > 0 ? ` (${knownSpeakers.length})` : ""}` : tab.label}</span>
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          aria-expanded={showMoreNav}
+          aria-label="More sections"
+          onClick={() => setShowMoreNav((v) => !v)}
+          className={activeTab === "logs" || activeTab === "backup" ? "dock-active" : ""}
+        >
+          <Ellipsis className="h-5 w-5" aria-hidden="true" />
+          <span className="dock-label">More</span>
+        </button>
       </nav>
+      {showMoreNav && (
+        <div className="fixed inset-x-4 bottom-20 z-40 sm:hidden">
+          <ul className="menu rounded-box border border-base-300 bg-base-100 p-2 shadow-lg">
+            {(NAV_TABS.filter((t) => t.key === "logs" || t.key === "backup")).map((tab) => (
+              <li key={tab.key}>
+                <a
+                  href={tab.path}
+                  aria-current={isTabActive(tab.key) ? "page" : undefined}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setShowMoreNav(false);
+                    navigate(tab.path);
+                  }}
+                  className={isTabActive(tab.key) ? "menu-active" : ""}
+                >
+                  <TabIcon name={tab.key} />
+                  {tab.label}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <main className="mx-auto max-w-6xl px-3.5 sm:px-6 pt-4 sm:pt-8 pb-[calc(6rem+env(safe-area-inset-bottom))] sm:pb-8 w-full overflow-x-clip min-w-0">
         {selectedMeetingId ? (
@@ -608,6 +653,8 @@ export function App(): ReactElement {
             onBack={() => navigate("/meetings")}
             onDeleted={() => navigate("/meetings")}
             onSpeakerUpdated={() => void refreshSpeakers()}
+            onChatOpenChange={setChatOpen}
+            onChatTitle={setChatTitle}
           />
         ) : activeTab === "meetings" ? (
           <MeetingsListView onSelectMeeting={(id) => navigate(`/meetings/${id}`)} />
@@ -659,6 +706,19 @@ export function App(): ReactElement {
           }}
         />
       )}
+      </div>
+      <div className="drawer-side z-50">
+        <label htmlFor="olive-chat-drawer" aria-label="Close chat" className="drawer-overlay" />
+        <div className="min-h-full w-full max-w-xl bg-base-100 shadow-2xl">
+          {chatOpen && selectedMeetingId && (
+            <MeetingChatPanel
+              meetingId={selectedMeetingId}
+              meetingTitle={chatTitle || "Meeting"}
+              onClose={() => setChatOpen(false)}
+            />
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -676,43 +736,10 @@ function Modal({
   maxWidth?: string;
   children: ReactNode;
 }): ReactElement {
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex max-h-[100dvh] items-center justify-center overflow-y-auto p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-label={ariaLabel}
-    >
-      <button
-        type="button"
-        tabIndex={-1}
-        aria-label="Close dialog"
-        onClick={onClose}
-        className="fixed inset-0 cursor-default bg-stone-950/80 backdrop-blur-sm"
-      />
-      <div className={`relative z-10 my-auto w-full ${maxWidth} rounded-2xl border border-stone-800 bg-stone-900 shadow-2xl`}>
-        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 rounded-t-2xl border-b border-stone-800 bg-stone-900 px-6 py-4">
-          <h2 className="min-w-0 flex-1 text-lg font-semibold text-stone-100">{title}</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="-mr-2 inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg text-lg text-stone-400 transition hover:text-stone-200"
-          >
-            ✕
-          </button>
-        </div>
-        <div className="space-y-5 p-6">{children}</div>
-      </div>
-    </div>
+    <UiModal onClose={onClose} title={title} ariaLabel={ariaLabel} maxWidth={maxWidth}>
+      {children}
+    </UiModal>
   );
 }
 
@@ -749,17 +776,17 @@ function ChangelogModal({ onClose }: { onClose: () => void }): ReactElement {
       maxWidth="max-w-2xl"
     >
       {error ? (
-        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">
+        <div className="alert alert-soft alert-error p-3 text-sm text-error">
           Failed to load changelog: {error}
         </div>
       ) : markdown === null ? (
-        <div className="py-8 text-center text-sm text-stone-500">Loading changelog…</div>
+        <div className="py-8 text-center text-sm text-base-content/50">Loading changelog…</div>
       ) : markdown ? (
         <div className="max-h-[60vh] overflow-y-auto pr-1">
           <MarkdownRenderer content={markdown} />
         </div>
       ) : (
-        <div className="py-8 text-center text-sm text-stone-500">No changelog available.</div>
+        <div className="py-8 text-center text-sm text-base-content/50">No changelog available.</div>
       )}
     </Modal>
   );
@@ -806,7 +833,7 @@ function PlaudModal({
   const handleCompleteAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!sessionId || !callbackInput.trim()) {
-      alert("Please paste the callback URL or code from your browser");
+      notify("warning", "Please paste the callback URL or code from your browser");
       return;
     }
 
@@ -859,32 +886,32 @@ function PlaudModal({
   };
 
   return (
-    <Modal onClose={onClose} title={<span className="flex flex-wrap items-center gap-2"><span>Plaud Integration</span><span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${status?.connected ? "bg-lime-400/10 text-lime-300" : "bg-amber-400/10 text-amber-300"}`}>{status?.connected ? "Connected" : "Disconnected"}</span></span>} ariaLabel="Plaud integration" maxWidth="max-w-lg">
+    <Modal onClose={onClose} title={<span className="flex flex-wrap items-center gap-2"><span>Plaud Integration</span><span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${status?.connected ? "bg-primary/10 text-primary" : "bg-warning/10 text-warning"}`}>{status?.connected ? "Connected" : "Disconnected"}</span></span>} ariaLabel="Plaud integration" maxWidth="max-w-lg">
       {errorMessage && (
-        <div className="rounded-xl border border-red-900 bg-red-950/40 p-4 text-xs text-red-200">
+        <div className="rounded-xl border border-error bg-error/10 p-4 text-xs text-error">
           {errorMessage}
         </div>
       )}
 
       {syncMessage && (
-        <div className="rounded-xl border border-lime-900 bg-lime-950/40 p-4 text-xs text-lime-200">
+        <div className="rounded-xl border border-primary bg-primary/10 p-4 text-xs text-primary">
           {syncMessage}
         </div>
       )}
 
       {status?.connected && authStep === "idle" ? (
         <div className="space-y-4">
-          <div className="rounded-xl border border-stone-800 bg-stone-950/60 p-4 space-y-2 text-xs text-stone-300">
+          <div className="rounded-xl border border-base-300 bg-base-100/60 p-4 space-y-2 text-xs text-base-content">
             <div className="flex justify-between">
-              <span className="text-stone-400">Connection Status:</span>
-              <span className="font-semibold text-lime-300">Active (OAuth tokens valid)</span>
+              <span className="text-base-content/70">Connection Status:</span>
+              <span className="font-semibold text-primary">Active (OAuth tokens valid)</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-stone-400">Last Synced:</span>
+              <span className="text-base-content/70">Last Synced:</span>
               <span>{status.lastPollAt ? formatDate(status.lastPollAt) : "Never"}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-stone-400">Pending PCS Items:</span>
+              <span className="text-base-content/70">Pending PCS Items:</span>
               <span>{status.pcsPending}</span>
             </div>
           </div>
@@ -894,14 +921,14 @@ function PlaudModal({
               type="button"
               disabled={syncing}
               onClick={() => void handleTriggerSync()}
-              className="flex-1 rounded-lg bg-lime-400 py-2 text-sm font-semibold text-stone-950 hover:bg-lime-300 disabled:opacity-50 transition"
+              className="btn btn-primary flex-1 min-h-11"
             >
               {syncing ? "Syncing with Plaud…" : "Sync Now"}
             </button>
             <button
               type="button"
               onClick={() => void handleStartAuth()}
-              className="rounded-lg border border-stone-700 bg-stone-800 px-4 py-2 text-sm font-medium text-stone-300 hover:bg-stone-700 transition"
+              className="btn bg-base-300 min-h-11"
             >
               Re-authenticate
             </button>
@@ -910,7 +937,7 @@ function PlaudModal({
       ) : (
         <div className="space-y-5">
           {authStep === "idle" && (
-            <div className="space-y-4 text-sm text-stone-300">
+            <div className="space-y-4 text-sm text-base-content">
               <p>
                 Connect your Plaud account using OAuth 2.0 PKCE to automatically ingest recordings, transcripts, and summaries into Olive.
               </p>
@@ -918,7 +945,7 @@ function PlaudModal({
                 type="button"
                 disabled={loading}
                 onClick={() => void handleStartAuth()}
-                className="w-full rounded-lg bg-lime-400 py-2.5 text-sm font-semibold text-stone-950 hover:bg-lime-300 disabled:opacity-50 transition"
+                className="btn btn-primary w-full py-2.5 min-h-11"
               >
                 {loading ? "Generating login link…" : "Start Plaud OAuth Login"}
               </button>
@@ -927,26 +954,26 @@ function PlaudModal({
 
           {authStep === "authorizing" && authUrl && (
             <form onSubmit={handleCompleteAuth} className="space-y-4 text-sm">
-              <div className="rounded-xl border border-stone-800 bg-stone-950/80 p-4 space-y-3">
-                <p className="font-semibold text-stone-200">Step 1: Authorize with Plaud</p>
-                <p className="text-xs text-stone-400 leading-relaxed">
+              <div className="rounded-xl border border-base-300 bg-base-100/80 p-4 space-y-3">
+                <p className="font-semibold text-base-content">Step 1: Authorize with Plaud</p>
+                <p className="text-xs text-base-content/70 leading-relaxed">
                   Click the button below to open the official Plaud login in a new tab. Log in and grant permission.
                 </p>
                 <a
                   href={authUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-2 rounded-lg bg-lime-400 px-4 py-2 text-xs font-bold text-stone-950 hover:bg-lime-300 transition"
+                  className="btn btn-primary btn-sm min-h-11"
                 >
                   Open Plaud Login Page ↗
                 </a>
               </div>
 
-              <div className="rounded-xl border border-stone-800 bg-stone-950/80 p-4 space-y-3">
-                <p className="font-semibold text-stone-200">Step 2: Paste the Callback URL</p>
-                <p className="text-xs text-stone-400 leading-relaxed">
+              <div className="rounded-xl border border-base-300 bg-base-100/80 p-4 space-y-3">
+                <p className="font-semibold text-base-content">Step 2: Paste the Callback URL</p>
+                <p className="text-xs text-base-content/70 leading-relaxed">
                   After authorizing, Plaud will redirect your browser to a callback address starting with{" "}
-                  <code className="rounded bg-stone-900 px-1 py-0.5 text-lime-400">http://localhost:8199/auth/callback?code=...</code>{" "}
+                  <code className="rounded bg-base-200 px-1 py-0.5 text-primary">http://localhost:8199/auth/callback?code=...</code>{" "}
                   (your browser might show "Site can't be reached"—this is normal). Copy the <strong>entire URL</strong> from your address bar and paste it below:
                 </p>
                 <input
@@ -955,7 +982,7 @@ function PlaudModal({
                   placeholder="http://localhost:8199/auth/callback?code=...&state=..."
                   value={callbackInput}
                   onChange={(e) => setCallbackInput(e.target.value)}
-                  className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-base sm:text-sm text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none"
+                  className="input input-md w-full"
                 />
               </div>
 
@@ -963,14 +990,14 @@ function PlaudModal({
                 <button
                   type="button"
                   onClick={() => setAuthStep("idle")}
-                  className="rounded-lg px-4 py-2 text-sm text-stone-400 hover:text-stone-200"
+                  className="rounded-lg px-4 py-2 text-sm text-base-content/70 hover:text-base-content"
                 >
                   Back
                 </button>
                 <button
                   type="submit"
                   disabled={loading || !callbackInput.trim()}
-                  className="rounded-lg bg-lime-400 px-5 py-2 text-sm font-semibold text-stone-950 hover:bg-lime-300 disabled:opacity-50 transition"
+                  className="btn btn-primary min-h-11"
                 >
                   {loading ? "Verifying…" : "Complete Connection"}
                 </button>
@@ -980,11 +1007,11 @@ function PlaudModal({
 
           {authStep === "success" && (
             <div className="space-y-4 py-4 text-center">
-              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-lime-400/20 text-2xl text-lime-300">
-                ✓
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-primary/20 text-2xl text-primary">
+                <Check className="h-4 w-4 shrink-0" aria-hidden="true" />
               </div>
-              <h4 className="text-lg font-bold text-stone-100">Plaud Connected Successfully!</h4>
-              <p className="text-xs text-stone-400">
+              <h4 className="text-lg font-bold text-base-content">Plaud Connected Successfully!</h4>
+              <p className="text-xs text-base-content/70">
                 Olive is now authenticated with your Plaud account. Tokens will refresh automatically.
               </p>
               <button
@@ -993,7 +1020,7 @@ function PlaudModal({
                   setAuthStep("idle");
                   onClose();
                 }}
-                className="rounded-lg bg-lime-400 px-6 py-2 text-sm font-semibold text-stone-950 hover:bg-lime-300 transition"
+                className="btn btn-primary min-h-11"
               >
                 Done
               </button>
@@ -1163,7 +1190,7 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
   };
 
   const handleDeleteMeeting = async (id: string, title: string) => {
-    if (!confirm(`Are you sure you want to delete meeting "${title}"? This will permanently remove its recordings, transcripts, and summaries.`)) {
+    if (!(await confirmAction({ title: "Delete meeting", message: `Are you sure you want to delete meeting "${title}"? This will permanently remove its recordings, transcripts, and summaries.`, confirmLabel: "Delete", danger: true }))) {
       return;
     }
     try {
@@ -1185,7 +1212,7 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
         return next;
       });
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      notify("error", err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -1236,7 +1263,7 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Meetings</h1>
-          <p className="mt-1 text-sm text-stone-400">Recorded and ingested audio archive</p>
+          <p className="mt-1 text-sm text-base-content/70">Recorded and ingested audio archive</p>
         </div>
         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:gap-3">
           <input
@@ -1244,7 +1271,7 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
             placeholder="Search meetings…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="min-h-[44px] w-full rounded-lg border border-stone-800 bg-stone-900 px-4 py-2 text-base sm:text-sm text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none sm:w-64"
+            className="input input-md w-full sm:w-64"
           />
           <button
             type="button"
@@ -1258,8 +1285,8 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
             aria-pressed={selectMode}
             className={`flex min-h-[44px] items-center justify-center rounded-lg border px-4 py-2 text-sm font-semibold transition shrink-0 ${
               selectMode
-                ? "border-lime-400 bg-lime-400/10 text-lime-300"
-                : "border-stone-700 text-stone-300 hover:border-stone-500 hover:text-white"
+                ? "border-primary bg-primary/10 text-primary"
+                : "border-base-300 text-base-content hover:border-base-300 hover:text-white"
             }`}
           >
             {selectMode ? "Done" : "Select"}
@@ -1270,19 +1297,19 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
               setBulkNotice(null);
               setShowBulkModal(true);
             }}
-            className={`flex min-h-[44px] flex-1 sm:flex-none items-center justify-center gap-2 rounded-lg border px-4 py-2 text-sm font-semibold transition shrink-0 ${
+            className={`btn min-h-[44px] flex-1 sm:flex-none gap-2 shrink-0 ${
               selectMode && selectedIds.length > 0
-                ? "border-lime-400 bg-lime-400 text-stone-950 hover:bg-lime-300"
-                : "border-lime-400/40 bg-lime-400/10 text-lime-300 hover:bg-lime-400/20"
+                ? "btn-primary"
+                : "btn-primary btn-soft"
             }`}
             title="Re-transcribe many meetings with one engine"
           >
-            <span>⟳</span> {selectMode && selectedIds.length > 0 ? `Re-transcribe ${selectedIds.length}` : "Bulk re-transcribe"}
+            <span><RotateCw className="h-4 w-4 shrink-0" aria-hidden="true" /></span> {selectMode && selectedIds.length > 0 ? `Re-transcribe ${selectedIds.length}` : "Bulk re-transcribe"}
           </button>
           <button
             type="button"
             onClick={() => setShowUploadModal(true)}
-            className="flex min-h-[44px] flex-1 sm:flex-none items-center justify-center gap-2 rounded-lg bg-lime-400 px-4 py-2 text-sm font-semibold text-stone-950 transition hover:bg-lime-300 shrink-0"
+            className="btn btn-primary flex min-h-[44px] flex-1 sm:flex-none items-center justify-center gap-2 shrink-0"
           >
             <span>+</span> Upload Audio
           </button>
@@ -1290,31 +1317,31 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
       </div>
 
       {bulkNotice && (
-        <div className="rounded-xl border border-lime-900 bg-lime-950/40 p-4 text-sm text-lime-200">{bulkNotice}</div>
+        <div className="rounded-xl border border-primary bg-primary/10 p-4 text-sm text-primary">{bulkNotice}</div>
       )}
 
       {selectMode && !loading && !error && meetings.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-stone-800 bg-stone-900/60 px-3 py-2 text-xs text-stone-400 sm:gap-3">
-          <span className={`mr-auto ${selectedIds.length > 0 ? "font-semibold text-lime-300" : ""}`}>
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-base-300 bg-base-200/60 px-3 py-2 text-xs text-base-content/70 sm:gap-3">
+          <span className={`mr-auto ${selectedIds.length > 0 ? "font-semibold text-primary" : ""}`}>
             {selectedIds.length > 0 ? `${selectedIds.length} selected` : "Tap meetings to select"}
           </span>
-          <button type="button" onClick={handleSelectVisible} className="min-h-[36px] rounded-md border border-stone-700 px-3 py-1.5 hover:border-lime-400/60 hover:text-lime-300 transition">
+          <button type="button" onClick={handleSelectVisible} className="btn min-h-[36px] hover:border-primary/60 hover:text-primary">
             Select visible ({meetings.length})
           </button>
           {selectedIds.length > 0 && (
-            <button type="button" onClick={handleClearSelection} className="min-h-[36px] rounded-md border border-stone-700 px-3 py-1.5 hover:border-rose-500/60 hover:text-rose-300 transition">
+            <button type="button" onClick={handleClearSelection} className="btn min-h-[36px] hover:border-error/60 hover:text-error">
               Clear
             </button>
           )}
         </div>
       )}
 
-      {loading && <p className="text-stone-400">Loading meetings…</p>}
-      {error && <div className="rounded-xl border border-red-900 bg-red-950/40 p-4 text-red-200">{error}</div>}
+      {loading && <p className="text-base-content/70">Loading meetings…</p>}
+      {error && <div className="rounded-xl border border-error bg-error/10 p-4 text-error">{error}</div>}
 
       {!loading && !error && meetings.length === 0 && (
-        <div className="rounded-2xl border border-dashed border-stone-800 bg-stone-900/40 py-16 text-center">
-          <p className="text-stone-400">No meetings found.</p>
+        <div className="rounded-2xl border border-dashed border-base-300 bg-base-200/40 py-16 text-center">
+          <p className="text-base-content/70">No meetings found.</p>
         </div>
       )}
 
@@ -1331,10 +1358,10 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
                 aria-selected={selectMode ? selected : undefined}
                 className={`group flex h-full cursor-pointer flex-col gap-2.5 rounded-xl border p-4 sm:p-5 shadow-sm transition ${
                   selectMode && selected
-                    ? "border-lime-400 bg-lime-400/5"
+                    ? "border-primary bg-primary/5"
                     : audioPending
-                    ? "border-stone-800 bg-stone-900/60 opacity-60 saturate-50 hover:border-sky-400/50 hover:opacity-80"
-                    : "border-stone-800 bg-stone-900/90 hover:border-lime-400/60 hover:bg-stone-900"
+                    ? "border-base-300 bg-base-200/60 opacity-60 saturate-50 hover:border-info/50 hover:opacity-80"
+                    : "border-base-300 bg-base-200/90 hover:border-primary/60 hover:bg-base-200"
                 }`}
               >
                 <div className="flex items-start gap-2">
@@ -1345,16 +1372,16 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
                         checked={selected}
                         onChange={() => toggleSelectMeeting(meeting.id)}
                         onClick={(e) => e.stopPropagation()}
-                        className="h-5 w-5 accent-lime-400"
+                        className="h-5 w-5 accent-primary"
                         aria-label={`Select meeting ${meeting.title}`}
                       />
                     </span>
                   )}
                   <div className="min-w-0 flex-1">
-                    <h2 className="line-clamp-2 break-words text-lg font-semibold leading-snug text-stone-100 group-hover:text-lime-300 transition">
+                    <h2 className="line-clamp-2 break-words text-lg font-semibold leading-snug text-base-content group-hover:text-primary transition">
                       {meeting.title}
                     </h2>
-                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-stone-400">
+                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-base-content/70">
                       <span>{formatDate(meeting.startTime)}</span>
                       <span>•</span>
                       <span>{formatDuration(meeting.endTime - meeting.startTime)}</span>
@@ -1368,7 +1395,7 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
                       e.stopPropagation();
                       void handleDeleteMeeting(meeting.id, meeting.title);
                     }}
-                    className="-mr-2 -mt-1.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-stone-500 transition hover:bg-rose-500/10 hover:text-rose-300"
+                    className="btn btn-circle btn-ghost -mr-2 -mt-1.5 flex shrink-0 items-center justify-center text-base-content/50 hover:bg-error/10 hover:text-error min-h-11 min-w-11"
                     title="Delete meeting"
                     aria-label={`Delete meeting ${meeting.title}`}
                   >
@@ -1381,41 +1408,41 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
 
                 <div className="mt-auto flex flex-wrap items-center gap-1.5">
                   {meeting.audioStatus === "retrieving" && !progress ? (
-                    <span className="inline-flex items-center gap-1.5 rounded-full border border-sky-400/40 bg-sky-400/10 px-3 py-1 text-xs font-semibold text-sky-300 animate-pulse">
-                      <span className="h-2 w-2 rounded-full bg-sky-400 animate-ping" />
+                    <span className="badge badge-info badge-soft gap-1.5 px-3 py-1 animate-pulse">
+                      <span className="status status-info status-xs animate-ping" />
                       Retrieving audio…
                     </span>
                   ) : meeting.audioStatus === "missing" && !progress ? (
-                    <span className="inline-flex items-center gap-1.5 rounded-full border border-rose-500/40 bg-rose-500/10 px-3 py-1 text-xs font-semibold text-rose-300">
+                    <span className="badge badge-error badge-soft gap-1.5 px-3 py-1">
                       Audio missing
                     </span>
                   ) : progress ? (
-                    <div className="flex items-center gap-2 rounded-full border border-amber-500/40 bg-amber-950/40 px-3 py-1 text-xs text-amber-200">
-                      <span className="h-2 w-2 rounded-full bg-amber-400 animate-ping" />
+                    <div className="badge badge-warning badge-soft gap-2 px-3 py-1">
+                      <span className="status status-warning status-xs animate-ping" />
                       <span className="font-semibold">{progress.stage} ({Math.round(progress.percent)}%)</span>
                     </div>
                   ) : (
                     <span
-                      className={`rounded-full px-3 py-1 text-xs font-medium capitalize ${
+                      className={`badge badge-soft capitalize ${
                         meeting.status === "ready"
-                          ? "bg-lime-400/10 text-lime-300 border border-lime-400/20"
+                          ? "badge-success"
                           : meeting.status === "processing"
-                          ? "bg-amber-400/10 text-amber-300 border border-amber-400/20 animate-pulse"
-                          : "bg-stone-800 text-stone-300"
+                          ? "badge-warning animate-pulse"
+                          : "badge-neutral"
                       }`}
                     >
                       {meeting.status}
                     </span>
                   )}
                   {meeting.primaryTranscriptArtifactId && (
-                    <span className="rounded-full bg-stone-800 px-2.5 py-1 text-xs text-stone-300">
+                    <span className="rounded-full bg-base-300 px-2.5 py-1 text-xs text-base-content">
                       Transcript
                     </span>
                   )}
                   {meeting.tags.map((tag) => (
                     <span
                       key={tag}
-                      className="rounded-full border border-stone-700 bg-stone-800/80 px-2 py-0.5 text-[11px] text-stone-300"
+                      className="rounded-full border border-base-300 bg-base-300/80 px-2 py-0.5 text-[11px] text-base-content"
                     >
                       {tag}
                     </span>
@@ -1424,16 +1451,11 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
 
                 {progress && (
                   <div className="space-y-1">
-                    <div className="flex justify-between gap-2 text-[11px] text-stone-400">
+                    <div className="flex justify-between gap-2 text-[11px] text-base-content/70">
                       <span className="truncate max-w-[80%]">{progress.message}</span>
-                      <span className="font-mono text-amber-300 font-bold">{Math.round(progress.percent)}%</span>
+                      <span className="font-mono text-warning font-bold">{Math.round(progress.percent)}%</span>
                     </div>
-                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-stone-800">
-                      <div
-                        className="h-full bg-gradient-to-r from-amber-500 to-lime-400 transition-all duration-300"
-                        style={{ width: `${Math.max(5, progress.percent)}%` }}
-                      />
-                    </div>
+                    <progress className="progress progress-warning w-full" value={Math.max(5, progress.percent)} max={100} aria-label="Meeting progress" />
                   </div>
                 )}
               </div>
@@ -1444,21 +1466,21 @@ function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
 
       {!loading && !error && meetings.length > 0 && (
         <div className="flex flex-col items-center gap-3 pt-1">
-          <p className="text-xs text-stone-500" aria-live="polite">
+          <p className="text-xs text-base-content/50" aria-live="polite">
             Showing {meetings.length} of {total} meeting{total === 1 ? "" : "s"}
           </p>
           {hasMore && !loadingMore && (
             <button
               type="button"
               onClick={() => void loadMore()}
-              className="min-h-[44px] rounded-lg border border-stone-700 px-6 py-2 text-sm font-semibold text-stone-200 transition hover:border-lime-400/60 hover:text-lime-300"
+              className="btn min-h-[44px] font-semibold hover:border-primary/60 hover:text-primary"
             >
               Load more
             </button>
           )}
-          {loadingMore && <p className="text-xs text-stone-500">Loading more meetings…</p>}
+          {loadingMore && <p className="text-xs text-base-content/50">Loading more meetings…</p>}
           {!hasMore && total > 0 && (
-            <p className="text-xs text-stone-600">You&apos;ve reached the end of the list.</p>
+            <p className="text-xs text-base-content/50">You&apos;ve reached the end of the list.</p>
           )}
           <div ref={loadMoreSentinelRef} aria-hidden="true" className="h-1 w-full" />
         </div>
@@ -1573,20 +1595,20 @@ function BulkTranscribeModal({
 
   return (
     <Modal onClose={onClose} title={"Bulk re-transcribe"} ariaLabel="Bulk re-transcribe meetings" maxWidth="max-w-lg">
-      {error && <div className="rounded-xl border border-red-900 bg-red-950/40 p-3 text-xs text-red-200">{error}</div>}
+      {error && <div className="rounded-xl border border-error bg-error/10 p-3 text-xs text-error">{error}</div>}
 
       {result ? (
         <div className="space-y-4 text-sm">
-          <div className="rounded-xl border border-lime-900 bg-lime-950/40 p-4 text-lime-200">
+          <div className="rounded-xl border border-primary bg-primary/10 p-4 text-primary">
             Queued {result.queued} of {result.total} meeting{result.total === 1 ? "" : "s"} with <strong>{result.provider}</strong>
             {result.alreadyRunning > 0 && <span> ({result.alreadyRunning} already running)</span>}
             {result.skipped > 0 && <span> ({result.skipped} skipped)</span>}. Watch progress on the meetings list.
           </div>
           {failures.length > 0 && (
-            <ul className="space-y-1 text-xs text-stone-400">
+            <ul className="space-y-1 text-xs text-base-content/70">
               {failures.map((f) => (
-                <li key={f.meetingId} className="rounded-lg border border-stone-800 bg-stone-950/60 px-3 py-2">
-                  <span className="font-mono text-stone-300">{f.meetingId.slice(0, 8)}…</span>: {f.error || "skipped"}
+                <li key={f.meetingId} className="rounded-lg border border-base-300 bg-base-100/60 px-3 py-2">
+                  <span className="font-mono text-base-content">{f.meetingId.slice(0, 8)}…</span>: {f.error || "skipped"}
                 </li>
               ))}
             </ul>
@@ -1598,7 +1620,7 @@ function BulkTranscribeModal({
                 `Bulk job ${result.bulkId}: queued ${result.queued}/${result.total} with ${result.provider}.`,
                 (result.results || []).filter((r) => r.status === "running").map((r) => r.meetingId)
               )}
-              className="rounded-lg bg-lime-400 px-5 py-2 text-sm font-semibold text-stone-950 hover:bg-lime-300 transition"
+              className="btn btn-primary min-h-11"
             >
               Done
             </button>
@@ -1607,37 +1629,37 @@ function BulkTranscribeModal({
       ) : (
         <form onSubmit={handleSubmit} className="space-y-4 text-sm">
           <div className="grid gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wider text-stone-400">Which meetings?</span>
-            <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-stone-800 bg-stone-950/60 px-3 py-2.5 hover:border-stone-600 transition">
-              <input type="radio" name="bulk-scope" checked={scope === "selected"} onChange={() => setScope("selected")} disabled={selectedIds.length === 0} className="accent-lime-400" />
+            <span className="text-xs font-semibold uppercase tracking-wider text-base-content/70">Which meetings?</span>
+            <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-base-300 bg-base-100/60 px-3 py-2.5 hover:border-base-300 transition">
+              <input type="radio" name="bulk-scope" checked={scope === "selected"} onChange={() => setScope("selected")} disabled={selectedIds.length === 0} className="accent-primary" />
               <span>Selected meetings ({selectedIds.length}){selectedIds.length === 0 && " — tick meetings in the list first"}</span>
             </label>
-            <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-stone-800 bg-stone-950/60 px-3 py-2.5 hover:border-stone-600 transition">
-              <input type="radio" name="bulk-scope" checked={scope === "filtered"} onChange={() => setScope("filtered")} className="accent-lime-400" />
+            <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-base-300 bg-base-100/60 px-3 py-2.5 hover:border-base-300 transition">
+              <input type="radio" name="bulk-scope" checked={scope === "filtered"} onChange={() => setScope("filtered")} className="accent-primary" />
               <span>All meetings matching filters (whole library, server-side)</span>
             </label>
           </div>
 
           {scope === "filtered" && (
-            <div className="space-y-3 rounded-xl border border-stone-800 bg-stone-950/60 p-4">
+            <div className="space-y-3 rounded-xl border border-base-300 bg-base-100/60 p-4">
               <input
                 type="text"
                 placeholder="Search title, tags, transcript…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-base sm:text-sm text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none"
+                className="input input-md w-full"
               />
               <div className="grid grid-cols-2 gap-3">
-                <label className="space-y-1 text-xs text-stone-400">
+                <label className="space-y-1 text-xs text-base-content/70">
                   <span>From date</span>
-                  <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none" />
+                  <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="input input-md w-full" />
                 </label>
-                <label className="space-y-1 text-xs text-stone-400">
+                <label className="space-y-1 text-xs text-base-content/70">
                   <span>To date</span>
-                  <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none" />
+                  <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="input input-md w-full" />
                 </label>
               </div>
-              <label className="space-y-1 text-xs text-stone-400">
+              <label className="space-y-1 text-xs text-base-content/70">
                 <span>Current transcript provider</span>
                 <Combobox
                   value={currentProvider}
@@ -1651,7 +1673,7 @@ function BulkTranscribeModal({
             </div>
           )}
 
-          <label className="space-y-1 text-xs text-stone-400">
+          <label className="space-y-1 text-xs text-base-content/70">
             <span className="text-xs font-semibold uppercase tracking-wider">Transcribe with</span>
             <Combobox
               value={provider}
@@ -1663,17 +1685,17 @@ function BulkTranscribeModal({
             />
           </label>
 
-          <label className="flex cursor-pointer items-center gap-2 text-xs text-stone-300">
-            <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} className="h-4 w-4 accent-lime-400" />
+          <label className="flex cursor-pointer items-center gap-2 text-xs text-base-content">
+            <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} className="checkbox checkbox-sm" />
             Force re-transcribe even if already done (recommended when switching engines)
           </label>
 
           <div className="flex justify-end gap-3 pt-1">
-            <button type="button" onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-stone-400 hover:text-stone-200">Cancel</button>
+            <button type="button" onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-base-content/70 hover:text-base-content">Cancel</button>
             <button
               type="submit"
               disabled={submitting || (scope === "selected" && selectedIds.length === 0)}
-              className="rounded-lg bg-lime-400 px-5 py-2 text-sm font-semibold text-stone-950 hover:bg-lime-300 disabled:opacity-50 transition"
+              className="btn btn-primary min-h-11"
             >
               {submitting ? "Queueing…" : scope === "selected" ? `Queue ${selectedIds.length} meeting${selectedIds.length === 1 ? "" : "s"}` : "Queue matching meetings"}
             </button>
@@ -1708,7 +1730,7 @@ function SegmentActionsMenu({
     setOpen(false);
     action();
   };
-  const itemClass = "flex w-full min-h-[44px] items-center gap-2 px-3 text-left text-sm transition hover:bg-stone-800";
+  const itemClass = "flex w-full min-h-[44px] items-center gap-2 rounded-field px-3 text-left text-sm transition hover:bg-base-200 focus-visible:bg-base-200";
 
   return (
     <div className="relative shrink-0" onKeyDown={(event) => {
@@ -1720,9 +1742,9 @@ function SegmentActionsMenu({
         aria-expanded={open}
         aria-label="Turn actions"
         onClick={() => setOpen((prev) => !prev)}
-        className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-stone-700/80 bg-stone-800 text-lg leading-none text-stone-300 transition hover:bg-stone-700 hover:text-stone-100"
+        className="btn btn-ghost btn-square min-h-[44px] min-w-[44px] text-lg leading-none"
       >
-        ⋯
+        <Ellipsis className="h-4 w-4 shrink-0" aria-hidden="true" />
       </button>
       {open && (
         <>
@@ -1732,26 +1754,26 @@ function SegmentActionsMenu({
             onClick={() => setOpen(false)}
             className="fixed inset-0 z-40 cursor-default"
           />
-          <div role="menu" className="absolute right-0 top-full z-50 mt-1 min-w-[190px] overflow-hidden rounded-xl border border-stone-700 bg-stone-900 py-1 shadow-2xl">
+          <div role="menu" className="menu absolute right-0 top-full z-50 mt-1 min-w-[190px] rounded-box border border-base-300 bg-base-100 p-1 shadow-lg">
             {showConfirm && (
-              <button type="button" role="menuitem" className={`${itemClass} font-semibold text-lime-400`} onClick={() => pick(onConfirm)} title="Confirm this speaker is correct & update voiceprint">
-                ✓ Confirm
+              <button type="button" role="menuitem" className={`${itemClass} font-semibold text-primary`} onClick={() => pick(onConfirm)} title="Confirm this speaker is correct & update voiceprint">
+                <Check className="h-4 w-4 shrink-0" aria-hidden="true" /> Confirm
               </button>
             )}
-            <button type="button" role="menuitem" className={`${itemClass} text-stone-200`} onClick={() => pick(onChange)} title="Change speaker for this turn or all turns">
-              ✎ Change
+            <button type="button" role="menuitem" className={`${itemClass} text-base-content`} onClick={() => pick(onChange)} title="Change speaker for this turn or all turns">
+              <Pencil className="h-4 w-4 shrink-0" aria-hidden="true" /> Change
             </button>
-            <button type="button" role="menuitem" className={`${itemClass} text-amber-400`} onClick={() => pick(onSplit)} title="Split this turn into two separate segments">
-              ✂ Split
+            <button type="button" role="menuitem" className={`${itemClass} text-warning`} onClick={() => pick(onSplit)} title="Split this turn into two separate segments">
+              <Scissors className="h-4 w-4 shrink-0" aria-hidden="true" /> Split
             </button>
             {showMerge && (
-              <button type="button" role="menuitem" className={`${itemClass} text-stone-300`} onClick={() => pick(onMerge)} title="Merge this turn with the following turn">
-                ⛓ Merge
+              <button type="button" role="menuitem" className={`${itemClass} text-base-content`} onClick={() => pick(onMerge)} title="Merge this turn with the following turn">
+                <Link2 className="h-4 w-4 shrink-0" aria-hidden="true" /> Merge
               </button>
             )}
             {showWrong && (
-              <button type="button" role="menuitem" className={`${itemClass} text-rose-400`} onClick={() => pick(onWrong)} title="Mark as incorrect (reset to Unknown speaker)">
-                ✕ Wrong
+              <button type="button" role="menuitem" className={`${itemClass} text-error`} onClick={() => pick(onWrong)} title="Mark as incorrect (reset to Unknown speaker)">
+                <X className="h-4 w-4 shrink-0" aria-hidden="true" /> Wrong
               </button>
             )}
           </div>
@@ -1766,13 +1788,17 @@ function MeetingDetailView({
   knownSpeakers,
   onBack,
   onDeleted,
-  onSpeakerUpdated
+  onSpeakerUpdated,
+  onChatOpenChange,
+  onChatTitle
 }: {
   meetingId: string;
   knownSpeakers: SpeakerWithStats[];
   onBack: () => void;
   onDeleted: () => void;
   onSpeakerUpdated: () => void;
+  onChatOpenChange: (open: boolean) => void;
+  onChatTitle: (title: string) => void;
 }): ReactElement {
   const [detail, setDetail] = useState<MeetingDetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1792,7 +1818,6 @@ function MeetingDetailView({
   const [showRapidEnroll, setShowRapidEnroll] = useState(false);
   const [splittingSegment, setSplittingSegment] = useState<{ segmentIndex: number; speaker: string; text: string; startMs: number; endMs: number } | null>(null);
   const [showSummaryModal, setShowSummaryModal] = useState(false);
-  const [showChatPanel, setShowChatPanel] = useState(false);
   const [selectedSummaryId, setSelectedSummaryId] = useState<string | null>(null);
   const [summaryViewMode, setSummaryViewMode] = useState<"rendered" | "raw">("rendered");
   const [regenerating, setRegenerating] = useState(false);
@@ -2281,7 +2306,7 @@ function MeetingDetailView({
       }
       setTranscribing(false);
       setTranscriptionProgress(null);
-      alert(`Transcription error: ${err instanceof Error ? err.message : String(err)}`);
+      notify("error", `Transcription error: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       transcriptionAbortRef.current = null;
     }
@@ -2295,7 +2320,7 @@ function MeetingDetailView({
       if (!res.ok) throw new Error("Failed to set primary summary");
       await fetchDetail();
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      notify("error", err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -2336,9 +2361,7 @@ function MeetingDetailView({
   const handleDeleteMeeting = async () => {
     if (!detail) return;
     if (
-      !confirm(
-        `Are you sure you want to delete meeting "${detail.meeting.title}"? This will permanently remove its recordings, transcripts, and summaries.`
-      )
+      !(await confirmAction({ title: "Delete meeting", message: `Are you sure you want to delete meeting "${detail.meeting.title}"? This will permanently remove its recordings, transcripts, and summaries.`, confirmLabel: "Delete", danger: true }))
     ) {
       return;
     }
@@ -2350,12 +2373,12 @@ function MeetingDetailView({
       }
       onDeleted();
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      notify("error", err instanceof Error ? err.message : String(err));
     }
   };
 
   const handleDeleteSummary = async (artifactId: string) => {
-    if (!confirm("Are you sure you want to delete this summary?")) {
+    if (!(await confirmAction({ title: "Delete summary", message: "Are you sure you want to delete this summary?", confirmLabel: "Delete", danger: true }))) {
       return;
     }
     try {
@@ -2369,7 +2392,7 @@ function MeetingDetailView({
       setSelectedSummaryId(null);
       await fetchDetail();
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      notify("error", err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -2415,7 +2438,7 @@ function MeetingDetailView({
       await fetchDetail();
       onSpeakerUpdated();
     } catch (err) {
-      alert(`Failed to confirm speaker: ${err instanceof Error ? err.message : String(err)}`);
+      notify("error", `Failed to confirm speaker: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -2433,7 +2456,7 @@ function MeetingDetailView({
       await fetchDetail();
       onSpeakerUpdated();
     } catch (err) {
-      alert(`Failed to unassign speaker: ${err instanceof Error ? err.message : String(err)}`);
+      notify("error", `Failed to unassign speaker: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -2451,7 +2474,7 @@ function MeetingDetailView({
       await fetchDetail();
       onSpeakerUpdated();
     } catch (err) {
-      alert(`Failed to merge segments: ${err instanceof Error ? err.message : String(err)}`);
+      notify("error", `Failed to merge segments: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -2523,17 +2546,17 @@ function MeetingDetailView({
       <button
         type="button"
         onClick={onBack}
-        className="flex min-h-[44px] items-center gap-2 text-sm text-stone-400 hover:text-lime-300 transition"
+        className="flex min-h-[44px] items-center gap-2 text-sm text-base-content/70 hover:text-primary transition"
       >
         ← Back to Meetings
       </button>
 
-      {loading && <p className="text-stone-400">Loading meeting details…</p>}
-      {error && <div className="rounded-xl border border-red-900 bg-red-950/40 p-4 text-red-200">{error}</div>}
+      {loading && <p className="text-base-content/70">Loading meeting details…</p>}
+      {error && <div className="rounded-xl border border-error bg-error/10 p-4 text-error">{error}</div>}
 
       {detail && (
         <div className="space-y-8">
-          <header className="space-y-4 border-b border-stone-800 pb-6">
+          <header className="space-y-4 border-b border-base-300 pb-6">
             <div className="w-full">
               {editingTitle ? (
                 <form
@@ -2553,13 +2576,13 @@ function MeetingDetailView({
                     aria-label="Meeting title"
                     autoFocus
                     disabled={savingTitle}
-                    className="w-full rounded-lg border border-lime-400/50 bg-stone-900 px-3 py-1.5 text-2xl font-bold tracking-tight text-stone-100 focus:border-lime-400 focus:outline-none sm:text-3xl"
+                    className="input w-full text-2xl font-bold tracking-tight sm:text-3xl"
                   />
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <button
                       type="submit"
                       disabled={savingTitle}
-                      className="rounded-lg bg-lime-400 px-3 py-1.5 text-sm font-semibold text-stone-950 transition hover:bg-lime-300 disabled:opacity-50"
+                      className="btn btn-primary min-h-11"
                     >
                       {savingTitle ? "Saving…" : "Save"}
                     </button>
@@ -2567,7 +2590,7 @@ function MeetingDetailView({
                       type="button"
                       onClick={() => setEditingTitle(false)}
                       disabled={savingTitle}
-                      className="rounded-lg border border-stone-700 px-3 py-1.5 text-sm text-stone-300 transition hover:border-stone-500 hover:text-stone-100 disabled:opacity-50"
+                      className="btn min-h-11"
                     >
                       Cancel
                     </button>
@@ -2580,17 +2603,17 @@ function MeetingDetailView({
                     <button
                       type="button"
                       onClick={startRename}
-                      className="rounded-md px-1.5 py-1 text-stone-500 transition hover:bg-stone-800 hover:text-lime-300"
+                      className="btn btn-ghost px-1.5 min-h-11"
                       aria-label="Rename meeting"
                       title="Rename meeting"
                     >
-                      ✎
+                      <Pencil className="h-4 w-4 shrink-0" aria-hidden="true" />
                     </button>
                     <button
                       type="button"
                       onClick={() => void handleAutoTitle()}
                       disabled={autoTitling || savingTitle}
-                      className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-stone-500 transition hover:bg-stone-800 hover:text-lime-300 disabled:opacity-50"
+                      className="btn btn-ghost btn-sm inline-flex items-center gap-1.5 font-medium min-h-11"
                       aria-label="Auto-generate meeting title with default LLM"
                       title="Auto-generate title with default LLM"
                     >
@@ -2603,7 +2626,7 @@ function MeetingDetailView({
             </div>
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs sm:text-sm text-stone-400">
+                <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs sm:text-sm text-base-content/70">
                   {editingStartTime ? (
                     <form
                       onSubmit={(event) => {
@@ -2622,12 +2645,12 @@ function MeetingDetailView({
                         aria-label="Meeting start time"
                         autoFocus
                         disabled={savingStartTime}
-                        className="rounded-md border border-lime-400/50 bg-stone-900 px-2 py-1 text-xs text-stone-100 focus:border-lime-400 focus:outline-none"
+                        className="input input-sm text-xs"
                       />
                       <button
                         type="submit"
                         disabled={savingStartTime}
-                        className="rounded-md bg-lime-400 px-2 py-1 text-xs font-semibold text-stone-950 transition hover:bg-lime-300 disabled:opacity-50"
+                        className="btn btn-primary btn-sm min-h-11"
                       >
                         {savingStartTime ? "Saving…" : "Save"}
                       </button>
@@ -2635,7 +2658,7 @@ function MeetingDetailView({
                         type="button"
                         onClick={() => setEditingStartTime(false)}
                         disabled={savingStartTime}
-                        className="rounded-md border border-stone-700 px-2 py-1 text-xs text-stone-300 transition hover:border-stone-500 hover:text-stone-100 disabled:opacity-50"
+                        className="rounded-md border border-base-300 px-2 py-1 text-xs text-base-content transition hover:border-base-300 hover:text-base-content disabled:opacity-50"
                       >
                         Cancel
                       </button>
@@ -2646,11 +2669,11 @@ function MeetingDetailView({
                       <button
                         type="button"
                         onClick={startEditStartTime}
-                        className="rounded-md px-1 py-0.5 text-stone-500 transition hover:bg-stone-800 hover:text-lime-300"
+                        className="btn btn-ghost px-1 py-0.5 min-h-11"
                         aria-label="Change meeting time"
                         title="Change meeting time"
                       >
-                        ✎
+                        <Pencil className="h-4 w-4 shrink-0" aria-hidden="true" />
                       </button>
                     </>
                   )}
@@ -2664,17 +2687,17 @@ function MeetingDetailView({
                   {detail.meeting.tags.map((tag) => (
                     <span
                       key={tag}
-                      className="inline-flex items-center gap-1.5 rounded-full border border-stone-700 bg-stone-800/80 pl-2.5 pr-1.5 py-1 text-xs text-stone-200"
+                      className="inline-flex items-center gap-1.5 rounded-full border border-base-300 bg-base-300/80 pl-2.5 pr-1.5 py-1 text-xs text-base-content"
                     >
                       {tag}
                       <button
                         type="button"
                         onClick={() => handleRemoveTag(tag)}
                         disabled={savingTags}
-                        className="text-stone-500 hover:text-rose-400 transition disabled:opacity-50"
+                        className="text-base-content/50 hover:text-error transition disabled:opacity-50"
                         aria-label={`Remove tag ${tag}`}
                       >
-                        ×
+                        <X className="h-4 w-4 shrink-0" aria-hidden="true" />
                       </button>
                     </span>
                   ))}
@@ -2690,17 +2713,17 @@ function MeetingDetailView({
                     }}
                     placeholder="+ Add tag"
                     disabled={savingTags}
-                    className="w-24 rounded-full border border-dashed border-stone-700 bg-transparent px-2.5 py-1 text-xs text-stone-200 placeholder:text-stone-500 focus:w-32 focus:border-lime-400 focus:outline-none transition-all disabled:opacity-50"
+                    className="input input-md w-full w-24 rounded-full border-dashed bg-transparent px-2.5 text-xs text-base-content placeholder:text-base-content/50 focus:w-32 transition-all disabled:opacity-50"
                   />
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2 sm:gap-3">
               <button
                 type="button"
-                onClick={() => setShowChatPanel(true)}
-                className="inline-flex min-h-[44px] basis-full items-center justify-center gap-2 rounded-lg border border-cyan-400/40 bg-cyan-400/10 px-3.5 py-2 text-sm font-semibold text-cyan-300 transition hover:border-cyan-300/60 hover:bg-cyan-400/20 shadow-md shrink-0 flex-1 sm:flex-none sm:basis-auto"
+                onClick={() => onChatOpenChange(true)}
+                className="inline-flex min-h-[44px] basis-full items-center justify-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-3.5 py-2 text-sm font-semibold text-accent transition hover:border-accent/60 hover:bg-accent/20 shadow-md shrink-0 flex-1 sm:flex-none sm:basis-auto"
               >
-                <span>✦</span>
+                <span><Sparkles className="h-4 w-4 shrink-0" aria-hidden="true" /></span>
                 <span>Chat with Meeting</span>
               </button>
               <div className="w-full sm:w-72">
@@ -2720,12 +2743,12 @@ function MeetingDetailView({
                   onClick={() => setShowDiarizationSettings(!showDiarizationSettings)}
                   className={`min-h-[44px] rounded-lg border px-2.5 py-2 text-xs font-mono transition shrink-0 ${
                     showDiarizationSettings
-                      ? "border-lime-400 bg-lime-400/20 text-lime-300"
-                      : "border-stone-800 bg-stone-900 text-stone-400 hover:text-stone-200"
+                      ? "border-primary bg-primary/20 text-primary"
+                      : "border-base-300 bg-base-200 text-base-content/70 hover:text-base-content"
                   }`}
                   title="Configure local diarization thresholds"
                 >
-                  ⚙️ Thresholds
+                  <Settings className="h-4 w-4 shrink-0" aria-hidden="true" /> Thresholds
                 </button>
               )}
 
@@ -2734,10 +2757,10 @@ function MeetingDetailView({
                 disabled={transcribing || hasNoAudio}
                 onClick={() => void handleTriggerTranscription()}
                 title={hasNoAudio ? "Transcription unlocks once the meeting audio is attached" : undefined}
-                className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-lime-400 px-4 py-2 text-sm font-semibold text-stone-950 transition hover:bg-lime-300 disabled:opacity-75 disabled:cursor-not-allowed shadow-md shrink-0"
+                className="btn btn-primary inline-flex min-h-[44px] items-center gap-2 disabled:opacity-75 disabled:cursor-not-allowed shrink-0"
               >
                 {transcribing && (
-                  <svg className="h-4 w-4 animate-spin text-stone-950" viewBox="0 0 24 24" fill="none">
+                  <svg className="h-4 w-4 animate-spin text-primary-content" viewBox="0 0 24 24" fill="none">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
                   </svg>
@@ -2762,7 +2785,7 @@ function MeetingDetailView({
                   type="button"
                   disabled={cancellingTranscription}
                   onClick={() => void handleCancelTranscription()}
-                  className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm font-semibold text-rose-300 transition hover:bg-rose-500/20 hover:border-rose-500/60 disabled:opacity-50 shadow-md shrink-0"
+                  className="btn btn-error btn-soft inline-flex min-h-[44px] items-center gap-1.5 border hover:border-error/60 shadow-md shrink-0"
                   title="Cancel inflight transcription"
                 >
                   <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -2776,7 +2799,7 @@ function MeetingDetailView({
               <button
                 type="button"
                 onClick={() => void handleDeleteMeeting()}
-                className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm font-semibold text-rose-300 transition hover:bg-rose-500/20 hover:border-rose-500/60 shadow-md shrink-0"
+                className="btn btn-error btn-soft inline-flex min-h-[44px] items-center gap-1.5 border hover:border-error/60 shadow-md shrink-0"
                 title="Delete this meeting and all its artifacts"
               >
                 <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -2792,23 +2815,23 @@ function MeetingDetailView({
           {/* Audio not yet attached — retrieving or missing banner */}
           {hasNoAudio && (
             <div
-              className={`rounded-xl border p-4 shadow-xl space-y-3 animate-in fade-in duration-200 ${
+              className={`rounded-xl border p-4 shadow-xl space-y-3  ${
                 audioStatus === "retrieving"
-                  ? "border-sky-500/30 bg-sky-950/30"
-                  : "border-rose-500/30 bg-rose-950/30"
+                  ? "border-info/30 bg-info/30"
+                  : "border-error/30 bg-error/10"
               }`}
             >
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2.5 min-w-0">
                   {audioStatus === "retrieving" ? (
-                    <svg className="h-4 w-4 animate-spin text-sky-300 shrink-0" viewBox="0 0 24 24" fill="none">
+                    <svg className="h-4 w-4 animate-spin text-info shrink-0" viewBox="0 0 24 24" fill="none">
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
                     </svg>
                   ) : (
-                    <span className="text-rose-300 shrink-0">⚠</span>
+                    <span className="text-error shrink-0">⚠</span>
                   )}
-                  <p className={`text-sm ${audioStatus === "retrieving" ? "text-sky-200" : "text-rose-200"}`}>
+                  <p className={`text-sm ${audioStatus === "retrieving" ? "text-info" : "text-error"}`}>
                     {audioStatus === "retrieving" ? (
                       <><span className="font-semibold">Retrieving audio…</span> This Plaud recording is still downloading from Plaud Cloud. Transcription unlocks automatically once it lands.</>
                     ) : detail?.meeting.source === "plaud" ? (
@@ -2824,59 +2847,59 @@ function MeetingDetailView({
                       type="button"
                       disabled={retryingAudio}
                       onClick={() => void handleRetryAudio()}
-                      className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border border-sky-400/40 bg-sky-400/10 px-3 py-1.5 text-xs font-semibold text-sky-200 transition hover:bg-sky-400/20 disabled:opacity-50"
+                      className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border border-info/40 bg-info/10 px-3 py-1.5 text-xs font-semibold text-info transition hover:bg-info/20 disabled:opacity-50"
                     >
-                      <span>⟳</span>
+                      <span><RotateCw className="h-4 w-4 shrink-0" aria-hidden="true" /></span>
                       <span>{retryingAudio ? "Queueing…" : "Retry download"}</span>
                     </button>
                   )}
                   <button
                     type="button"
                     onClick={() => void fetchDetail()}
-                    className="inline-flex min-h-[40px] items-center rounded-lg border border-stone-700 px-3 py-1.5 text-xs font-medium text-stone-300 transition hover:text-white"
+                    className="btn btn-sm inline-flex min-h-[40px] items-center"
                   >
                     Check again
                   </button>
                 </div>
               </div>
               {audioRetryNotice && (
-                <p className="text-xs text-stone-300">{audioRetryNotice}</p>
+                <p className="text-xs text-base-content">{audioRetryNotice}</p>
               )}
             </div>
           )}
 
           {/* Live Transcription Progress Banner */}
           {transcriptionProgress && (
-            <div className="rounded-xl border border-lime-500/30 bg-stone-900/95 p-4 shadow-xl space-y-3 animate-in fade-in duration-200">
+            <div className="rounded-xl border border-primary/30 bg-base-200/95 p-4 shadow-xl space-y-3 ">
               <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                 <div className="flex items-center gap-2">
                   <span className="relative flex h-2.5 w-2.5">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-lime-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-lime-400"></span>
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-primary"></span>
                   </span>
-                  <span className="font-semibold text-stone-200 uppercase tracking-wide">
+                  <span className="font-semibold text-base-content uppercase tracking-wide">
                     {selectedEngine.startsWith("local")
                       ? "Local Pipeline (Cohere Transcribe + Diarization)"
                       : selectedEngine === "assemblyai" ? "AssemblyAI Cloud" : selectedEngine === "muse" ? "Muse Voice Cloud" : "Speechmatics Cloud"}
                   </span>
-                  <span className="text-stone-500">•</span>
-                  <span className="text-lime-300 font-medium capitalize">
+                  <span className="text-base-content/50">•</span>
+                  <span className="text-primary font-medium capitalize">
                     {transcriptionProgress.stage}
                   </span>
                 </div>
 
                 <div className="flex items-center gap-3 font-mono text-xs">
                   {transcriptionProgress.current && transcriptionProgress.total && (
-                    <span className="text-stone-300">
-                      Segment <strong className="text-lime-300">{transcriptionProgress.current}</strong> / {transcriptionProgress.total}
+                    <span className="text-base-content">
+                      Segment <strong className="text-primary">{transcriptionProgress.current}</strong> / {transcriptionProgress.total}
                     </span>
                   )}
                   {transcriptionProgress.currentMs !== undefined && transcriptionProgress.totalMs && (
-                    <span className="text-stone-400">
+                    <span className="text-base-content/70">
                       {formatTimeOffset(transcriptionProgress.currentMs)} / {formatTimeOffset(transcriptionProgress.totalMs)}
                     </span>
                   )}
-                  <span className="font-bold text-lime-400 text-sm">
+                  <span className="font-bold text-primary text-sm">
                     {Math.round(transcriptionProgress.percent)}%
                   </span>
 
@@ -2885,7 +2908,7 @@ function MeetingDetailView({
                       type="button"
                       disabled={cancellingTranscription}
                       onClick={() => void handleCancelTranscription()}
-                      className="ml-1 inline-flex items-center gap-1 rounded bg-rose-500/20 px-2 py-0.5 text-[11px] font-semibold text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 transition disabled:opacity-50"
+                      className="btn btn-error btn-soft btn-sm ml-1 inline-flex items-center gap-1 py-0.5 border min-h-11"
                     >
                       <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                         <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -2898,20 +2921,15 @@ function MeetingDetailView({
               </div>
 
               {/* Progress Bar */}
-              <div className="h-2 w-full overflow-hidden rounded-full bg-stone-800">
-                <div
-                  className="h-full rounded-full bg-gradient-to-r from-lime-500 via-lime-400 to-cyan-400 transition-all duration-300 ease-out shadow-[0_0_12px_rgba(163,230,53,0.5)]"
-                  style={{ width: `${Math.max(3, Math.min(100, transcriptionProgress.percent))}%` }}
-                />
-              </div>
+              <progress className="progress progress-primary w-full" value={Math.max(3, Math.min(100, transcriptionProgress.percent))} max={100} aria-label="Transcription progress" />
 
               {/* Status Message */}
-              <div className="flex items-center justify-between text-xs text-stone-400">
-                <p className="truncate text-stone-300">
+              <div className="flex items-center justify-between text-xs text-base-content/70">
+                <p className="truncate text-base-content">
                   {transcriptionProgress.message}
                 </p>
                 {transcriptionProgress.speaker && (
-                  <span className="shrink-0 rounded bg-stone-800 px-2 py-0.5 text-[11px] font-medium text-cyan-300 border border-stone-700">
+                  <span className="shrink-0 rounded bg-base-300 px-2 py-0.5 text-[11px] font-medium text-accent border border-base-300">
                     Speaker: {transcriptionProgress.speaker}
                   </span>
                 )}
@@ -2921,21 +2939,21 @@ function MeetingDetailView({
 
           {/* Expandable Diarization Threshold Tuning */}
           {showDiarizationSettings && selectedEngine.startsWith("local") && (
-            <div className="rounded-xl border border-stone-800 bg-stone-900/90 p-4 space-y-3 backdrop-blur">
-              <div className="flex items-center justify-between border-b border-stone-800 pb-2">
-                <span className="text-xs font-semibold uppercase tracking-wider text-lime-400">
-                  🎙️ Diarization & Voiceprint Thresholds for this Transcription
+            <div className="rounded-xl border border-base-300 bg-base-200/90 p-4 space-y-3 backdrop-blur">
+              <div className="flex items-center justify-between border-b border-base-300 pb-2">
+                <span className="text-xs font-semibold uppercase tracking-wider text-primary">
+                  <Mic className="h-4 w-4 shrink-0" aria-hidden="true" /> Diarization & Voiceprint Thresholds for this Transcription
                 </span>
-                <span className="text-[11px] text-stone-500 font-mono">Overrides Global Settings</span>
+                <span className="text-[11px] text-base-content/50 font-mono">Overrides Global Settings</span>
               </div>
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 pt-1">
                 <div className="space-y-1">
                   <div className="flex items-center justify-between text-xs">
-                    <label htmlFor="meeting-clustering-slider" className="text-stone-300 font-medium">
+                    <label htmlFor="meeting-clustering-slider" className="text-base-content font-medium">
                       Within-Meeting Clustering Threshold:
                     </label>
-                    <span className="font-mono font-bold text-lime-400">
+                    <span className="font-mono font-bold text-primary">
                       {customClusteringThreshold.toFixed(2)}
                     </span>
                   </div>
@@ -2947,19 +2965,19 @@ function MeetingDetailView({
                     step="0.01"
                     value={customClusteringThreshold}
                     onChange={(e) => setCustomClusteringThreshold(parseFloat(e.target.value))}
-                    className="w-full accent-lime-400 cursor-pointer"
+                    className="range range-sm w-full"
                   />
-                  <p className="text-[10px] text-stone-500">
+                  <p className="text-[10px] text-base-content/50">
                     Controls separation of distinct voices in this meeting. Recommended: 0.50.
                   </p>
                 </div>
 
                 <div className="space-y-1">
                   <div className="flex items-center justify-between text-xs">
-                    <label htmlFor="meeting-similarity-slider" className="text-stone-300 font-medium">
+                    <label htmlFor="meeting-similarity-slider" className="text-base-content font-medium">
                       Enrolled Speaker Recognition Sensitivity:
                     </label>
-                    <span className="font-mono font-bold text-cyan-400">
+                    <span className="font-mono font-bold text-accent">
                       {customSimilarityThreshold.toFixed(2)}
                     </span>
                   </div>
@@ -2971,9 +2989,9 @@ function MeetingDetailView({
                     step="0.01"
                     value={customSimilarityThreshold}
                     onChange={(e) => setCustomSimilarityThreshold(parseFloat(e.target.value))}
-                    className="w-full accent-cyan-400 cursor-pointer"
+                    className="range range-sm w-full"
                   />
-                  <p className="text-[10px] text-stone-500">
+                  <p className="text-[10px] text-base-content/50">
                     Cosine similarity threshold to recognize known people. Recommended: 0.45.
                   </p>
                 </div>
@@ -2994,11 +3012,11 @@ function MeetingDetailView({
 
             return visibleSpeakers.length > 0 || parsedTranscriptSegments.length > 0 ? (
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs font-semibold uppercase tracking-wider text-stone-400">Speakers:</span>
+                <span className="text-xs font-semibold uppercase tracking-wider text-base-content/70">Speakers:</span>
                 {visibleSpeakers.map((s) => (
                   <span
                     key={s.id}
-                    className="rounded-full border border-stone-700 bg-stone-800/80 px-3 py-1 text-xs font-medium text-lime-300"
+                    className="rounded-full border border-base-300 bg-base-300/80 px-3 py-1 text-xs font-medium text-primary"
                   >
                     {s.name}
                   </span>
@@ -3007,16 +3025,16 @@ function MeetingDetailView({
                   type="button"
                   onClick={() => void handleReidentifySpeakers()}
                   disabled={reidentifyingSpeakers}
-                  className="rounded-full border border-stone-700 bg-stone-800/80 px-3 py-1 text-xs font-medium text-stone-300 transition hover:border-lime-500/40 hover:text-lime-300 disabled:cursor-wait disabled:opacity-50"
+                  className="btn btn-sm rounded-full hover:border-primary/40 hover:text-primary disabled:cursor-wait min-h-11"
                   title="Re-match every speaker label against your current enrolled voiceprints"
                 >
                   {reidentifyingSpeakers
                     ? reidentifyStatus?.stage === "queued"
-                      ? "⟳ Queued…"
-                      : "⟳ Re-identifying…"
+                      ? <><RotateCw className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" /> Queued…</>
+                      : <><RotateCw className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" /> Re-identifying…</>
                     : reidentifyStatus?.stage === "error"
-                      ? "⟳ Retry re-identify"
-                      : "⟳ Re-identify"}
+                      ? <><RotateCw className="h-4 w-4 shrink-0" aria-hidden="true" /> Retry re-identify</>
+                      : <><RotateCw className="h-4 w-4 shrink-0" aria-hidden="true" /> Re-identify</>}
                 </button>
               </div>
             ) : null;
@@ -3024,14 +3042,14 @@ function MeetingDetailView({
 
           {/* Audio Player if recording exists */}
           {detail.recordings.length > 0 && (
-            <section className="rounded-xl border border-stone-800 bg-stone-900/90 p-3.5 sm:p-4 space-y-2.5 shadow-lg w-full max-w-full min-w-0 overflow-hidden">
-              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-stone-400">
+            <section className="rounded-xl border border-base-300 bg-base-200/90 p-3.5 sm:p-4 space-y-2.5 shadow-lg w-full max-w-full min-w-0 overflow-hidden">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-base-content/70">
                 <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0">
-                  <span className="font-semibold uppercase tracking-wider text-stone-300 shrink-0">Recording Audio</span>
+                  <span className="font-semibold uppercase tracking-wider text-base-content shrink-0">Recording Audio</span>
                   <span className="truncate">{detail.recordings[0].mime} • {(detail.recordings[0].sizeBytes / 1024 / 1024).toFixed(2)} MB</span>
                   {playingSegmentIndex !== null && (
-                    <span className="inline-flex items-center gap-1.5 rounded bg-lime-500/20 px-2 py-0.5 text-[11px] font-semibold text-lime-300 border border-lime-500/40 animate-pulse shrink-0">
-                      <span>▶ Playing turn #{playingSegmentIndex + 1}</span>
+                    <span className="inline-flex items-center gap-1.5 rounded bg-primary/20 px-2 py-0.5 text-[11px] font-semibold text-primary border border-primary/40 animate-pulse shrink-0">
+                      <span><Play className="h-4 w-4 shrink-0" aria-hidden="true" /> Playing turn #{playingSegmentIndex + 1}</span>
                     </span>
                   )}
                 </div>
@@ -3053,12 +3071,12 @@ function MeetingDetailView({
                   }}
                   className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition shrink-0 ${
                     enhancedAudio
-                      ? "border-lime-400/40 bg-lime-400/10 text-lime-300 hover:bg-lime-400/20"
-                      : "border-stone-700 bg-stone-800 text-stone-400 hover:text-stone-200"
+                      ? "border-primary/40 bg-primary/10 text-primary hover:bg-primary/20"
+                      : "border-base-300 bg-base-300 text-base-content/70 hover:text-base-content"
                   }`}
                   title="Toggle FFmpeg speech clarity equalizer & adaptive de-noiser"
                 >
-                  <span>{enhancedAudio ? "✨ Voice Enhanced (Active)" : "🔉 Original Raw Audio"}</span>
+                  <span className="inline-flex items-center gap-1.5">{enhancedAudio ? <><Sparkles className="h-4 w-4 shrink-0" aria-hidden="true" /> Voice Enhanced (Active)</> : <><VolumeX className="h-4 w-4 shrink-0" aria-hidden="true" /> Original Raw Audio</>}</span>
                 </button>
                 {splitTotalMs !== null && splitTotalMs > 15000 && (
                   <button
@@ -3070,39 +3088,39 @@ function MeetingDetailView({
                       }
                       setShowSplitCard(!showSplitCard);
                     }}
-                    className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition shrink-0 ${
+                    className={`btn btn-sm shrink-0 ${
                       showSplitCard
-                        ? "border-lime-400/40 bg-lime-400/10 text-lime-300 hover:bg-lime-400/20"
-                        : "border-stone-700 bg-stone-800 text-stone-400 hover:text-stone-200"
+                        ? "btn-primary btn-soft"
+                        : ""
                     }`}
                     title="Cut this meeting in two at a chosen point"
                   >
-                    <span>✂ Split Meeting</span>
+                    <span><Scissors className="h-4 w-4 shrink-0" aria-hidden="true" /> Split Meeting</span>
                   </button>
                 )}
                 </div>
               </div>
               {splitResult && (
-                <div className="flex flex-wrap items-center gap-2 rounded-lg border border-lime-500/40 bg-lime-500/10 px-3 py-2 text-xs text-lime-200">
-                  <span>✓ Split complete — Part 2 created as “{splitResult.newTitle}”.</span>
+                <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-3 py-2 text-xs text-primary">
+                  <span><Check className="h-4 w-4 shrink-0" aria-hidden="true" /> Split complete — Part 2 created as “{splitResult.newTitle}”.</span>
                   <button
                     type="button"
                     onClick={() => window.location.assign(`/meetings/${splitResult.newMeetingId}`)}
-                    className="rounded-md bg-lime-400 px-2 py-1 font-semibold text-stone-950 hover:bg-lime-300"
+                    className="btn btn-primary min-h-11"
                   >
                     Open Part 2 →
                   </button>
                   <button
                     type="button"
                     onClick={() => setSplitResult(null)}
-                    className="text-lime-300/70 hover:text-lime-200"
+                    className="text-primary/70 hover:text-primary"
                     aria-label="Dismiss split notice"
                   >
                     Dismiss
                   </button>
                 </div>
               )}
-              <div className="rounded-xl bg-stone-800 p-1.5">
+              <div className="rounded-xl bg-base-300 p-1.5">
               <audio
                 ref={audioRef}
                 controls
@@ -3132,16 +3150,16 @@ function MeetingDetailView({
               />
               </div>
               {showSplitCard && splitTotalMs !== null && splitTotalMs > 15000 && (
-                <div className="space-y-2 rounded-lg border border-stone-800 bg-stone-950/60 p-3">
+                <div className="space-y-2 rounded-lg border border-base-300 bg-base-100/60 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                    <span className="font-semibold uppercase tracking-wider text-stone-400">✂ Split meeting</span>
+                    <span className="font-semibold uppercase tracking-wider text-base-content/70"><Scissors className="h-4 w-4 shrink-0" aria-hidden="true" /> Split meeting</span>
                     <button
                       type="button"
                       onClick={() => {
                         const secs = audioRef.current?.currentTime;
                         if (secs && Number.isFinite(secs)) setSplitMs(clampSplitMs(Math.round(secs * 1000)));
                       }}
-                      className="text-stone-400 hover:text-lime-300"
+                      className="text-base-content/70 hover:text-primary"
                       title="Set the split point to the current playback position"
                     >
                       Use current position
@@ -3155,12 +3173,12 @@ function MeetingDetailView({
                     value={splitMs !== null ? Math.floor(clampSplitMs(splitMs) / 1000) : Math.floor(SPLIT_EDGE_MS / 1000)}
                     onChange={(e) => setSplitMs(clampSplitMs(Number(e.target.value) * 1000))}
                     aria-label="Split point in seconds"
-                    className="w-full accent-lime-400"
+                    className="w-full accent-primary"
                   />
-                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-stone-400">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-base-content/70">
                     <span>
                       {splitMs !== null ? (
-                        <>Split at <span className="font-mono font-semibold text-stone-200">{formatTimeOffset(splitMs)}</span> → Part 1: {formatTimeOffset(splitMs)} · Part 2: {formatTimeOffset(splitTotalMs - splitMs)}</>
+                        <>Split at <span className="font-mono font-semibold text-base-content">{formatTimeOffset(splitMs)}</span> → Part 1: {formatTimeOffset(splitMs)} · Part 2: {formatTimeOffset(splitTotalMs - splitMs)}</>
                       ) : (
                         <>Drag to choose where Part 1 ends and Part 2 begins (total {formatTimeOffset(splitTotalMs)})</>
                       )}
@@ -3169,7 +3187,7 @@ function MeetingDetailView({
                       type="button"
                       disabled={!splitValid}
                       onClick={() => setShowSplitConfirm(true)}
-                      className="rounded-lg bg-lime-400 px-3 py-1.5 font-semibold text-stone-950 hover:bg-lime-300 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                      className="btn btn-primary disabled:opacity-40 disabled:cursor-not-allowed min-h-11"
                       title={!splitValid ? "Drag the slider at least 5 seconds from either edge" : undefined}
                     >
                       Split meeting…
@@ -3181,8 +3199,8 @@ function MeetingDetailView({
           )}
 
           {/* Phone/tablet-portrait section switcher (hidden at lg+, where all sections stack) */}
-          <div className="lg:hidden sticky top-14 sm:top-16 z-20 bg-stone-950 py-2">
-            <div role="tablist" aria-label="Meeting sections" className="grid grid-cols-2 gap-1 rounded-xl border border-stone-800 bg-stone-900 p-1">
+          <div className="lg:hidden sticky top-14 sm:top-16 z-20 bg-base-100 py-2">
+            <div role="tablist" aria-label="Meeting sections" className="tabs tabs-box w-full">
               {(["summary", "transcript"] as const).map((key) => (
                 <button
                   key={key}
@@ -3190,11 +3208,7 @@ function MeetingDetailView({
                   role="tab"
                   aria-selected={activeSection === key}
                   onClick={() => setMobileSection(key)}
-                  className={`min-h-[44px] rounded-lg border text-sm font-semibold transition ${
-                    activeSection === key
-                      ? "border-lime-400/40 bg-lime-400/20 text-lime-300"
-                      : "border-transparent text-stone-400 hover:text-stone-200"
-                  }`}
+                  className={`tab min-h-[44px] flex-1 ${activeSection === key ? "tab-active" : ""}`}
                 >
                   {key === "summary" ? "Summary" : "Transcript"}
                 </button>
@@ -3208,7 +3222,7 @@ function MeetingDetailView({
               <div className="flex items-center gap-3">
                 <h2 className="text-xl font-semibold tracking-tight">AI Summaries</h2>
                 {summaries.length > 0 && (
-                  <span className="rounded-full bg-stone-800 px-2.5 py-0.5 text-xs font-medium text-stone-300">
+                  <span className="rounded-full bg-base-300 px-2.5 py-0.5 text-xs font-medium text-base-content">
                     {summaries.length} version{summaries.length > 1 ? "s" : ""}
                   </span>
                 )}
@@ -3217,7 +3231,7 @@ function MeetingDetailView({
                 type="button"
                 onClick={() => setShowSummaryModal(true)}
                 disabled={summaryGenerating || hasNoAudio}
-                className="inline-flex items-center gap-2 rounded-lg bg-lime-400 px-3.5 py-1.5 text-xs font-semibold text-stone-950 hover:bg-lime-300 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                className="btn btn-primary btn-sm inline-flex items-center gap-2 px-3.5 disabled:cursor-not-allowed min-h-11"
                 title={hasNoAudio ? "Summaries need meeting audio first" : summaryGenerating ? "Summary generation already in progress" : undefined}
               >
                 <span>+</span>
@@ -3227,18 +3241,18 @@ function MeetingDetailView({
 
             {/* In-flight summary generation placeholder / error */}
             {summaryGeneration?.stage === "error" ? (
-              <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300 animate-in fade-in duration-200">
+              <div className="rounded-xl border border-error/30 bg-error/10 p-4 text-sm text-error ">
                 <span className="font-semibold">Summary generation failed:</span> {summaryGeneration.error}
               </div>
             ) : summaryGenerating ? (
-              <div className="rounded-xl border border-lime-500/30 bg-stone-900/70 shadow-lg overflow-hidden animate-in fade-in duration-200">
-                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-800 bg-stone-950/60 p-2">
+              <div className="rounded-xl border border-primary/30 bg-base-200/70 shadow-lg overflow-hidden ">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-base-300 bg-base-100/60 p-2">
                   <div className="flex items-center gap-2 text-xs">
-                    <svg className="h-3.5 w-3.5 animate-spin text-lime-400" viewBox="0 0 24 24" fill="none">
+                    <svg className="h-3.5 w-3.5 animate-spin text-primary" viewBox="0 0 24 24" fill="none">
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
                     </svg>
-                    <span className="font-semibold text-stone-200">
+                    <span className="font-semibold text-base-content">
                       Generating summary
                       {summaryGeneration.provider && summaryGeneration.model
                         ? ` with ${summaryGeneration.provider}:${summaryGeneration.model}`
@@ -3248,25 +3262,25 @@ function MeetingDetailView({
                       …
                     </span>
                   </div>
-                  <span className="text-[11px] text-stone-500 font-mono">This can take a minute</span>
+                  <span className="text-[11px] text-base-content/50 font-mono">This can take a minute</span>
                 </div>
                 <div className="p-6 space-y-3">
-                  <div className="h-5 w-2/5 rounded bg-stone-800 animate-pulse" />
-                  <div className="h-3 w-full rounded bg-stone-800 animate-pulse" />
-                  <div className="h-3 w-11/12 rounded bg-stone-800 animate-pulse" />
-                  <div className="h-3 w-4/5 rounded bg-stone-800 animate-pulse" />
-                  <div className="pt-3 h-4 w-1/3 rounded bg-stone-800 animate-pulse" />
-                  <div className="h-3 w-full rounded bg-stone-800 animate-pulse" />
-                  <div className="h-3 w-5/6 rounded bg-stone-800 animate-pulse" />
-                  <div className="h-3 w-3/5 rounded bg-stone-800 animate-pulse" />
+                  <div className="h-5 w-2/5 skeleton" />
+                  <div className="h-3 w-full skeleton" />
+                  <div className="h-3 w-11/12 skeleton" />
+                  <div className="h-3 w-4/5 skeleton" />
+                  <div className="pt-3 h-4 w-1/3 skeleton" />
+                  <div className="h-3 w-full skeleton" />
+                  <div className="h-3 w-5/6 skeleton" />
+                  <div className="h-3 w-3/5 skeleton" />
                 </div>
               </div>
             ) : null}
 
             {summaries.length > 0 ? (
-              <div className="rounded-xl border border-stone-800 bg-stone-900/70 shadow-lg overflow-hidden">
+              <div className="rounded-xl border border-base-300 bg-base-200/70 shadow-lg overflow-hidden">
                 {/* Summary Tabs Header */}
-                <div className="flex items-center gap-2 border-b border-stone-800 bg-stone-950/60 p-2 overflow-x-auto">
+                <div className="flex items-center gap-2 border-b border-base-300 bg-base-100/60 p-2 overflow-x-auto">
                   {summaries.map((s, idx) => {
                     const parts = s.provider.split(":");
                     const label = parts[2] || parts[1] || `Summary ${idx + 1}`;
@@ -3278,14 +3292,14 @@ function MeetingDetailView({
                         onClick={() => setSelectedSummaryId(s.id)}
                         className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition whitespace-nowrap ${
                           isSelected
-                            ? "bg-stone-800 text-lime-300 shadow border border-stone-700"
-                            : "text-stone-400 hover:text-stone-200 hover:bg-stone-900"
+                            ? "bg-base-300 text-primary shadow border border-base-300"
+                            : "text-base-content/70 hover:text-base-content hover:bg-base-200"
                         }`}
                       >
                         <span>{label}</span>
                         {s.isPrimary && (
-                          <span className="rounded bg-lime-400/20 px-1.5 py-0.2 text-[10px] text-lime-300 font-bold">
-                            ★ Primary
+                          <span className="rounded bg-primary/20 px-1.5 py-0.2 text-[10px] text-primary font-bold">
+                            <Star className="h-4 w-4 shrink-0" aria-hidden="true" /> Primary
                           </span>
                         )}
                       </button>
@@ -3296,13 +3310,13 @@ function MeetingDetailView({
                 {/* Active Summary Content */}
                 {activeSummary && (
                   <div className="p-6 space-y-4">
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between border-b border-stone-800/80 pb-3">
-                      <div className="flex items-center gap-2 text-xs text-stone-400">
-                        <span className="font-mono text-stone-300">{activeSummary.provider}</span>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between border-b border-base-300/80 pb-3">
+                      <div className="flex items-center gap-2 text-xs text-base-content/70">
+                        <span className="font-mono text-base-content">{activeSummary.provider}</span>
                         <span>•</span>
                         <span>{formatDate(activeSummary.createdAt)}</span>
                         {activeSummary.isPrimary && (
-                          <span className="rounded-full bg-lime-400/10 px-2 py-0.5 text-[11px] font-medium text-lime-300 border border-lime-400/20">
+                          <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary border border-primary/20">
                             Primary Note
                           </span>
                         )}
@@ -3310,28 +3324,24 @@ function MeetingDetailView({
 
                       <div className="flex flex-wrap items-center gap-2">
                         {/* Rendered vs Raw view toggle */}
-                        <div className="inline-flex rounded-lg border border-stone-700 bg-stone-800 p-0.5 text-xs">
+                        <div className="tabs tabs-box tabs-xs" role="tablist" aria-label="Summary view">
                           <button
                             type="button"
+                            role="tab"
+                            aria-selected={summaryViewMode === "rendered"}
                             onClick={() => setSummaryViewMode("rendered")}
-                            className={`rounded px-2.5 py-1 font-medium transition ${
-                              summaryViewMode === "rendered"
-                                ? "bg-lime-400/20 text-lime-300 font-semibold shadow-sm"
-                                : "text-stone-400 hover:text-stone-200"
-                            }`}
+                            className={`tab ${summaryViewMode === "rendered" ? "tab-active" : ""}`}
                           >
-                            👁️ Preview
+                            <Eye className="h-4 w-4 shrink-0" aria-hidden="true" /> Preview
                           </button>
                           <button
                             type="button"
+                            role="tab"
+                            aria-selected={summaryViewMode === "raw"}
                             onClick={() => setSummaryViewMode("raw")}
-                            className={`rounded px-2.5 py-1 font-medium transition ${
-                              summaryViewMode === "raw"
-                                ? "bg-stone-700 text-stone-200 font-semibold shadow-sm"
-                                : "text-stone-400 hover:text-stone-200"
-                            }`}
+                            className={`tab ${summaryViewMode === "raw" ? "tab-active" : ""}`}
                           >
-                            📝 Raw
+                            <FileText className="h-4 w-4 shrink-0" aria-hidden="true" /> Raw
                           </button>
                         </div>
 
@@ -3339,22 +3349,22 @@ function MeetingDetailView({
                           <button
                             type="button"
                             onClick={() => void handleSetPrimarySummary(activeSummary.id)}
-                            className="rounded border border-stone-700 bg-stone-800 px-2.5 py-1 text-xs text-stone-300 hover:text-lime-300 transition"
+                            className="btn btn-primary btn-soft btn-xs min-h-11"
                           >
-                            ★ Set as Primary
+                            <Star className="h-4 w-4 shrink-0" aria-hidden="true" /> Set as Primary
                           </button>
                         )}
                         <button
                           type="button"
                           onClick={() => handleCopySummary(activeSummary.content)}
-                          className="rounded border border-stone-700 bg-stone-800 px-2.5 py-1 text-xs text-stone-300 hover:text-white transition"
+                          className="btn btn-xs min-h-11"
                         >
-                          {copied ? "✓ Copied!" : "📋 Copy Markdown"}
+                          {copied ? <><Check className="h-4 w-4 shrink-0" aria-hidden="true" /> Copied!</> : <><ClipboardList className="h-4 w-4 shrink-0" aria-hidden="true" /> Copy Markdown</>}
                         </button>
                         <button
                           type="button"
                           onClick={() => void handleDeleteSummary(activeSummary.id)}
-                          className="rounded border border-stone-800 px-2.5 py-1 text-xs text-stone-500 hover:border-red-800 hover:text-red-400 transition"
+                          className="btn btn-error btn-soft btn-xs min-h-11"
                         >
                           Delete
                         </button>
@@ -3364,7 +3374,7 @@ function MeetingDetailView({
                     {summaryViewMode === "rendered" ? (
                       <MarkdownRenderer content={activeSummary.content} />
                     ) : (
-                      <pre className="whitespace-pre-wrap font-mono text-xs text-stone-300 rounded-xl border border-stone-800 bg-stone-950/80 p-4 overflow-x-auto leading-relaxed">
+                      <pre className="whitespace-pre-wrap font-mono text-xs text-base-content rounded-xl border border-base-300 bg-base-100/80 p-4 overflow-x-auto leading-relaxed">
                         {activeSummary.content}
                       </pre>
                     )}
@@ -3372,14 +3382,14 @@ function MeetingDetailView({
                 )}
               </div>
             ) : !summaryGenerating ? (
-              <div className="rounded-xl border border-dashed border-stone-800 bg-stone-900/40 p-8 text-center space-y-3">
-                <p className="text-sm text-stone-400">
+              <div className="rounded-xl border border-dashed border-base-300 bg-base-200/40 p-8 text-center space-y-3">
+                <p className="text-sm text-base-content/70">
                   No summary generated yet. Create AI meeting notes using a custom or built-in template.
                 </p>
                 <button
                   type="button"
                   onClick={() => setShowSummaryModal(true)}
-                  className="inline-flex items-center gap-2 rounded-lg bg-lime-400 px-4 py-2 text-xs font-semibold text-stone-950 hover:bg-lime-300 transition"
+                  className="btn btn-primary btn-sm inline-flex items-center gap-2 min-h-11"
                 >
                   <span>+</span>
                   <span>Generate Summary</span>
@@ -3396,26 +3406,26 @@ function MeetingDetailView({
                 <button
                   type="button"
                   onClick={() => setShowRapidEnroll(true)}
-                  className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-lime-400/40 bg-lime-400/10 px-3 py-2 text-sm font-semibold text-lime-300 transition hover:bg-lime-400/20"
+                  className="btn btn-primary btn-soft inline-flex min-h-[44px] items-center gap-1.5 border"
                   title="Enroll voiceprints for unmatched or unverified speakers in this meeting"
                 >
-                  <span>⚡</span>
+                  <span><Zap className="h-4 w-4 shrink-0" aria-hidden="true" /></span>
                   <span>Rapid enroll</span>
                 </button>
               )}
               {confirmationNotice && (
-                <div className="rounded-lg border border-lime-500/40 bg-lime-500/10 px-3 py-1 text-xs font-medium text-lime-300 animate-fade-in">
+                <div className="rounded-lg border border-primary/40 bg-primary/10 px-3 py-1 text-xs font-medium text-primary ">
                   {confirmationNotice}
                 </div>
               )}
             </div>
 
             {parsedTranscriptSegments.length > 0 ? (
-              <div className="space-y-3 sm:space-y-4 rounded-xl border border-stone-800 bg-stone-900/60 p-3 sm:p-6 w-full max-w-full min-w-0">
+              <div className="space-y-3 sm:space-y-4 rounded-xl border border-base-300 bg-base-200/60 p-3 sm:p-6 w-full max-w-full min-w-0">
                 {parsedTranscriptSegments.map((seg, idx) => (
                   <div
                     key={idx}
-                    className="group relative rounded-xl border border-stone-800/70 bg-stone-900/40 p-3 sm:p-4 transition hover:border-stone-700 hover:bg-stone-900/80 space-y-2 w-full max-w-full min-w-0"
+                    className="group relative rounded-xl border border-base-300/70 bg-base-200/40 p-3 sm:p-4 transition hover:border-base-300 hover:bg-base-200/80 space-y-2 w-full max-w-full min-w-0"
                   >
                     {idx > 0 && splitAllowedAt(seg.startMs) && (
                       <div className="absolute -top-3 left-0 right-0 z-10 flex justify-center opacity-0 transition group-hover:opacity-100 hover:opacity-100 focus-within:opacity-100">
@@ -3426,14 +3436,14 @@ function MeetingDetailView({
                             setShowSplitConfirm(true);
                           }}
                           title={`Split meeting before this turn (${formatTimeOffset(seg.startMs)})`}
-                          className="rounded-full border border-stone-700 bg-stone-950 px-2.5 py-0.5 text-[11px] font-medium text-stone-500 shadow-lg transition hover:border-lime-400/50 hover:text-lime-300"
+                          className="rounded-full border border-base-300 bg-base-100 px-2.5 py-0.5 text-[11px] font-medium text-base-content/50 shadow-lg transition hover:border-primary/50 hover:text-primary"
                         >
-                          ✂ Split meeting here · {formatTimeOffset(seg.startMs)}
+                          <Scissors className="h-4 w-4 shrink-0" aria-hidden="true" /> Split meeting here · {formatTimeOffset(seg.startMs)}
                         </button>
                       </div>
                     )}
                     {/* Header: Play/Timestamp + Speaker Badge + Action Buttons */}
-                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-800/50 pb-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-base-300/50 pb-2">
                       <div className="flex flex-wrap items-center gap-2 min-w-0">
                         {/* Play / Timestamp button */}
                         <button
@@ -3442,25 +3452,25 @@ function MeetingDetailView({
                           title={playingSegmentIndex === idx ? "Pause playback" : "Play only this turn"}
                           className={`inline-flex min-h-[40px] items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-mono transition cursor-pointer shrink-0 ${
                             playingSegmentIndex === idx
-                              ? "bg-lime-400/20 text-lime-300 font-bold border border-lime-400/40 shadow-sm"
-                              : "bg-stone-800/90 text-stone-400 hover:text-lime-300 hover:bg-stone-800 border border-stone-700/70"
+                              ? "bg-primary/20 text-primary font-bold border border-primary/40 shadow-sm"
+                              : "bg-base-300/90 text-base-content/70 hover:text-primary hover:bg-base-300 border border-base-300/70"
                           }`}
                         >
-                          <span className="text-[10px]">{playingSegmentIndex === idx ? "⏸" : "▶"}</span>
+                          <span className="text-[10px] inline-flex">{playingSegmentIndex === idx ? <Pause className="h-3 w-3 shrink-0" aria-hidden="true" /> : <Play className="h-3 w-3 shrink-0" aria-hidden="true" />}</span>
                           <span>{formatTimeOffset(seg.startMs)}</span>
                         </button>
 
                         {/* Speaker Badge */}
                         {seg.verified ? (
                           <span
-                            className="inline-flex items-center gap-1 rounded-md bg-lime-500/20 px-2 py-0.5 text-xs font-semibold text-lime-300 border border-lime-500/40 truncate max-w-[180px] sm:max-w-none"
+                            className="inline-flex items-center gap-1 rounded-md bg-primary/20 px-2 py-0.5 text-xs font-semibold text-primary border border-primary/40 truncate max-w-[180px] sm:max-w-none"
                             title="Speaker verified & voiceprint trained"
                           >
-                            <span>✓</span>
+                            <span><Check className="h-4 w-4 shrink-0" aria-hidden="true" /></span>
                             <span className="truncate">{seg.speaker}</span>
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 rounded-md bg-stone-800 px-2 py-0.5 text-xs font-semibold text-stone-300 border border-stone-700 truncate max-w-[180px] sm:max-w-none">
+                          <span className="inline-flex items-center gap-1 rounded-md bg-base-300 px-2 py-0.5 text-xs font-semibold text-base-content border border-base-300 truncate max-w-[180px] sm:max-w-none">
                             <span className="truncate">{seg.speaker}</span>
                           </span>
                         )}
@@ -3480,16 +3490,16 @@ function MeetingDetailView({
                     </div>
 
                     {/* Turn Content */}
-                    <p className="text-sm leading-relaxed text-stone-200 pl-0.5 break-words">{seg.text}</p>
+                    <p className="text-sm leading-relaxed text-base-content pl-0.5 break-words">{seg.text}</p>
                   </div>
                 ))}
               </div>
             ) : detail.transcriptContent ? (
-              <pre className="whitespace-pre-wrap rounded-xl border border-stone-800 bg-stone-900/60 p-4 sm:p-6 text-sm font-sans text-stone-200 break-words overflow-x-auto">
+              <pre className="whitespace-pre-wrap rounded-xl border border-base-300 bg-base-200/60 p-4 sm:p-6 text-sm font-sans text-base-content break-words overflow-x-auto">
                 {detail.transcriptContent}
               </pre>
             ) : (
-              <div className="rounded-xl border border-dashed border-stone-800 bg-stone-900/40 p-8 text-center text-stone-400">
+              <div className="rounded-xl border border-dashed border-base-300 bg-base-200/40 p-8 text-center text-base-content/70">
                 No transcript generated yet. Click "Transcribe" above to generate a transcript.
               </div>
             )}
@@ -3507,13 +3517,8 @@ function MeetingDetailView({
             />
           )}
 
-          {showChatPanel && (
-            <MeetingChatPanel
-              meetingId={meetingId}
-              meetingTitle={detail.meeting.title}
-              onClose={() => setShowChatPanel(false)}
-            />
-          )}
+          {/* Chat renders in the App-level drawer. Report the title up for its header. */}
+          <ChatTitleReporter title={detail.meeting.title} onChatTitle={onChatTitle} />
 
           {/* Split Segment Modal */}
           {splittingSegment && (
@@ -3534,21 +3539,21 @@ function MeetingDetailView({
           {showSplitConfirm && splitMs !== null && splitTotalMs !== null && (
             <Modal onClose={() => setShowSplitConfirm(false)} title="Split meeting in two" ariaLabel="Split meeting confirmation" maxWidth="max-w-md">
               <div className="space-y-4">
-                <p className="text-sm text-stone-300">
-                  Split at <span className="font-mono font-semibold text-stone-100">{formatTimeOffset(splitMs)}</span>? The
+                <p className="text-sm text-base-content">
+                  Split at <span className="font-mono font-semibold text-base-content">{formatTimeOffset(splitMs)}</span>? The
                   transcript is divided on the same boundary — no re-transcription needed.
                 </p>
                 <div className="grid grid-cols-2 gap-2 text-xs">
-                  <div className="rounded-lg border border-stone-700 bg-stone-900 p-3">
-                    <p className="font-semibold text-stone-200">Part 1 (this meeting)</p>
-                    <p className="mt-1 font-mono text-stone-400">00:00 → {formatTimeOffset(splitMs)}</p>
+                  <div className="rounded-lg border border-base-300 bg-base-200 p-3">
+                    <p className="font-semibold text-base-content">Part 1 (this meeting)</p>
+                    <p className="mt-1 font-mono text-base-content/70">00:00 → {formatTimeOffset(splitMs)}</p>
                   </div>
-                  <div className="rounded-lg border border-stone-700 bg-stone-900 p-3">
-                    <p className="font-semibold text-stone-200">Part 2 (new meeting)</p>
-                    <p className="mt-1 font-mono text-stone-400">{formatTimeOffset(splitMs)} → {formatTimeOffset(splitTotalMs)}</p>
+                  <div className="rounded-lg border border-base-300 bg-base-200 p-3">
+                    <p className="font-semibold text-base-content">Part 2 (new meeting)</p>
+                    <p className="mt-1 font-mono text-base-content/70">{formatTimeOffset(splitMs)} → {formatTimeOffset(splitTotalMs)}</p>
                   </div>
                 </div>
-                <p className="text-xs text-amber-300/90">
+                <p className="text-xs text-warning/90">
                   Summaries on both parts are deleted (they described the whole recording). Delete the unwanted half
                   afterwards if you only want one.
                 </p>
@@ -3557,7 +3562,7 @@ function MeetingDetailView({
                     type="button"
                     onClick={() => setShowSplitConfirm(false)}
                     disabled={splittingMeeting}
-                    className="rounded-lg border border-stone-700 px-3.5 py-2 text-sm text-stone-300 hover:border-stone-500 disabled:opacity-50"
+                    className="rounded-lg border border-base-300 px-3.5 py-2 text-sm text-base-content hover:border-base-300 disabled:opacity-50"
                   >
                     Cancel
                   </button>
@@ -3565,7 +3570,7 @@ function MeetingDetailView({
                     type="button"
                     onClick={() => void confirmSplitMeeting()}
                     disabled={splittingMeeting || !splitValid}
-                    className="rounded-lg bg-lime-400 px-3.5 py-2 text-sm font-semibold text-stone-950 hover:bg-lime-300 disabled:opacity-50"
+                    className="btn btn-primary px-3.5 min-h-11"
                   >
                     {splittingMeeting ? "Splitting…" : "Split meeting"}
                   </button>
@@ -3755,17 +3760,17 @@ function GenerateSummaryModal({
   return (
     <Modal onClose={onClose} title={"Generate AI Summary"} ariaLabel="Generate AI summary" maxWidth="max-w-lg">
       {error && (
-        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300">
+        <div className="alert alert-soft alert-error p-3 text-xs text-error">
           {error}
         </div>
       )}
 
       {loading ? (
-        <div className="p-8 text-center text-sm text-stone-400">Loading templates & models…</div>
+        <div className="p-8 text-center text-sm text-base-content/70">Loading templates & models…</div>
       ) : (
         <form onSubmit={handleGenerate} className="space-y-4">
           <div className="space-y-1">
-            <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
+            <label className="text-xs font-medium uppercase tracking-wider text-base-content/70">
               Summary Template
             </label>
             <Combobox
@@ -3781,7 +3786,7 @@ function GenerateSummaryModal({
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-1">
-              <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
+              <label className="text-xs font-medium uppercase tracking-wider text-base-content/70">
                 AI Provider
               </label>
               <Combobox
@@ -3798,7 +3803,7 @@ function GenerateSummaryModal({
             </div>
 
             <div className="space-y-1">
-              <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
+              <label className="text-xs font-medium uppercase tracking-wider text-base-content/70">
                 Model
               </label>
               <Combobox
@@ -3815,7 +3820,7 @@ function GenerateSummaryModal({
 
           {selectedModelObj && selectedModelObj.reasoning && (
             <div className="space-y-1">
-              <label className="text-xs font-medium uppercase tracking-wider text-stone-400 flex items-center gap-1.5">
+              <label className="text-xs font-medium uppercase tracking-wider text-base-content/70 flex items-center gap-1.5">
                 <ThinkingLabel />
               </label>
               <Combobox
@@ -3834,26 +3839,26 @@ function GenerateSummaryModal({
               id="setPrimarySummary"
               checked={setPrimary}
               onChange={(e) => setSetPrimary(e.target.checked)}
-              className="rounded border-stone-700 bg-stone-950 text-lime-400 focus:ring-lime-400"
+              className="input input-md w-full rounded text-primary focus:ring-primary"
             />
-            <label htmlFor="setPrimarySummary" className="text-xs text-stone-300 cursor-pointer">
+            <label htmlFor="setPrimarySummary" className="text-xs text-base-content cursor-pointer">
               Set as primary summary for this meeting
             </label>
           </div>
 
-          <div className="flex justify-end gap-3 border-t border-stone-800 pt-4">
+          <div className="flex justify-end gap-3 border-t border-base-300 pt-4">
             <button
               type="button"
               onClick={onClose}
               disabled={starting}
-              className="rounded-lg border border-stone-700 px-4 py-2 text-xs font-medium text-stone-300 hover:bg-stone-800 transition"
+              className="btn btn-sm min-h-11"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={starting}
-              className="inline-flex items-center gap-2 rounded-lg bg-lime-400 px-4 py-2 text-xs font-semibold text-stone-950 transition hover:bg-lime-300 disabled:opacity-50"
+              className="btn btn-primary btn-sm inline-flex items-center gap-2 min-h-11"
             >
               {starting ? "Starting…" : "Generate Summary"}
             </button>
@@ -3952,7 +3957,7 @@ function RapidEnrollModal({
       toSpeakerName = target.customName.trim();
     }
     if (!toSpeakerName && !toSpeakerId) {
-      alert("Pick an existing person or enter a name first");
+      notify("warning", "Pick an existing person or enter a name first");
       return;
     }
     // Send samples in ranked order so the best clips enroll first.
@@ -4014,23 +4019,23 @@ function RapidEnrollModal({
   };
 
   return (
-    <Modal onClose={onClose} title={<>⚡ Rapid enroll</>} ariaLabel="Rapid enroll speakers" maxWidth="max-w-3xl">
-      <p className="text-sm text-stone-400">
+    <Modal onClose={onClose} title={<><Zap className="h-4 w-4 shrink-0" aria-hidden="true" /> Rapid enroll</>} ariaLabel="Rapid enroll speakers" maxWidth="max-w-3xl">
+      <p className="text-sm text-base-content/70">
         Speakers in this meeting that are unmatched or auto-matched but unverified, with their best voiceprint samples.
         Listen, check the good ones, then say who it is — every turn for that voice gets renamed and the checked samples
         train their voiceprint.
       </p>
 
-      {error && <div className="rounded-xl border border-red-900 bg-red-950/40 p-4 text-sm text-red-200">{error}</div>}
-      {groups === null && !error && <p className="text-sm text-stone-400">Finding candidate speakers…</p>}
+      {error && <div className="rounded-xl border border-error bg-error/10 p-4 text-sm text-error">{error}</div>}
+      {groups === null && !error && <p className="text-sm text-base-content/70">Finding candidate speakers…</p>}
       {groups !== null && groups.length === 0 && completions.length === 0 && Object.keys(pendingLabels).length === 0 && (
-        <p className="rounded-xl border border-stone-800 bg-stone-950/50 p-4 text-sm text-stone-300">
+        <p className="rounded-xl border border-base-300 bg-base-100/50 p-4 text-sm text-base-content">
           🎉 Nothing to enroll — every speaker in this meeting is matched and verified.
         </p>
       )}
 
       {Object.entries(pendingLabels).map(([label, targetName]) => (
-        <div key={`pending-${label}`} className="rounded-xl border border-amber-400/40 bg-amber-400/10 p-4 text-sm text-amber-200">
+        <div key={`pending-${label}`} className="rounded-xl border border-warning/40 bg-warning/10 p-4 text-sm text-warning">
           <p className="font-semibold">
             ⏳ “{label}” is {targetName} — renaming now, enrolling voiceprint in the background…
           </p>
@@ -4038,20 +4043,20 @@ function RapidEnrollModal({
       ))}
 
       {Object.entries(failedLabels).map(([label, message]) => (
-        <div key={`failed-${label}`} className="rounded-xl border border-red-900 bg-red-950/40 p-4 text-sm text-red-200">
+        <div key={`failed-${label}`} className="rounded-xl border border-error bg-error/10 p-4 text-sm text-error">
           <p className="font-semibold">Failed to assign “{label}”: {message}</p>
           <p className="mt-1 text-xs">The voice has been restored to the list so you can retry.</p>
         </div>
       ))}
 
       {completions.map((c) => (
-        <div key={`${c.label}-${c.targetName}`} className="rounded-xl border border-lime-500/40 bg-lime-500/10 p-4 text-sm text-lime-200">
+        <div key={`${c.label}-${c.targetName}`} className="rounded-xl border border-primary/40 bg-primary/10 p-4 text-sm text-primary">
           <p className="font-semibold">
-            ✓ “{c.label}” is {c.targetName} — renamed {c.updatedSegmentsCount} turn{c.updatedSegmentsCount === 1 ? "" : "s"},
+            <Check className="h-4 w-4 shrink-0" aria-hidden="true" /> “{c.label}” is {c.targetName} — renamed {c.updatedSegmentsCount} turn{c.updatedSegmentsCount === 1 ? "" : "s"},
             enrolled {c.enrolledSamplesCount}/{c.sampleCount} sample{c.sampleCount === 1 ? "" : "s"}
           </p>
           {c.notes.map((note, i) => (
-            <p key={i} className="mt-1 text-xs text-lime-300/80">{note}</p>
+            <p key={i} className="mt-1 text-xs text-primary/80">{note}</p>
           ))}
         </div>
       ))}
@@ -4063,32 +4068,32 @@ function RapidEnrollModal({
             ? knownSpeakers.find((s) => s.id === target.speakerId)?.name
             : target.customName.trim();
         return (
-          <section key={group.label} className="space-y-3 rounded-xl border border-stone-800 bg-stone-950/50 p-4">
+          <section key={group.label} className="space-y-3 rounded-xl border border-base-300 bg-base-100/50 p-4">
             <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-base font-semibold text-stone-100">“{group.label}”</h3>
+              <h3 className="text-base font-semibold text-base-content">“{group.label}”</h3>
               <span
                 className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${
                   group.status === "unmatched"
-                    ? "border-amber-400/40 bg-amber-400/10 text-amber-300"
-                    : "border-cyan-400/40 bg-cyan-400/10 text-cyan-300"
+                    ? "border-warning/40 bg-warning/10 text-warning"
+                    : "border-accent/40 bg-accent/10 text-accent"
                 }`}
               >
                 {group.status === "unmatched" ? "Unmatched" : "Unverified match"}
               </span>
-              <span className="text-xs text-stone-500">
+              <span className="text-xs text-base-content/50">
                 {group.segmentCount} turn{group.segmentCount === 1 ? "" : "s"} • {formatDuration(group.totalDurationMs ?? 0)} of speech
               </span>
             </div>
-            <p className="text-xs text-stone-500">{group.reason}</p>
+            <p className="text-xs text-base-content/50">{group.reason}</p>
 
             <div className="space-y-2">
               {(group.samples ?? []).map((sample) => (
-                <div key={sample.segmentIndex} className="flex items-start gap-2.5 rounded-lg border border-stone-800 bg-stone-900/70 p-2.5">
+                <div key={sample.segmentIndex} className="flex items-start gap-2.5 rounded-lg border border-base-300 bg-base-200/70 p-2.5">
                   <input
                     type="checkbox"
                     checked={(selectedSamples[group.label] ?? []).includes(sample.segmentIndex)}
                     onChange={() => toggleSample(group.label, sample.segmentIndex)}
-                    className="mt-1.5 h-4 w-4 shrink-0 rounded border-stone-700 bg-stone-900 text-lime-400 focus:ring-lime-400"
+                    className="checkbox mt-1.5 shrink-0"
                     aria-label={`Enroll sample at ${formatTimeOffset(sample.startMs)}`}
                   />
                   <button
@@ -4097,18 +4102,18 @@ function RapidEnrollModal({
                     title={playingSegmentIndex === sample.segmentIndex ? "Pause playback" : "Play this sample"}
                     className={`inline-flex min-h-[36px] shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-mono transition ${
                       playingSegmentIndex === sample.segmentIndex
-                        ? "border border-lime-400/40 bg-lime-400/20 font-bold text-lime-300"
-                        : "border border-stone-700/70 bg-stone-800/90 text-stone-400 hover:text-lime-300"
+                        ? "border border-primary/40 bg-primary/20 font-bold text-primary"
+                        : "border border-base-300/70 bg-base-300/90 text-base-content/70 hover:text-primary"
                     }`}
                   >
-                    <span className="text-[10px]">{playingSegmentIndex === sample.segmentIndex ? "⏸" : "▶"}</span>
+                    <span className="text-[10px] inline-flex">{playingSegmentIndex === sample.segmentIndex ? <Pause className="h-3 w-3 shrink-0" aria-hidden="true" /> : <Play className="h-3 w-3 shrink-0" aria-hidden="true" />}</span>
                     <span>{formatTimeOffset(sample.startMs)}</span>
                   </button>
                   <div className="min-w-0 flex-1">
-                    <p className="text-xs leading-relaxed text-stone-300 line-clamp-2">{sample.text}</p>
-                    <p className="mt-0.5 text-[10px] text-stone-500">
+                    <p className="text-xs leading-relaxed text-base-content line-clamp-2">{sample.text}</p>
+                    <p className="mt-0.5 text-[10px] text-base-content/50">
                       {(sample.durationMs / 1000).toFixed(1)}s
-                      {!sample.enrollEligible && <span className="text-amber-400"> • under 3s — too short to enroll (rename only)</span>}
+                      {!sample.enrollEligible && <span className="text-warning"> • under 3s — too short to enroll (rename only)</span>}
                     </p>
                   </div>
                 </div>
@@ -4133,14 +4138,14 @@ function RapidEnrollModal({
                   onChange={(e) =>
                     setTargets((prev) => ({ ...prev, [group.label]: { ...target, customName: e.target.value } }))
                   }
-                  className="w-full rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-base text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none sm:text-sm"
+                  className="input input-md w-full"
                   aria-label="New person name"
                 />
               )}
               <button
                 type="button"
                 onClick={() => handleAssign(group)}
-                className="inline-flex min-h-[44px] shrink-0 items-center justify-center rounded-lg bg-lime-400 px-4 py-2 text-sm font-semibold text-stone-950 shadow-md transition hover:bg-lime-300 disabled:cursor-not-allowed disabled:opacity-60"
+                className="btn btn-primary inline-flex min-h-[44px] shrink-0 items-center justify-center disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {targetName ? `This is ${targetName}` : "Assign & enroll"}
               </button>
@@ -4184,7 +4189,7 @@ function ReassignSpeakerModal({
 
     if (localOnly || selectedSpeakerId === "new" || !selectedSpeakerId) {
       if (!customName.trim()) {
-        alert(localOnly ? "Please enter a name to show in this transcript" : "Please enter a name for the new speaker");
+        notify("warning", localOnly ? "Please enter a name to show in this transcript" : "Please enter a name for the new speaker");
         return;
       }
       resolvedTargetName = customName.trim();
@@ -4235,7 +4240,7 @@ function ReassignSpeakerModal({
     <Modal onClose={onClose} title={<>Assign Speaker: "{fromLabel}"</>} ariaLabel="Assign speaker" maxWidth="max-w-md">
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
-          <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
+          <label className="block text-xs font-semibold uppercase tracking-wider text-base-content/70 mb-1.5">
             Name scope
           </label>
           <div className="grid grid-cols-2 gap-2">
@@ -4244,31 +4249,31 @@ function ReassignSpeakerModal({
               onClick={() => setSaveToPeople(true)}
               className={`rounded-lg border px-3 py-2 text-xs font-semibold transition text-left ${
                 saveToPeople
-                  ? "border-lime-400 bg-lime-400/20 text-lime-300"
-                  : "border-stone-800 bg-stone-950 text-stone-400 hover:text-stone-200"
+                  ? "border-primary bg-primary/20 text-primary"
+                  : "border-base-300 bg-base-100 text-base-content/70 hover:text-base-content"
               }`}
             >
               <div className="font-bold">Save to People</div>
-              <div className="text-[10px] text-stone-400 font-normal mt-0.5">Recognize in future meetings</div>
+              <div className="text-[10px] text-base-content/70 font-normal mt-0.5">Recognize in future meetings</div>
             </button>
             <button
               type="button"
               onClick={() => setSaveToPeople(false)}
               className={`rounded-lg border px-3 py-2 text-xs font-semibold transition text-left ${
                 !saveToPeople
-                  ? "border-lime-400 bg-lime-400/20 text-lime-300"
-                  : "border-stone-800 bg-stone-950 text-stone-400 hover:text-stone-200"
+                  ? "border-primary bg-primary/20 text-primary"
+                  : "border-base-300 bg-base-100 text-base-content/70 hover:text-base-content"
               }`}
             >
               <div className="font-bold">This transcript only</div>
-              <div className="text-[10px] text-stone-400 font-normal mt-0.5">One-off name, not saved</div>
+              <div className="text-[10px] text-base-content/70 font-normal mt-0.5">One-off name, not saved</div>
             </button>
           </div>
         </div>
 
         {segmentIndex !== undefined && (
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1.5">
+            <label className="block text-xs font-semibold uppercase tracking-wider text-base-content/70 mb-1.5">
               Apply Scope
             </label>
             <div className="grid grid-cols-2 gap-2">
@@ -4277,24 +4282,24 @@ function ReassignSpeakerModal({
                 onClick={() => setScope("single")}
                 className={`rounded-lg border px-3 py-2 text-xs font-semibold transition text-left ${
                   scope === "single"
-                    ? "border-lime-400 bg-lime-400/20 text-lime-300"
-                    : "border-stone-800 bg-stone-950 text-stone-400 hover:text-stone-200"
+                    ? "border-primary bg-primary/20 text-primary"
+                    : "border-base-300 bg-base-100 text-base-content/70 hover:text-base-content"
                 }`}
               >
                 <div className="font-bold">This turn only</div>
-                <div className="text-[10px] text-stone-400 font-normal mt-0.5">Correct single turn</div>
+                <div className="text-[10px] text-base-content/70 font-normal mt-0.5">Correct single turn</div>
               </button>
               <button
                 type="button"
                 onClick={() => setScope("all")}
                 className={`rounded-lg border px-3 py-2 text-xs font-semibold transition text-left ${
                   scope === "all"
-                    ? "border-lime-400 bg-lime-400/20 text-lime-300"
-                    : "border-stone-800 bg-stone-950 text-stone-400 hover:text-stone-200"
+                    ? "border-primary bg-primary/20 text-primary"
+                    : "border-base-300 bg-base-100 text-base-content/70 hover:text-base-content"
                 }`}
               >
                 <div className="font-bold">All "{fromLabel}" turns</div>
-                <div className="text-[10px] text-stone-400 font-normal mt-0.5">Batch rename all</div>
+                <div className="text-[10px] text-base-content/70 font-normal mt-0.5">Batch rename all</div>
               </button>
             </div>
           </div>
@@ -4302,7 +4307,7 @@ function ReassignSpeakerModal({
 
         {!saveToPeople ? (
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1">
+            <label className="block text-xs font-semibold uppercase tracking-wider text-base-content/70 mb-1">
               Display Name
             </label>
             <input
@@ -4310,16 +4315,16 @@ function ReassignSpeakerModal({
               placeholder="e.g. Fred"
               value={customName}
               onChange={(e) => setCustomName(e.target.value)}
-              className="w-full rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none"
+              className="input input-md w-full"
             />
-            <p className="mt-1.5 text-[11px] leading-snug text-stone-500">
+            <p className="mt-1.5 text-[11px] leading-snug text-base-content/50">
               Just relabels this transcript — nothing is added to People and no voiceprint is learned.
             </p>
           </div>
         ) : (
           <>
             <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1">
+              <label className="block text-xs font-semibold uppercase tracking-wider text-base-content/70 mb-1">
                 Select Person
               </label>
               <SpeakerCombobox
@@ -4334,7 +4339,7 @@ function ReassignSpeakerModal({
 
             {(selectedSpeakerId === "new" || !selectedSpeakerId) && (
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1">
+                <label className="block text-xs font-semibold uppercase tracking-wider text-base-content/70 mb-1">
                   Person Name
                 </label>
                 <input
@@ -4342,21 +4347,21 @@ function ReassignSpeakerModal({
                   placeholder="e.g. Matt Cowger"
                   value={customName}
                   onChange={(e) => setCustomName(e.target.value)}
-                  className="w-full rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none"
+                  className="input input-md w-full"
                 />
               </div>
             )}
 
-            <div className="flex items-center gap-3 rounded-lg border border-stone-800 bg-stone-950/50 p-3">
+            <div className="flex items-center gap-3 rounded-lg border border-base-300 bg-base-100/50 p-3">
               <input
                 type="checkbox"
                 id="voiceprint-toggle"
                 checked={adoptVoiceprint}
                 onChange={(e) => setAdoptVoiceprint(e.target.checked)}
-                className="h-4 w-4 rounded border-stone-700 bg-stone-900 text-lime-400 focus:ring-lime-400"
+                className="checkbox"
               />
-              <label htmlFor="voiceprint-toggle" className="text-xs text-stone-300 leading-snug cursor-pointer">
-                <span className="font-semibold text-stone-100">Learn voiceprint from this audio</span>
+              <label htmlFor="voiceprint-toggle" className="text-xs text-base-content leading-snug cursor-pointer">
+                <span className="font-semibold text-base-content">Learn voiceprint from this audio</span>
                 <br />
                 Olive will automatically recognize and attribute this person in future meetings.
               </label>
@@ -4368,13 +4373,13 @@ function ReassignSpeakerModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg px-4 py-2 text-sm font-medium text-stone-400 hover:text-stone-200"
+            className="rounded-lg px-4 py-2 text-sm font-medium text-base-content/70 hover:text-base-content"
           >
             Cancel
           </button>
           <button
             type="submit"
-            className="rounded-lg bg-lime-400 px-4 py-2 text-sm font-semibold text-stone-950 hover:bg-lime-300 transition shadow-md"
+            className="btn btn-primary min-h-11"
           >
             Apply & Save
           </button>
@@ -4435,7 +4440,7 @@ function SplitSegmentModal({
 
       if (selectedSpeakerId === "new") {
         if (!customName.trim()) {
-          alert("Please enter a name for the new speaker");
+          notify("warning", "Please enter a name for the new speaker");
           setSubmitting(false);
           return;
         }
@@ -4461,30 +4466,30 @@ function SplitSegmentModal({
 
       onSuccess();
     } catch (err) {
-      alert(`Failed to split segment: ${err instanceof Error ? err.message : String(err)}`);
+      notify("error", `Failed to split segment: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setSubmitting(false);
     }
   };
 
   return (
-    <Modal onClose={onClose} title={<><span>✂ Split Turn:</span> <span className="text-lime-400">{segment.speaker}</span></>} ariaLabel="Split turn" maxWidth="max-w-2xl">
-      <p className="text-xs text-stone-400">Click any word to choose where to split this turn into two separate segments.</p>
+    <Modal onClose={onClose} title={<><span><Scissors className="h-4 w-4 shrink-0" aria-hidden="true" /> Split Turn:</span> <span className="text-primary">{segment.speaker}</span></>} ariaLabel="Split turn" maxWidth="max-w-2xl">
+      <p className="text-xs text-base-content/70">Click any word to choose where to split this turn into two separate segments.</p>
       <form onSubmit={handleSubmit} className="space-y-4">
         {/* Interactive Word Picker */}
         <div>
-          <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-2">
+          <label className="block text-xs font-semibold uppercase tracking-wider text-base-content/70 mb-2">
             Select Split Point (Click any word)
           </label>
-          <div className="rounded-xl border border-stone-800 bg-stone-950 p-4 leading-loose flex flex-wrap gap-1.5 items-center max-h-56 overflow-y-auto">
+          <div className="rounded-xl border border-base-300 bg-base-100 p-4 leading-loose flex flex-wrap gap-1.5 items-center max-h-56 overflow-y-auto">
             {words.map((word, idx) => {
               const isPart1 = idx < splitWordIndex;
               const isSplitTarget = idx === splitWordIndex;
               return (
                 <Fragment key={idx}>
                   {isSplitTarget && (
-                    <span className="inline-flex items-center gap-1 rounded bg-amber-400 px-1.5 py-0.5 text-[11px] font-bold text-stone-950 shadow-md animate-pulse">
-                      ✂ Split Point
+                    <span className="badge badge-sm badge-warning gap-1 font-bold shadow-md animate-pulse">
+                      <Scissors className="h-4 w-4 shrink-0" aria-hidden="true" /> Split Point
                     </span>
                   )}
                   <button
@@ -4492,8 +4497,8 @@ function SplitSegmentModal({
                     onClick={() => setSplitWordIndex(idx === 0 ? 1 : idx)}
                     className={`rounded px-1.5 py-0.5 text-xs font-medium transition cursor-pointer ${
                       isPart1
-                        ? "bg-lime-500/20 text-lime-300 border border-lime-500/40 hover:bg-lime-500/30"
-                        : "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 hover:bg-cyan-500/30"
+                        ? "bg-primary/20 text-primary border border-primary/40 hover:bg-primary/30"
+                        : "bg-accent/20 text-accent border border-accent/40 hover:bg-accent/30"
                     }`}
                     title={`Click to split before "${word}"`}
                   >
@@ -4508,40 +4513,40 @@ function SplitSegmentModal({
         {/* Split Comparison Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {/* Part 1 */}
-          <div className="rounded-xl border border-lime-500/30 bg-lime-950/10 p-3.5 space-y-2">
+          <div className="rounded-xl border border-primary/30 bg-primary/10 p-3.5 space-y-2">
             <div className="flex items-center justify-between text-xs">
-              <span className="font-semibold text-lime-400 uppercase tracking-wide">
+              <span className="font-semibold text-primary uppercase tracking-wide">
                 Part 1 ({segment.speaker})
               </span>
-              <span className="font-mono text-stone-400 text-[11px]">
+              <span className="font-mono text-base-content/70 text-[11px]">
                 {formatTimeOffset(segment.startMs)} → {formatTimeOffset(splitTimestamp)}
               </span>
             </div>
-            <p className="text-xs text-stone-300 line-clamp-4 italic">
+            <p className="text-xs text-base-content line-clamp-4 italic">
               "{part1Text || "(empty)"}"
             </p>
           </div>
 
           {/* Part 2 */}
-          <div className="rounded-xl border border-cyan-500/30 bg-cyan-950/10 p-3.5 space-y-2">
+          <div className="rounded-xl border border-accent/30 bg-accent/10 p-3.5 space-y-2">
             <div className="flex items-center justify-between text-xs">
-              <span className="font-semibold text-cyan-400 uppercase tracking-wide">
+              <span className="font-semibold text-accent uppercase tracking-wide">
                 Part 2 ({part2SpeakerName})
               </span>
-              <span className="font-mono text-stone-400 text-[11px]">
+              <span className="font-mono text-base-content/70 text-[11px]">
                 {formatTimeOffset(splitTimestamp)} → {formatTimeOffset(segment.endMs)}
               </span>
             </div>
-            <p className="text-xs text-stone-300 line-clamp-4 italic">
+            <p className="text-xs text-base-content line-clamp-4 italic">
               "{part2Text || "(empty)"}"
             </p>
           </div>
         </div>
 
         {/* Reassign Part 2 Speaker */}
-        <div className="space-y-3 pt-1 border-t border-stone-800">
+        <div className="space-y-3 pt-1 border-t border-base-300">
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1">
+            <label className="block text-xs font-semibold uppercase tracking-wider text-base-content/70 mb-1">
               Speaker for Part 2
             </label>
             <SpeakerCombobox
@@ -4556,7 +4561,7 @@ function SplitSegmentModal({
 
           {selectedSpeakerId === "new" && (
             <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1">
+              <label className="block text-xs font-semibold uppercase tracking-wider text-base-content/70 mb-1">
                 New Person Name
               </label>
               <input
@@ -4564,7 +4569,7 @@ function SplitSegmentModal({
                 placeholder="e.g. Harrison"
                 value={customName}
                 onChange={(e) => setCustomName(e.target.value)}
-                className="w-full rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 placeholder-stone-500 focus:border-cyan-400 focus:outline-none"
+                className="input input-md w-full focus:border-accent"
               />
             </div>
           )}
@@ -4574,14 +4579,14 @@ function SplitSegmentModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg px-4 py-2 text-sm font-medium text-stone-400 hover:text-stone-200"
+            className="rounded-lg px-4 py-2 text-sm font-medium text-base-content/70 hover:text-base-content"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={submitting || !part1Text || !part2Text}
-            className="rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-stone-950 hover:bg-amber-300 disabled:opacity-50 transition"
+            className="btn btn-warning min-h-11"
           >
             {submitting ? "Splitting…" : "Confirm & Split Turn"}
           </button>
@@ -4631,7 +4636,7 @@ function UploadAudioModal({
   const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!file) {
-      alert("Please select an audio file to upload");
+      notify("warning", "Please select an audio file to upload");
       return;
     }
 
@@ -4672,11 +4677,11 @@ function UploadAudioModal({
 
   return (
     <Modal onClose={onClose} title={"Upload Audio Recording"} ariaLabel="Upload audio recording" maxWidth="max-w-md">
-      {error && <div className="rounded-xl border border-red-900 bg-red-950/40 p-3 text-xs text-red-200">{error}</div>}
+      {error && <div className="rounded-xl border border-error bg-error/10 p-3 text-xs text-error">{error}</div>}
 
       <form onSubmit={handleUpload} className="space-y-4 text-sm">
         <div>
-          <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1">
+          <label className="block text-xs font-semibold uppercase tracking-wider text-base-content/70 mb-1">
             Audio File (.m4a, .mp3, .wav, .aac, .ogg, .flac)
           </label>
           <input
@@ -4684,17 +4689,17 @@ function UploadAudioModal({
             required
             accept="audio/*,.m4a,.mp3,.wav,.aac,.ogg,.flac,.webm"
             onChange={handleFileChange}
-            className="w-full rounded-lg border border-stone-800 bg-stone-950 p-2.5 text-base sm:text-sm text-stone-200 file:mr-3 file:rounded-md file:border-0 file:bg-stone-800 file:px-3 file:py-1 file:text-sm file:font-semibold file:text-lime-300 hover:file:bg-stone-700"
+            className="file-input w-full p-2.5 text-base-content hover:file:bg-base-300"
           />
           {file && (
-            <p className="mt-1 text-xs text-stone-400">
+            <p className="mt-1 text-xs text-base-content/70">
               Selected: {file.name} ({(file.size / 1024 / 1024).toFixed(2)} MB)
             </p>
           )}
         </div>
 
         <div>
-          <label className="block text-xs font-semibold uppercase tracking-wider text-stone-400 mb-1">
+          <label className="block text-xs font-semibold uppercase tracking-wider text-base-content/70 mb-1">
             Meeting / Recording Title
           </label>
           <input
@@ -4702,27 +4707,27 @@ function UploadAudioModal({
             placeholder="e.g. Planning Session with Team"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            className="w-full rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none"
+            className="input input-md w-full"
           />
         </div>
 
-        <div className="space-y-2 rounded-lg border border-stone-800 bg-stone-950/50 p-3">
+        <div className="space-y-2 rounded-lg border border-base-300 bg-base-100/50 p-3">
           <div className="flex items-center gap-2">
             <input
               type="checkbox"
               id="auto-transcribe"
               checked={autoTranscribe}
               onChange={(e) => setAutoTranscribe(e.target.checked)}
-              className="h-4 w-4 rounded border-stone-700 bg-stone-900 text-lime-400 focus:ring-lime-400"
+              className="checkbox"
             />
-            <label htmlFor="auto-transcribe" className="text-xs font-semibold text-stone-200 cursor-pointer">
+            <label htmlFor="auto-transcribe" className="text-xs font-semibold text-base-content cursor-pointer">
               Automatically transcribe after upload
             </label>
           </div>
 
           {autoTranscribe && (
             <div className="pt-2 pl-6">
-              <label className="block text-xs text-stone-400 mb-1">Transcription Engine:</label>
+              <label className="block text-xs text-base-content/70 mb-1">Transcription Engine:</label>
               <Combobox
                 value={selectedEngine}
                 onChange={setSelectedEngine}
@@ -4739,14 +4744,14 @@ function UploadAudioModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg px-4 py-2 text-sm text-stone-400 hover:text-stone-200"
+            className="rounded-lg px-4 py-2 text-sm text-base-content/70 hover:text-base-content"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={uploading || !file}
-            className="rounded-lg bg-lime-400 px-5 py-2 text-sm font-semibold text-stone-950 hover:bg-lime-300 disabled:opacity-50 transition"
+            className="btn btn-primary min-h-11"
           >
             {uploading ? "Ingesting…" : "Upload & Save"}
           </button>
@@ -4779,7 +4784,7 @@ function SpeakersListView({
         onRefresh();
       }
     } catch {
-      alert("Failed to backfill voiceprints");
+      notify("error", "Failed to backfill voiceprints");
     } finally {
       setSyncing(false);
     }
@@ -4798,7 +4803,7 @@ function SpeakersListView({
         onRefresh();
       }
     } catch {
-      alert("Failed to rename speaker");
+      notify("error", "Failed to rename speaker");
     }
   };
 
@@ -4816,19 +4821,19 @@ function SpeakersListView({
         onRefresh();
       }
     } catch {
-      alert("Failed to merge speaker");
+      notify("error", "Failed to merge speaker");
     }
   };
 
   const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Are you sure you want to delete speaker "${name}"?`)) return;
+    if (!(await confirmAction({ title: "Delete speaker", message: `Are you sure you want to delete speaker "${name}"?`, confirmLabel: "Delete", danger: true }))) return;
     try {
       const res = await fetch(`/api/speakers/${id}`, { method: "DELETE" });
       if (res.ok) {
         onRefresh();
       }
     } catch {
-      alert("Failed to delete speaker");
+      notify("error", "Failed to delete speaker");
     }
   };
 
@@ -4837,7 +4842,7 @@ function SpeakersListView({
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">People & Voiceprints</h1>
-          <p className="mt-1 text-sm text-stone-400">
+          <p className="mt-1 text-sm text-base-content/70">
             Recognized speakers and their persistent voice identifiers learned from meetings.
           </p>
         </div>
@@ -4846,7 +4851,7 @@ function SpeakersListView({
             type="button"
             disabled={syncing}
             onClick={() => void handleBackfill()}
-            className="rounded-lg border border-stone-700 bg-stone-900 px-3.5 py-1.5 text-xs font-semibold text-stone-200 hover:border-lime-400 hover:text-lime-300 transition disabled:opacity-50"
+            className="rounded-lg border border-base-300 bg-base-200 px-3.5 py-1.5 text-xs font-semibold text-base-content hover:border-primary hover:text-primary transition disabled:opacity-50"
           >
             {syncing ? "Syncing Voiceprints…" : "Sync & Cross-fill Voiceprints"}
           </button>
@@ -4854,8 +4859,8 @@ function SpeakersListView({
       </div>
 
       {speakers.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-stone-800 bg-stone-900/40 py-16 text-center">
-          <p className="text-stone-400">
+        <div className="rounded-2xl border border-dashed border-base-300 bg-base-200/40 py-16 text-center">
+          <p className="text-base-content/70">
             No people enrolled yet. Open any meeting transcript and click a speaker label (e.g. S1) to assign a person and learn their voice.
           </p>
         </div>
@@ -4865,7 +4870,7 @@ function SpeakersListView({
             return (
               <div
                 key={s.id}
-                className="rounded-xl border border-stone-800 bg-stone-900/90 p-5 space-y-4 flex flex-col justify-between"
+                className="rounded-xl border border-base-300 bg-base-200/90 p-5 space-y-4 flex flex-col justify-between"
               >
                 <div>
                   <div className="flex items-start justify-between">
@@ -4875,18 +4880,18 @@ function SpeakersListView({
                           type="text"
                           value={editingName}
                           onChange={(e) => setEditingName(e.target.value)}
-                          className="min-h-[44px] min-w-0 rounded border border-stone-700 bg-stone-950 px-2 py-1 text-base text-stone-100 sm:min-h-0 sm:text-sm"
+                          className="input input-md w-full min-w-0 rounded"
                         />
                         <button
                           type="button"
                           onClick={() => void handleRename(s.id)}
-                          className="min-h-[44px] shrink-0 rounded bg-lime-400 px-3 text-sm font-semibold text-stone-950 sm:min-h-0 sm:px-2 sm:py-1 sm:text-xs"
+                          className="btn btn-primary min-h-[44px] shrink-0 rounded sm:min-h-0 sm:px-2 sm:py-1 sm:text-xs"
                         >
                           Save
                         </button>
                       </div>
                     ) : (
-                      <h2 className="text-lg font-bold text-stone-100 flex items-center gap-2">
+                      <h2 className="text-lg font-bold text-base-content flex items-center gap-2">
                         {s.name}
                         <button
                           type="button"
@@ -4894,9 +4899,9 @@ function SpeakersListView({
                             setEditingId(s.id);
                             setEditingName(s.name);
                           }}
-                          className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center text-xs text-stone-500 hover:text-stone-300 sm:min-h-0 sm:min-w-0"
+                          className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center text-xs text-base-content/50 hover:text-base-content sm:min-h-0 sm:min-w-0"
                         >
-                          ✎
+                          <Pencil className="h-4 w-4 shrink-0" aria-hidden="true" />
                         </button>
                       </h2>
                     )}
@@ -4905,13 +4910,13 @@ function SpeakersListView({
                     </div>
                   </div>
 
-                  <div className="mt-3 space-y-1 text-xs text-stone-400">
-                    <p>Participated in: <span className="font-semibold text-stone-200">{s.meetingCount} meeting(s)</span></p>
+                  <div className="mt-3 space-y-1 text-xs text-base-content/70">
+                    <p>Participated in: <span className="font-semibold text-base-content">{s.meetingCount} meeting(s)</span></p>
                     {s.enrollmentClipPaths?.length > 0 && (
                       <p>
-                        Stored clips: <span className="font-semibold text-stone-300">{s.enrollmentClipPaths.length}/8</span>
+                        Stored clips: <span className="font-semibold text-base-content">{s.enrollmentClipPaths.length}/8</span>
                         {s.enrollmentClipPaths.length >= 8 && (
-                          <span className="text-stone-500 ml-1">(Cap reached — auto-rolling)</span>
+                          <span className="text-base-content/50 ml-1">(Cap reached — auto-rolling)</span>
                         )}
                       </p>
                     )}
@@ -4922,8 +4927,8 @@ function SpeakersListView({
                 </div>
 
                 {mergingId === s.id ? (
-                  <div className="border-t border-stone-800 pt-3 space-y-2">
-                    <label className="text-xs text-stone-400">Merge {s.name} into:</label>
+                  <div className="border-t border-base-300 pt-3 space-y-2">
+                    <label className="text-xs text-base-content/70">Merge {s.name} into:</label>
                     <Combobox
                       value={targetMergeId}
                       onChange={setTargetMergeId}
@@ -4945,32 +4950,32 @@ function SpeakersListView({
                       <button
                         type="button"
                         onClick={() => setMergingId(null)}
-                        className="min-h-[44px] px-3 text-sm text-stone-400 sm:min-h-0 sm:px-2 sm:py-1 sm:text-xs"
+                        className="min-h-[44px] px-3 text-sm text-base-content/70 sm:min-h-0 sm:px-2 sm:py-1 sm:text-xs"
                       >
                         Cancel
                       </button>
                       <button
                         type="button"
                         onClick={() => void handleMerge(s.id)}
-                        className="min-h-[44px] rounded bg-lime-400 px-3 text-sm font-semibold text-stone-950 sm:min-h-0 sm:px-2 sm:py-1 sm:text-xs"
+                        className="btn btn-primary min-h-[44px] rounded sm:min-h-0 sm:px-2 sm:py-1 sm:text-xs"
                       >
                         Confirm Merge
                       </button>
                     </div>
                   </div>
                 ) : (
-                  <div className="flex items-stretch gap-2 border-t border-stone-800/80 pt-3 text-xs text-stone-400">
+                  <div className="flex items-stretch gap-2 border-t border-base-300/80 pt-3 text-xs text-base-content/70">
                     <button
                       type="button"
                       onClick={() => setMergingId(s.id)}
-                      className="flex min-h-[44px] flex-1 items-center justify-center rounded-lg border border-stone-700 px-3 text-sm hover:border-lime-400 hover:text-lime-300 transition sm:min-h-0 sm:py-1.5 sm:text-xs"
+                      className="btn flex min-h-[44px] flex-1 items-center justify-center hover:border-primary hover:text-primary sm:min-h-0 sm:py-1.5 sm:text-xs"
                     >
                       Merge into…
                     </button>
                     <button
                       type="button"
                       onClick={() => void handleDelete(s.id, s.name)}
-                      className="flex min-h-[44px] flex-1 items-center justify-center rounded-lg border border-stone-700 px-3 text-sm hover:border-red-500/50 hover:text-red-400 transition sm:min-h-0 sm:py-1.5 sm:text-xs"
+                      className="btn flex min-h-[44px] flex-1 items-center justify-center hover:border-error/50 hover:text-error sm:min-h-0 sm:py-1.5 sm:text-xs"
                     >
                       Delete
                     </button>
@@ -5023,12 +5028,12 @@ function TemplatesListView(): ReactElement {
       }
       await fetchTemplates();
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      notify("error", err instanceof Error ? err.message : String(err));
     }
   };
 
   const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Are you sure you want to delete template "${name}"?`)) {
+    if (!(await confirmAction({ title: "Delete template", message: `Are you sure you want to delete template "${name}"?`, confirmLabel: "Delete", danger: true }))) {
       return;
     }
     try {
@@ -5038,7 +5043,7 @@ function TemplatesListView(): ReactElement {
       }
       await fetchTemplates();
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      notify("error", err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -5057,7 +5062,7 @@ function TemplatesListView(): ReactElement {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Summary Templates</h1>
-          <p className="text-sm text-stone-400">
+          <p className="text-sm text-base-content/70">
             Customizable prompt templates for generating structured meeting summaries & action items
           </p>
         </div>
@@ -5068,7 +5073,7 @@ function TemplatesListView(): ReactElement {
             setCloningTemplate(null);
             setIsCreating(true);
           }}
-          className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-lime-400 px-4 py-2 text-sm font-semibold text-stone-950 transition hover:bg-lime-300 sm:min-h-0"
+          className="btn btn-primary inline-flex min-h-[44px] items-center justify-center gap-2 sm:min-h-0"
         >
           <span>+</span>
           <span>New Template</span>
@@ -5081,20 +5086,20 @@ function TemplatesListView(): ReactElement {
           placeholder="Filter templates…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="min-h-[44px] w-full max-w-sm rounded-lg border border-stone-800 bg-stone-900/80 px-3.5 py-2 text-base text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none sm:text-sm"
+          className="input input-md w-full max-w-sm bg-base-200/80 px-3.5"
         />
       </div>
 
       {error && (
-        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">
+        <div className="alert alert-soft alert-error p-4 text-sm text-error">
           {error}
         </div>
       )}
 
       {loading ? (
-        <div className="p-12 text-center text-sm text-stone-500">Loading templates…</div>
+        <div className="p-12 text-center text-sm text-base-content/50">Loading templates…</div>
       ) : filteredTemplates.length === 0 ? (
-        <div className="rounded-xl border border-stone-800 bg-stone-900/30 p-12 text-center text-sm text-stone-500">
+        <div className="rounded-xl border border-base-300 bg-base-200/30 p-12 text-center text-sm text-base-content/50">
           No templates found.
         </div>
       ) : (
@@ -5104,25 +5109,25 @@ function TemplatesListView(): ReactElement {
               key={t.id}
               className={`flex flex-col justify-between rounded-xl border p-5 transition ${
                 t.isDefault
-                  ? "border-lime-400/40 bg-stone-900/80 ring-1 ring-lime-400/20"
-                  : "border-stone-800 bg-stone-900/50 hover:border-stone-700"
+                  ? "border-primary/40 bg-base-200/80 ring-1 ring-primary/20"
+                  : "border-base-300 bg-base-200/50 hover:border-base-300"
               }`}
             >
               <div className="space-y-3">
                 <div className="flex items-start justify-between gap-2">
-                  <h3 className="font-semibold text-stone-100">{t.name}</h3>
+                  <h3 className="font-semibold text-base-content">{t.name}</h3>
                   <div className="flex items-center gap-1.5 shrink-0">
                     {t.isDefault && (
-                      <span className="rounded-full bg-lime-400/10 px-2 py-0.5 text-[11px] font-medium text-lime-300 border border-lime-400/20">
+                      <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary border border-primary/20">
                         Default
                       </span>
                     )}
                     {t.isBuiltin ? (
-                      <span className="rounded-full bg-stone-800 px-2 py-0.5 text-[11px] font-medium text-stone-400">
+                      <span className="rounded-full bg-base-300 px-2 py-0.5 text-[11px] font-medium text-base-content/70">
                         Built-in
                       </span>
                     ) : (
-                      <span className="rounded-full bg-purple-400/10 px-2 py-0.5 text-[11px] font-medium text-purple-300 border border-purple-400/20">
+                      <span className="badge badge-sm badge-accent badge-soft font-medium">
                         Custom
                       </span>
                     )}
@@ -5130,37 +5135,37 @@ function TemplatesListView(): ReactElement {
                 </div>
 
                 {t.description && (
-                  <p className="text-xs text-stone-400 leading-relaxed">{t.description}</p>
+                  <p className="text-xs text-base-content/70 leading-relaxed">{t.description}</p>
                 )}
 
                 {t.systemPrompt && (
                   <div className="space-y-1">
-                    <span className="text-[10px] font-medium tracking-wider uppercase text-stone-500">
+                    <span className="text-[10px] font-medium tracking-wider uppercase text-base-content/50">
                       System Instructions
                     </span>
-                    <p className="text-xs text-stone-300 bg-stone-950/60 rounded p-2 border border-stone-800/80 line-clamp-2">
+                    <p className="text-xs text-base-content bg-base-100/60 rounded p-2 border border-base-300/80 line-clamp-2">
                       {t.systemPrompt}
                     </p>
                   </div>
                 )}
 
                 <div className="space-y-1">
-                  <span className="text-[10px] font-medium tracking-wider uppercase text-stone-500">
+                  <span className="text-[10px] font-medium tracking-wider uppercase text-base-content/50">
                     Prompt Template
                   </span>
-                  <pre className="max-h-48 overflow-y-auto rounded-lg border border-stone-800/80 bg-stone-950/80 p-3 font-mono text-[11px] text-stone-300 whitespace-pre-wrap leading-relaxed">
+                  <pre className="max-h-48 overflow-y-auto rounded-lg border border-base-300/80 bg-base-100/80 p-3 font-mono text-[11px] text-base-content whitespace-pre-wrap leading-relaxed">
                     {t.userPrompt}
                   </pre>
                 </div>
               </div>
 
-              <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-stone-800/80 pt-3 text-xs">
+              <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-base-300/80 pt-3 text-xs">
                 <div>
                   {!t.isDefault && (
                     <button
                       type="button"
                       onClick={() => void handleSetDefault(t.id)}
-                      className="min-h-[44px] rounded-lg border border-lime-400/30 bg-lime-400/10 px-3 text-sm font-medium text-lime-300 hover:bg-lime-400/20 transition sm:min-h-[36px] sm:text-xs"
+                      className="btn btn-primary btn-soft min-h-[44px] border border-primary/30 sm:min-h-[36px] sm:text-xs"
                     >
                       Make Default
                     </button>
@@ -5176,7 +5181,7 @@ function TemplatesListView(): ReactElement {
                         setEditingTemplate(null);
                         setIsCreating(true);
                       }}
-                      className="min-h-[44px] rounded-lg border border-stone-700 px-3 text-sm text-stone-200 hover:border-stone-500 hover:text-white transition sm:min-h-[36px] sm:text-xs"
+                      className="btn min-h-[44px] sm:min-h-[36px] sm:text-xs"
                     >
                       Duplicate & Edit
                     </button>
@@ -5189,14 +5194,14 @@ function TemplatesListView(): ReactElement {
                           setCloningTemplate(null);
                           setIsCreating(true);
                         }}
-                        className="min-h-[44px] rounded-lg border border-stone-700 px-3 text-sm text-stone-200 hover:border-stone-500 hover:text-white transition sm:min-h-[36px] sm:text-xs"
+                        className="btn min-h-[44px] sm:min-h-[36px] sm:text-xs"
                       >
                         Edit
                       </button>
                       <button
                         type="button"
                         onClick={() => void handleDelete(t.id, t.name)}
-                        className="min-h-[44px] rounded-lg border border-stone-700 px-3 text-sm text-stone-400 hover:border-red-500/50 hover:text-red-400 transition sm:min-h-[36px] sm:text-xs"
+                        className="btn min-h-[44px] hover:border-error/50 hover:text-error sm:min-h-[36px] sm:text-xs"
                       >
                         Delete
                       </button>
@@ -5326,14 +5331,14 @@ function TemplateEditorModal({
   return (
     <Modal onClose={onClose} title={isEditing ? "Edit Template" : initialClone ? `Customize "${initialClone.name}"` : "New Summary Template"} ariaLabel="Summary template editor" maxWidth="max-w-2xl">
       {error && (
-        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300">
+        <div className="alert alert-soft alert-error p-3 text-xs text-error">
           {error}
         </div>
       )}
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="space-y-1">
-          <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
+          <label className="text-xs font-medium uppercase tracking-wider text-base-content/70">
             Template Name *
           </label>
           <input
@@ -5342,12 +5347,12 @@ function TemplateEditorModal({
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="e.g. Sprint Retrospective"
-            className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none"
+            className="input input-md w-full"
           />
         </div>
 
         <div className="space-y-1">
-          <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
+          <label className="text-xs font-medium uppercase tracking-wider text-base-content/70">
             Description
           </label>
           <input
@@ -5355,12 +5360,12 @@ function TemplateEditorModal({
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder="e.g. Highlights wins, blockers, and next sprint commitments"
-            className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none"
+            className="input input-md w-full"
           />
         </div>
 
         <div className="space-y-1">
-          <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
+          <label className="text-xs font-medium uppercase tracking-wider text-base-content/70">
             System Instructions (Optional)
           </label>
           <textarea
@@ -5368,23 +5373,23 @@ function TemplateEditorModal({
             value={systemPrompt}
             onChange={(e) => setSystemPrompt(e.target.value)}
             placeholder="e.g. You are an expert agile coach summarizing a team retrospective."
-            className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none font-mono"
+            className="textarea w-full textarea-md font-mono"
           />
         </div>
 
         <div className="space-y-1.5">
           <div className="flex items-center justify-between">
-            <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
+            <label className="text-xs font-medium uppercase tracking-wider text-base-content/70">
               User Prompt Template *
             </label>
             <div className="flex items-center gap-1">
-              <span className="text-[11px] text-stone-500 mr-1">Insert tags:</span>
+              <span className="text-[11px] text-base-content/50 mr-1">Insert tags:</span>
               {["{{title}}", "{{date}}", "{{speakers}}", "{{transcript}}"].map((tag) => (
                 <button
                   key={tag}
                   type="button"
                   onClick={() => insertVariable(tag)}
-                  className="rounded bg-stone-800 px-1.5 py-0.5 text-[11px] font-mono text-lime-300 hover:bg-stone-700 transition"
+                  className="rounded bg-base-300 px-1.5 py-0.5 text-[11px] font-mono text-primary hover:bg-base-300 transition"
                 >
                   {tag}
                 </button>
@@ -5397,7 +5402,7 @@ function TemplateEditorModal({
             required
             value={userPrompt}
             onChange={(e) => setUserPrompt(e.target.value)}
-            className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 focus:border-lime-400 focus:outline-none font-mono whitespace-pre leading-relaxed"
+            className="textarea w-full textarea-md font-mono"
           />
         </div>
 
@@ -5407,26 +5412,26 @@ function TemplateEditorModal({
             id="isDefaultCheckbox"
             checked={isDefault}
             onChange={(e) => setIsDefault(e.target.checked)}
-            className="rounded border-stone-700 bg-stone-950 text-lime-400 focus:ring-lime-400"
+            className="input input-md w-full rounded text-primary focus:ring-primary"
           />
-          <label htmlFor="isDefaultCheckbox" className="text-xs text-stone-300 cursor-pointer">
+          <label htmlFor="isDefaultCheckbox" className="text-xs text-base-content cursor-pointer">
             Set as default summary template
           </label>
         </div>
 
-        <div className="flex justify-end gap-3 border-t border-stone-800 pt-4">
+        <div className="flex justify-end gap-3 border-t border-base-300 pt-4">
           <button
             type="button"
             onClick={onClose}
             disabled={saving}
-            className="rounded-lg border border-stone-700 px-4 py-2 text-xs font-medium text-stone-300 hover:bg-stone-800 transition"
+            className="btn btn-sm min-h-11"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={saving}
-            className="inline-flex items-center gap-2 rounded-lg bg-lime-400 px-4 py-2 text-xs font-semibold text-stone-950 transition hover:bg-lime-300 disabled:opacity-50"
+            className="btn btn-primary btn-sm inline-flex items-center gap-2 min-h-11"
           >
             {saving ? "Saving…" : isEditing ? "Save Changes" : "Create Template"}
           </button>
@@ -5581,7 +5586,7 @@ function LlmSettingsModal({
         }
       }
     } catch (err) {
-      alert("Failed to refresh catalog: " + (err instanceof Error ? err.message : String(err)));
+      notify("error", "Failed to refresh catalog: " + (err instanceof Error ? err.message : String(err)));
     } finally {
       setRefreshingCatalog(false);
     }
@@ -5691,20 +5696,20 @@ function LlmSettingsModal({
 
   return (
     <Modal onClose={onClose} title={"LLM Provider & Model Settings"} ariaLabel="LLM provider and model settings" maxWidth="max-w-2xl">
-      <p className="text-xs text-stone-400">Powered by pi-ai unified multi-provider model catalog</p>
+      <p className="text-xs text-base-content/70">Powered by pi-ai unified multi-provider model catalog</p>
       {error && (
-        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300">
+        <div className="alert alert-soft alert-error p-3 text-xs text-error">
           {error}
         </div>
       )}
 
       {loading ? (
-        <div className="p-8 text-center text-sm text-stone-400">Loading catalog…</div>
+        <div className="p-8 text-center text-sm text-base-content/70">Loading catalog…</div>
       ) : (
         <form onSubmit={handleSave} className="space-y-4">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-1">
-              <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
+              <label className="text-xs font-medium uppercase tracking-wider text-base-content/70">
                 AI Provider
               </label>
               <Combobox
@@ -5716,14 +5721,14 @@ function LlmSettingsModal({
                 options={llmProviderOptions(providers)}
               />
               <div className="flex items-center justify-between pt-1">
-                <span className="text-[11px] text-stone-500">
+                <span className="text-[11px] text-base-content/50">
                   Status: {currentProviderSummary?.isConfigured ? "🟢 Key Configured" : "🟡 Needs API Key"}
                 </span>
                 <button
                   type="button"
                   onClick={() => void handleRefreshCatalog()}
                   disabled={refreshingCatalog}
-                  className="text-[11px] text-lime-400 hover:underline disabled:opacity-50"
+                  className="text-[11px] text-primary hover:underline disabled:opacity-50"
                 >
                   {refreshingCatalog ? "Syncing…" : "↻ Sync Web Catalog"}
                 </button>
@@ -5731,7 +5736,7 @@ function LlmSettingsModal({
             </div>
 
             <div className="space-y-1">
-              <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
+              <label className="text-xs font-medium uppercase tracking-wider text-base-content/70">
                 Model
               </label>
               <Combobox
@@ -5748,7 +5753,7 @@ function LlmSettingsModal({
 
           {selectedModelObj && selectedModelObj.reasoning && (
             <div className="space-y-1">
-              <label className="text-xs font-medium uppercase tracking-wider text-stone-400 flex items-center gap-1.5">
+              <label className="text-xs font-medium uppercase tracking-wider text-base-content/70 flex items-center gap-1.5">
                 <ThinkingLabel />
               </label>
               <Combobox
@@ -5762,7 +5767,7 @@ function LlmSettingsModal({
           )}
 
           <div className="space-y-1">
-            <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
+            <label className="text-xs font-medium uppercase tracking-wider text-base-content/70">
               API Key Override (Optional)
             </label>
             <input
@@ -5770,12 +5775,12 @@ function LlmSettingsModal({
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
               placeholder={currentProviderSummary?.isConfigured ? "Using configured environment key (leave blank to keep)" : "Enter provider API key…"}
-              className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 placeholder-stone-600 focus:border-lime-400 focus:outline-none font-mono"
+              className="input input-md w-full placeholder-base-content/50 font-mono"
             />
           </div>
 
           <div className="space-y-1">
-            <label className="text-xs font-medium uppercase tracking-wider text-stone-400">
+            <label className="text-xs font-medium uppercase tracking-wider text-base-content/70">
               Base URL Override (Optional)
             </label>
             <input
@@ -5783,27 +5788,27 @@ function LlmSettingsModal({
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
               placeholder="e.g. http://localhost:11434/v1 for Ollama, or custom LiteLLM proxy"
-              className="w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-2 text-base sm:text-sm text-stone-100 placeholder-stone-600 focus:border-lime-400 focus:outline-none font-mono"
+              className="input input-md w-full placeholder-base-content/50 font-mono"
             />
           </div>
 
           {/* Local Audio Diarization & Speaker Recognition Settings */}
-          <div className="rounded-xl border border-stone-800 bg-stone-950/60 p-4 space-y-3.5">
+          <div className="rounded-xl border border-base-300 bg-base-100/60 p-4 space-y-3.5">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold uppercase tracking-wider text-stone-300">
-                🎙️ Local ASR & Speaker Recognition
+              <span className="text-xs font-semibold uppercase tracking-wider text-base-content">
+                <Mic className="h-4 w-4 shrink-0" aria-hidden="true" /> Local ASR & Speaker Recognition
               </span>
-              <span className="text-[11px] text-stone-500 font-mono">Engine & Sensitivity Tuning</span>
+              <span className="text-[11px] text-base-content/50 font-mono">Engine & Sensitivity Tuning</span>
             </div>
 
             {/* Hugging Face Token for Gated Diarization Models */}
             <div className="space-y-1.5">
               <label
                 htmlFor="hf-token-input"
-                className="text-xs text-stone-300 font-medium flex items-center justify-between"
+                className="text-xs text-base-content font-medium flex items-center justify-between"
               >
                 <span>Hugging Face Access Token (pyannote community-1):</span>
-                <span className="text-[10px] text-stone-500 font-mono">HF_TOKEN env overrides</span>
+                <span className="text-[10px] text-base-content/50 font-mono">HF_TOKEN env overrides</span>
               </label>
               <input
                 id="hf-token-input"
@@ -5811,9 +5816,9 @@ function LlmSettingsModal({
                 value={hfToken}
                 onChange={(e) => setHfToken(e.target.value)}
                 placeholder="hf_..."
-                className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-base sm:text-sm text-stone-100 placeholder-stone-600 focus:border-lime-400 focus:outline-none font-mono"
+                className="input input-md w-full placeholder-base-content/50 font-mono"
               />
-              <p className="text-[11px] text-stone-500 leading-tight">
+              <p className="text-[11px] text-base-content/50 leading-tight">
                 Used to download gated pyannote diarization models. Accept terms on huggingface.co/pyannote/speaker-diarization-community-1.
               </p>
             </div>
@@ -5821,10 +5826,10 @@ function LlmSettingsModal({
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 pt-1">
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between text-xs">
-                  <label htmlFor="clustering-threshold-slider" className="text-stone-300 font-medium">
+                  <label htmlFor="clustering-threshold-slider" className="text-base-content font-medium">
                     Within-Meeting Clustering:
                   </label>
-                  <span className="font-mono font-bold text-lime-400">
+                  <span className="font-mono font-bold text-primary">
                     {localClusteringThreshold.toFixed(2)}
                   </span>
                 </div>
@@ -5836,19 +5841,19 @@ function LlmSettingsModal({
                   step="0.01"
                   value={localClusteringThreshold}
                   onChange={(e) => setLocalClusteringThreshold(parseFloat(e.target.value))}
-                  className="w-full accent-lime-400 cursor-pointer"
+                  className="range range-sm w-full"
                 />
-                <p className="text-[11px] text-stone-500 leading-tight">
+                <p className="text-[11px] text-base-content/50 leading-tight">
                   Controls separation of distinct voices within a meeting (recommended: 0.50).
                 </p>
               </div>
 
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between text-xs">
-                  <label htmlFor="similarity-threshold-slider" className="text-stone-300 font-medium">
+                  <label htmlFor="similarity-threshold-slider" className="text-base-content font-medium">
                     Enrolled Voiceprint Matching:
                   </label>
-                  <span className="font-mono font-bold text-cyan-400">
+                  <span className="font-mono font-bold text-accent">
                     {localSimilarityThreshold.toFixed(2)}
                   </span>
                 </div>
@@ -5860,17 +5865,17 @@ function LlmSettingsModal({
                   step="0.01"
                   value={localSimilarityThreshold}
                   onChange={(e) => setLocalSimilarityThreshold(parseFloat(e.target.value))}
-                  className="w-full accent-cyan-400 cursor-pointer"
+                  className="range range-sm w-full"
                 />
-                <p className="text-[11px] text-stone-500 leading-tight">
+                <p className="text-[11px] text-base-content/50 leading-tight">
                   Minimum cosine similarity required to match speech against enrolled WeSpeaker voiceprints (recommended: 0.45).
                 </p>
               </div>
             </div>
           </div>
 
-          <div className="rounded-xl border border-stone-800 bg-stone-950/60 p-4 space-y-2">
-            <label className="block text-xs font-semibold uppercase tracking-wider text-stone-300">
+          <div className="rounded-xl border border-base-300 bg-base-100/60 p-4 space-y-2">
+            <label className="block text-xs font-semibold uppercase tracking-wider text-base-content">
               Automatic Transcription Engine
             </label>
             <Combobox
@@ -5881,11 +5886,11 @@ function LlmSettingsModal({
               searchPlaceholder="Search engines…"
               options={TRANSCRIBE_PROVIDER_OPTIONS}
             />
-            <p className="text-[11px] text-stone-500">
+            <p className="text-[11px] text-base-content/50">
               Controls the default for new uploads and manual transcription. Keys entered below take effect immediately; environment variables (ASSEMBLY_API_KEY, SPEECHMATICS_API_KEY, MUSE_API_KEY) override them when set.
             </p>
             <div className="space-y-1.5">
-              <label className="block text-xs font-semibold uppercase tracking-wider text-stone-300">
+              <label className="block text-xs font-semibold uppercase tracking-wider text-base-content">
                 Plaud recordings
               </label>
               <Combobox
@@ -5896,14 +5901,14 @@ function LlmSettingsModal({
                 searchPlaceholder="Search Plaud options…"
                 options={PLAUD_RETRANSCRIBE_OPTIONS}
               />
-              <p className="text-[11px] text-stone-500">
+              <p className="text-[11px] text-base-content/50">
                 Plaud&apos;s transcript is always kept as a fallback. Re-transcribing uses the engine above as authoritative; changes take effect immediately without a restart.
               </p>
             </div>
             <div className="space-y-1.5 pt-1">
-              <label htmlFor="speechmatics-key-input" className="text-xs text-stone-300 font-medium flex items-center justify-between">
+              <label htmlFor="speechmatics-key-input" className="text-xs text-base-content font-medium flex items-center justify-between">
                 <span>Speechmatics API Key:</span>
-                <span className="text-[10px] text-stone-500 font-mono">SPEECHMATICS_API_KEY env overrides</span>
+                <span className="text-[10px] text-base-content/50 font-mono">SPEECHMATICS_API_KEY env overrides</span>
               </label>
               <input
                 id="speechmatics-key-input"
@@ -5912,13 +5917,13 @@ function LlmSettingsModal({
                 onChange={(e) => setSpeechmaticsApiKey(e.target.value)}
                 placeholder="Speechmatics key…"
                 autoComplete="off"
-                className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-base sm:text-sm text-stone-100 placeholder-stone-600 focus:border-lime-400 focus:outline-none font-mono"
+                className="input input-md w-full placeholder-base-content/50 font-mono"
               />
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="assemblyai-key-input" className="text-xs text-stone-300 font-medium flex items-center justify-between">
+              <label htmlFor="assemblyai-key-input" className="text-xs text-base-content font-medium flex items-center justify-between">
                 <span>AssemblyAI API Key:</span>
-                <span className="text-[10px] text-stone-500 font-mono">ASSEMBLY_API_KEY env overrides</span>
+                <span className="text-[10px] text-base-content/50 font-mono">ASSEMBLY_API_KEY env overrides</span>
               </label>
               <input
                 id="assemblyai-key-input"
@@ -5927,13 +5932,13 @@ function LlmSettingsModal({
                 onChange={(e) => setAssemblyaiApiKey(e.target.value)}
                 placeholder="AssemblyAI key…"
                 autoComplete="off"
-                className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-base sm:text-sm text-stone-100 placeholder-stone-600 focus:border-lime-400 focus:outline-none font-mono"
+                className="input input-md w-full placeholder-base-content/50 font-mono"
               />
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="muse-key-input" className="text-xs text-stone-300 font-medium flex items-center justify-between">
+              <label htmlFor="muse-key-input" className="text-xs text-base-content font-medium flex items-center justify-between">
                 <span>Muse Voice API Key:</span>
-                <span className="text-[10px] text-stone-500 font-mono">MUSE_API_KEY env overrides</span>
+                <span className="text-[10px] text-base-content/50 font-mono">MUSE_API_KEY env overrides</span>
               </label>
               <input
                 id="muse-key-input"
@@ -5942,7 +5947,7 @@ function LlmSettingsModal({
                 onChange={(e) => setMuseApiKey(e.target.value)}
                 placeholder="Muse Voice key…"
                 autoComplete="off"
-                className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-base sm:text-sm text-stone-100 placeholder-stone-600 focus:border-lime-400 focus:outline-none font-mono"
+                className="input input-md w-full placeholder-base-content/50 font-mono"
               />
             </div>
           </div>
@@ -5951,8 +5956,8 @@ function LlmSettingsModal({
             <div
               className={`rounded-lg border p-3 text-xs ${
                 testResult.ok
-                  ? "border-lime-400/30 bg-lime-400/10 text-lime-300"
-                  : "border-red-500/30 bg-red-500/10 text-red-300"
+                  ? "border-primary/30 bg-primary/10 text-primary"
+                  : "border-error/30 bg-error/10 text-error"
               }`}
             >
               <div className="flex items-center justify-between">
@@ -5964,14 +5969,14 @@ function LlmSettingsModal({
             </div>
           )}
 
-          <div className="flex items-center justify-between border-t border-stone-800 pt-4">
+          <div className="flex items-center justify-between border-t border-base-300 pt-4">
             <button
               type="button"
               onClick={() => void handleTestConnection()}
               disabled={testing}
-              className="rounded-lg border border-stone-700 bg-stone-800 px-3 py-1.5 text-xs font-medium text-stone-200 hover:bg-stone-700 transition disabled:opacity-50"
+              className="btn btn-sm bg-base-300 min-h-11"
             >
-              {testing ? "Testing…" : "⚡ Test Connection"}
+              {testing ? "Testing…" : <><Zap className="h-4 w-4 shrink-0" aria-hidden="true" /> Test Connection</>}
             </button>
 
             <div className="flex gap-3">
@@ -5979,14 +5984,14 @@ function LlmSettingsModal({
                 type="button"
                 onClick={onClose}
                 disabled={saving}
-                className="rounded-lg border border-stone-700 px-4 py-2 text-xs font-medium text-stone-300 hover:bg-stone-800 transition"
+                className="btn btn-sm min-h-11"
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 disabled={saving}
-                className="inline-flex items-center gap-2 rounded-lg bg-lime-400 px-4 py-2 text-xs font-semibold text-stone-950 transition hover:bg-lime-300 disabled:opacity-50"
+                className="btn btn-primary btn-sm inline-flex items-center gap-2 min-h-11"
               >
                 {saving ? "Saving…" : "Save LLM Settings"}
               </button>
@@ -6081,8 +6086,8 @@ export function UsageView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-stone-100">API Usage & Spend</h1>
-          <p className="text-sm text-stone-400">
+          <h1 className="text-2xl font-bold tracking-tight text-base-content">API Usage & Spend</h1>
+          <p className="text-sm text-base-content/70">
             Estimated cloud spend: transcription billed per hour of audio, LLM billed per token.
           </p>
         </div>
@@ -6099,15 +6104,15 @@ export function UsageView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
               }
             }}
             aria-label="Usage month"
-            className="min-h-[44px] rounded-lg border border-stone-700 bg-stone-900 px-3 py-1.5 text-base text-stone-200 focus:border-lime-400 focus:outline-none disabled:opacity-50 sm:min-h-0 sm:text-sm"
+            className="input input-md w-full py-1.5 text-base-content disabled:opacity-50"
           />
           <button
             type="button"
             onClick={() => setShowAllTime((v) => !v)}
             className={`min-h-[44px] rounded-lg border px-3 py-1.5 text-sm font-medium transition sm:min-h-0 ${
               showAllTime
-                ? "border-lime-400/50 bg-lime-400/10 text-lime-300"
-                : "border-stone-700 text-stone-300 hover:border-stone-500 hover:text-stone-100"
+                ? "border-primary/50 bg-primary/10 text-primary"
+                : "border-base-300 text-base-content hover:border-base-300 hover:text-base-content"
             }`}
           >
             All time
@@ -6116,42 +6121,42 @@ export function UsageView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
       </div>
 
       {loading ? (
-        <p className="text-sm text-stone-400">Loading usage…</p>
+        <p className="text-sm text-base-content/70">Loading usage…</p>
       ) : error ? (
-        <p className="text-sm text-rose-400">{error}</p>
+        <p className="text-sm text-error">{error}</p>
       ) : summary ? (
         <>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <div className="rounded-xl border border-stone-800 bg-stone-900/60 p-4">
-              <div className="text-xs font-medium uppercase tracking-wide text-stone-500">Total spend</div>
-              <div className="mt-1 text-2xl font-bold text-stone-100">{formatUsageUsd(summary.totalCostUsd)}</div>
-              <div className="mt-1 text-xs text-stone-500">{summary.eventCount} billed events</div>
+            <div className="rounded-xl border border-base-300 bg-base-200/60 p-4">
+              <div className="text-xs font-medium uppercase tracking-wide text-base-content/50">Total spend</div>
+              <div className="mt-1 text-2xl font-bold text-base-content">{formatUsageUsd(summary.totalCostUsd)}</div>
+              <div className="mt-1 text-xs text-base-content/50">{summary.eventCount} billed events</div>
             </div>
-            <div className="rounded-xl border border-stone-800 bg-stone-900/60 p-4">
-              <div className="text-xs font-medium uppercase tracking-wide text-stone-500">Transcription</div>
-              <div className="mt-1 text-2xl font-bold text-stone-100">{formatUsageUsd(summary.transcriptionCostUsd)}</div>
-              <div className="mt-1 text-xs text-stone-500">{formatUsageHours(summary.audioSeconds)} of audio</div>
+            <div className="rounded-xl border border-base-300 bg-base-200/60 p-4">
+              <div className="text-xs font-medium uppercase tracking-wide text-base-content/50">Transcription</div>
+              <div className="mt-1 text-2xl font-bold text-base-content">{formatUsageUsd(summary.transcriptionCostUsd)}</div>
+              <div className="mt-1 text-xs text-base-content/50">{formatUsageHours(summary.audioSeconds)} of audio</div>
             </div>
-            <div className="rounded-xl border border-stone-800 bg-stone-900/60 p-4">
-              <div className="text-xs font-medium uppercase tracking-wide text-stone-500">LLM</div>
-              <div className="mt-1 text-2xl font-bold text-stone-100">{formatUsageUsd(summary.llmCostUsd)}</div>
-              <div className="mt-1 text-xs text-stone-500">
+            <div className="rounded-xl border border-base-300 bg-base-200/60 p-4">
+              <div className="text-xs font-medium uppercase tracking-wide text-base-content/50">LLM</div>
+              <div className="mt-1 text-2xl font-bold text-base-content">{formatUsageUsd(summary.llmCostUsd)}</div>
+              <div className="mt-1 text-xs text-base-content/50">
                 {formatUsageTokens(summary.totalTokens)} tokens ({formatUsageTokens(summary.inputTokens)} in /{" "}
                 {formatUsageTokens(summary.outputTokens)} out)
               </div>
             </div>
           </div>
 
-          <div className="rounded-xl border border-stone-800 bg-stone-900/60 p-4">
-            <h2 className="text-sm font-semibold text-stone-200">By provider</h2>
+          <div className="rounded-xl border border-base-300 bg-base-200/60 p-4">
+            <h2 className="text-sm font-semibold text-base-content">By provider</h2>
             {byProvider.length === 0 ? (
-              <p className="mt-2 text-sm text-stone-500">No cloud usage in this period. Local transcription is free.</p>
+              <p className="mt-2 text-sm text-base-content/50">No cloud usage in this period. Local transcription is free.</p>
             ) : (
               <>
               <div className="mt-2 hidden overflow-x-auto sm:block">
-                <table className="w-full min-w-[560px] text-left text-sm">
+                <table className="table table-sm w-full min-w-[560px] text-left">
                   <thead>
-                    <tr className="text-xs uppercase tracking-wide text-stone-500">
+                    <tr className="text-xs uppercase tracking-wide text-base-content/50">
                       <th className="py-1.5 pr-3 font-medium">Provider</th>
                       <th className="py-1.5 pr-3 font-medium">Audio</th>
                       <th className="py-1.5 pr-3 font-medium">Tokens</th>
@@ -6160,14 +6165,14 @@ export function UsageView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
                   </thead>
                   <tbody>
                     {byProvider.map((p) => (
-                      <tr key={p.provider} className="border-t border-stone-800/80">
+                      <tr key={p.provider} className="border-t border-base-300/80">
                         <td className="py-2 pr-3">
-                          <span className="font-medium text-stone-200">{p.provider}</span>
-                          <span className="ml-2 text-xs text-stone-500">{(p.kinds ?? []).join(", ")}</span>
+                          <span className="font-medium text-base-content">{p.provider}</span>
+                          <span className="ml-2 text-xs text-base-content/50">{(p.kinds ?? []).join(", ")}</span>
                         </td>
-                        <td className="py-2 pr-3 text-stone-300">{formatUsageHours(p.audioSeconds)}</td>
-                        <td className="py-2 pr-3 text-stone-300">{formatUsageTokens(p.totalTokens)}</td>
-                        <td className="py-2 text-right font-semibold text-stone-100">{formatUsageUsd(p.costUsd)}</td>
+                        <td className="py-2 pr-3 text-base-content">{formatUsageHours(p.audioSeconds)}</td>
+                        <td className="py-2 pr-3 text-base-content">{formatUsageTokens(p.totalTokens)}</td>
+                        <td className="py-2 text-right font-semibold text-base-content">{formatUsageUsd(p.costUsd)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -6175,23 +6180,23 @@ export function UsageView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
               </div>
               <ul className="mt-2 space-y-2 sm:hidden">
                 {byProvider.map((p) => (
-                  <li key={p.provider} className="rounded-lg border border-stone-800 bg-stone-950/60 p-3">
+                  <li key={p.provider} className="rounded-lg border border-base-300 bg-base-100/60 p-3">
                     <div>
-                      <span className="font-medium text-stone-200">{p.provider}</span>
-                      <span className="ml-2 text-xs text-stone-500">{(p.kinds ?? []).join(", ")}</span>
+                      <span className="font-medium text-base-content">{p.provider}</span>
+                      <span className="ml-2 text-xs text-base-content/50">{(p.kinds ?? []).join(", ")}</span>
                     </div>
                     <dl className="mt-2 grid grid-cols-3 gap-2 text-xs">
                       <div>
-                        <dt className="text-stone-500">Audio</dt>
-                        <dd className="text-stone-300">{formatUsageHours(p.audioSeconds)}</dd>
+                        <dt className="text-base-content/50">Audio</dt>
+                        <dd className="text-base-content">{formatUsageHours(p.audioSeconds)}</dd>
                       </div>
                       <div>
-                        <dt className="text-stone-500">Tokens</dt>
-                        <dd className="text-stone-300">{formatUsageTokens(p.totalTokens)}</dd>
+                        <dt className="text-base-content/50">Tokens</dt>
+                        <dd className="text-base-content">{formatUsageTokens(p.totalTokens)}</dd>
                       </div>
                       <div className="text-right">
-                        <dt className="text-stone-500">Cost</dt>
-                        <dd className="font-semibold text-stone-100">{formatUsageUsd(p.costUsd)}</dd>
+                        <dt className="text-base-content/50">Cost</dt>
+                        <dd className="font-semibold text-base-content">{formatUsageUsd(p.costUsd)}</dd>
                       </div>
                     </dl>
                   </li>
@@ -6201,16 +6206,16 @@ export function UsageView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
             )}
           </div>
 
-          <div className="rounded-xl border border-stone-800 bg-stone-900/60 p-4">
-            <h2 className="text-sm font-semibold text-stone-200">Per meeting</h2>
+          <div className="rounded-xl border border-base-300 bg-base-200/60 p-4">
+            <h2 className="text-sm font-semibold text-base-content">Per meeting</h2>
             {byMeeting.length === 0 ? (
-              <p className="mt-2 text-sm text-stone-500">No per-meeting usage in this period.</p>
+              <p className="mt-2 text-sm text-base-content/50">No per-meeting usage in this period.</p>
             ) : (
               <>
               <div className="mt-2 hidden overflow-x-auto sm:block">
-                <table className="w-full min-w-[640px] text-left text-sm">
+                <table className="table table-sm w-full min-w-[640px] text-left">
                   <thead>
-                    <tr className="text-xs uppercase tracking-wide text-stone-500">
+                    <tr className="text-xs uppercase tracking-wide text-base-content/50">
                       <th className="py-1.5 pr-3 font-medium">Meeting</th>
                       <th className="py-1.5 pr-3 font-medium">Audio</th>
                       <th className="py-1.5 pr-3 font-medium">Transcription</th>
@@ -6220,26 +6225,26 @@ export function UsageView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
                   </thead>
                   <tbody>
                     {byMeeting.map((m) => (
-                      <tr key={m.meetingId} className="border-t border-stone-800/80">
+                      <tr key={m.meetingId} className="border-t border-base-300/80">
                         <td className="py-2 pr-3">
                           <button
                             type="button"
                             onClick={() => onSelectMeeting(m.meetingId)}
-                            className="font-medium text-lime-300 hover:text-lime-200 hover:underline text-left"
+                            className="font-medium text-primary hover:text-primary hover:underline text-left"
                           >
                             {m.meetingTitle || "Untitled meeting"}
                           </button>
                           {m.meetingStartTime ? (
-                            <div className="text-xs text-stone-500">{formatDate(m.meetingStartTime)}</div>
+                            <div className="text-xs text-base-content/50">{formatDate(m.meetingStartTime)}</div>
                           ) : null}
                         </td>
-                        <td className="py-2 pr-3 text-stone-300">{formatUsageHours(m.audioSeconds)}</td>
-                        <td className="py-2 pr-3 text-stone-300">{formatUsageUsd(m.transcriptionCostUsd)}</td>
-                        <td className="py-2 pr-3 text-stone-300">
+                        <td className="py-2 pr-3 text-base-content">{formatUsageHours(m.audioSeconds)}</td>
+                        <td className="py-2 pr-3 text-base-content">{formatUsageUsd(m.transcriptionCostUsd)}</td>
+                        <td className="py-2 pr-3 text-base-content">
                           {formatUsageUsd(m.llmCostUsd)}
-                          <span className="ml-1 text-xs text-stone-500">({formatUsageTokens(m.totalTokens)})</span>
+                          <span className="ml-1 text-xs text-base-content/50">({formatUsageTokens(m.totalTokens)})</span>
                         </td>
-                        <td className="py-2 text-right font-semibold text-stone-100">
+                        <td className="py-2 text-right font-semibold text-base-content">
                           {formatUsageUsd(m.totalCostUsd)}
                         </td>
                       </tr>
@@ -6249,36 +6254,36 @@ export function UsageView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
               </div>
               <ul className="mt-2 space-y-2 sm:hidden">
                 {byMeeting.map((m) => (
-                  <li key={m.meetingId} className="rounded-lg border border-stone-800 bg-stone-950/60 p-3">
+                  <li key={m.meetingId} className="rounded-lg border border-base-300 bg-base-100/60 p-3">
                     <button
                       type="button"
                       onClick={() => onSelectMeeting(m.meetingId)}
                       className="flex min-h-[44px] w-full flex-col justify-center text-left"
                     >
-                      <span className="font-medium text-lime-300">{m.meetingTitle || "Untitled meeting"}</span>
+                      <span className="font-medium text-primary">{m.meetingTitle || "Untitled meeting"}</span>
                       {m.meetingStartTime ? (
-                        <span className="text-xs text-stone-500">{formatDate(m.meetingStartTime)}</span>
+                        <span className="text-xs text-base-content/50">{formatDate(m.meetingStartTime)}</span>
                       ) : null}
                     </button>
                     <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
                       <div>
-                        <dt className="text-stone-500">Audio</dt>
-                        <dd className="text-stone-300">{formatUsageHours(m.audioSeconds)}</dd>
+                        <dt className="text-base-content/50">Audio</dt>
+                        <dd className="text-base-content">{formatUsageHours(m.audioSeconds)}</dd>
                       </div>
                       <div>
-                        <dt className="text-stone-500">Transcription</dt>
-                        <dd className="text-stone-300">{formatUsageUsd(m.transcriptionCostUsd)}</dd>
+                        <dt className="text-base-content/50">Transcription</dt>
+                        <dd className="text-base-content">{formatUsageUsd(m.transcriptionCostUsd)}</dd>
                       </div>
                       <div>
-                        <dt className="text-stone-500">LLM</dt>
-                        <dd className="text-stone-300">
+                        <dt className="text-base-content/50">LLM</dt>
+                        <dd className="text-base-content">
                           {formatUsageUsd(m.llmCostUsd)}
-                          <span className="ml-1 text-stone-500">({formatUsageTokens(m.totalTokens)})</span>
+                          <span className="ml-1 text-base-content/50">({formatUsageTokens(m.totalTokens)})</span>
                         </dd>
                       </div>
                       <div>
-                        <dt className="text-stone-500">Total</dt>
-                        <dd className="font-semibold text-stone-100">{formatUsageUsd(m.totalCostUsd)}</dd>
+                        <dt className="text-base-content/50">Total</dt>
+                        <dd className="font-semibold text-base-content">{formatUsageUsd(m.totalCostUsd)}</dd>
                       </div>
                     </dl>
                   </li>
@@ -6288,7 +6293,7 @@ export function UsageView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
             )}
           </div>
 
-          <p className="text-xs text-stone-500">
+          <p className="text-xs text-base-content/50">
             Estimates, not invoices{rateNote ? `: transcription at ${rateNote}` : ""}; LLM per-token rates vary by
             model (see the AI model picker for per-model pricing). Summary LLM usage is tracked from this update
             onward — older summaries predate usage tracking, while transcription and chat history were backfilled.
@@ -6321,9 +6326,9 @@ function MeetingUsageLine({ meetingId }: { meetingId: string }): ReactElement | 
   }, [meetingId]);
   if (!usage || usage.eventCount === 0) return null;
   return (
-    <div className="mt-2 text-xs sm:text-sm text-stone-400" title="Estimated cloud spend for this meeting (transcription billed per audio hour, LLM per token).">
-      Cost ≈ <span className="font-semibold text-stone-200">{formatUsageUsd(usage.totalCostUsd)}</span>
-      <span className="text-stone-500">
+    <div className="mt-2 text-xs sm:text-sm text-base-content/70" title="Estimated cloud spend for this meeting (transcription billed per audio hour, LLM per token).">
+      Cost ≈ <span className="font-semibold text-base-content">{formatUsageUsd(usage.totalCostUsd)}</span>
+      <span className="text-base-content/50">
         {" "}(transcription {formatUsageUsd(usage.transcriptionCostUsd)} · LLM {formatUsageUsd(usage.llmCostUsd)})
       </span>
     </div>
@@ -6389,7 +6394,7 @@ export function LogsView({ onSelectMeeting }: { onSelectMeeting: (id: string) =>
   };
 
   const handleClearLogs = async () => {
-    if (!confirm("Are you sure you want to clear all stored system logs?")) {
+    if (!(await confirmAction({ title: "Clear logs", message: "Are you sure you want to clear all stored system logs?", confirmLabel: "Clear", danger: true }))) {
       return;
     }
     try {
@@ -6408,15 +6413,15 @@ export function LogsView({ onSelectMeeting }: { onSelectMeeting: (id: string) =>
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold tracking-tight text-stone-100">System & Job Logs</h1>
+            <h1 className="text-2xl font-bold tracking-tight text-base-content">System & Job Logs</h1>
             {autoRefresh && (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-lime-400/10 border border-lime-400/30 px-2.5 py-0.5 text-[10px] font-semibold text-lime-400">
-                <span className="h-1.5 w-1.5 rounded-full bg-lime-400 animate-pulse" />
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 border border-primary/30 px-2.5 py-0.5 text-[10px] font-semibold text-primary">
+                <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
                 Live (3s)
               </span>
             )}
           </div>
-          <p className="text-sm text-stone-400">
+          <p className="text-sm text-base-content/70">
             Real-time execution trace for ingestion, Speechmatics/local transcription, diarization, speaker enrollment, and AI summarization.
           </p>
         </div>
@@ -6427,35 +6432,35 @@ export function LogsView({ onSelectMeeting }: { onSelectMeeting: (id: string) =>
             onClick={() => setAutoRefresh(!autoRefresh)}
             className={`min-h-[44px] flex-1 rounded-lg border px-3 py-1.5 text-sm font-medium transition sm:min-h-0 sm:flex-none sm:text-xs ${
               autoRefresh
-                ? "border-lime-400/40 bg-lime-400/10 text-lime-300 hover:bg-lime-400/20"
-                : "border-stone-700 bg-stone-800 text-stone-400 hover:text-stone-200"
+                ? "border-primary/40 bg-primary/10 text-primary hover:bg-primary/20"
+                : "border-base-300 bg-base-300 text-base-content/70 hover:text-base-content"
             }`}
           >
-            {autoRefresh ? "⏸ Pause Stream" : "▶ Auto-Refresh"}
+            {autoRefresh ? <><Pause className="h-4 w-4 shrink-0" aria-hidden="true" /> Pause Stream</> : <><Play className="h-4 w-4 shrink-0" aria-hidden="true" /> Auto-Refresh</>}
           </button>
           <button
             type="button"
             onClick={() => void fetchLogs()}
             disabled={loading}
-            className="min-h-[44px] flex-1 rounded-lg border border-stone-700 bg-stone-800 px-3 py-1.5 text-sm font-medium text-stone-200 hover:bg-stone-700 transition disabled:opacity-50 sm:min-h-0 sm:flex-none sm:text-xs"
+            className="btn min-h-[44px] flex-1 bg-base-300 sm:min-h-0 sm:flex-none sm:text-xs"
           >
-            {loading ? "Refreshing…" : "🔄 Refresh"}
+            {loading ? "Refreshing…" : <><RotateCw className="h-4 w-4 shrink-0" aria-hidden="true" /> Refresh</>}
           </button>
           <button
             type="button"
             onClick={() => void handleClearLogs()}
-            className="min-h-[44px] flex-1 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-1.5 text-sm font-medium text-red-400 hover:bg-red-500/20 transition sm:min-h-0 sm:flex-none sm:text-xs"
+            className="btn btn-error btn-soft min-h-[44px] flex-1 border border-error/30 text-error hover:bg-error/20 sm:min-h-0 sm:flex-none sm:text-xs"
           >
-            🗑️ Clear
+            <Trash2 className="h-4 w-4 shrink-0" aria-hidden="true" /> Clear
           </button>
         </div>
       </div>
 
       {/* Filter Toolbar */}
-      <div className="flex flex-col gap-3 rounded-xl border border-stone-800 bg-stone-900/60 p-3.5 backdrop-blur sm:flex-row sm:flex-wrap sm:items-center">
+      <div className="flex flex-col gap-3 rounded-xl border border-base-300 bg-base-200/60 p-3.5 sm:flex-row sm:flex-wrap sm:items-center">
         {/* Severity Level Filter */}
         <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-2">
-          <span className="text-xs font-medium text-stone-400">
+          <span className="text-xs font-medium text-base-content/70">
             Min Level:
           </span>
           <div className="w-full sm:w-56">
@@ -6472,7 +6477,7 @@ export function LogsView({ onSelectMeeting }: { onSelectMeeting: (id: string) =>
 
         {/* Category Filter */}
         <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-2">
-          <span className="text-xs font-medium text-stone-400">
+          <span className="text-xs font-medium text-base-content/70">
             Category:
           </span>
           <div className="w-full sm:w-56">
@@ -6495,33 +6500,33 @@ export function LogsView({ onSelectMeeting }: { onSelectMeeting: (id: string) =>
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search logs by message, meeting, or detail…"
-            className="min-h-[44px] w-full rounded-lg border border-stone-700 bg-stone-950 px-3 py-1.5 text-base text-stone-100 placeholder-stone-500 focus:border-lime-400 focus:outline-none sm:min-h-0 sm:text-xs"
+            className="input input-md w-full py-1.5 sm:text-xs"
           />
           {searchQuery && (
             <button
               type="button"
               onClick={() => setSearchQuery("")}
-              className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center text-stone-500 hover:text-stone-300 text-xs sm:min-h-0 sm:min-w-0 sm:px-1"
+              className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center text-base-content/50 hover:text-base-content text-xs sm:min-h-0 sm:min-w-0 sm:px-1"
             >
-              ✕
+              <X className="h-4 w-4 shrink-0" aria-hidden="true" />
             </button>
           )}
         </div>
 
         {/* Total Badge */}
-        <span className="text-[11px] font-mono text-stone-500">
+        <span className="text-[11px] font-mono text-base-content/50">
           Showing {logs.length} of {totalCount} logs
         </span>
       </div>
 
       {/* Logs Table / List */}
-      <div className="rounded-xl border border-stone-800 bg-stone-900/60 backdrop-blur overflow-hidden">
+      <div className="rounded-xl border border-base-300 bg-base-200/60 backdrop-blur overflow-hidden">
         {logs.length === 0 ? (
-          <div className="p-12 text-center text-stone-500 text-sm">
+          <div className="p-12 text-center text-base-content/50 text-sm">
             No log entries match the current filter criteria.
           </div>
         ) : (
-          <div className="divide-y divide-stone-800/60 font-mono text-xs">
+          <div className="divide-y divide-base-300/60 font-mono text-xs">
             {logs.map((log) => {
               const isExpanded = expandedLogIds.has(log.id);
               const hasDetails = log.details && Object.keys(log.details).length > 0;
@@ -6529,11 +6534,11 @@ export function LogsView({ onSelectMeeting }: { onSelectMeeting: (id: string) =>
               return (
                 <div
                   key={log.id}
-                  className={`p-3.5 transition hover:bg-stone-800/30 ${
+                  className={`p-3.5 transition hover:bg-base-300/30 ${
                     log.level === "error"
-                      ? "bg-red-500/5"
+                      ? "bg-error/5"
                       : log.level === "warn"
-                      ? "bg-amber-500/5"
+                      ? "bg-warning/5"
                       : ""
                   }`}
                 >
@@ -6543,24 +6548,24 @@ export function LogsView({ onSelectMeeting }: { onSelectMeeting: (id: string) =>
                       <span
                         className={`rounded px-2 py-0.5 font-bold uppercase tracking-wider text-[10px] border ${
                           log.level === "error"
-                            ? "border-red-500/40 bg-red-500/10 text-red-400"
+                            ? "border-error/40 bg-error/10 text-error"
                             : log.level === "warn"
-                            ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
+                            ? "border-warning/40 bg-warning/10 text-warning"
                             : log.level === "info"
-                            ? "border-sky-500/40 bg-sky-500/10 text-sky-400"
-                            : "border-stone-700 bg-stone-800/80 text-stone-400"
+                            ? "border-info/40 bg-info/10 text-info"
+                            : "border-base-300 bg-base-300/80 text-base-content/70"
                         }`}
                       >
                         {log.level}
                       </span>
 
                       {/* Category Badge */}
-                      <span className="rounded bg-stone-800 px-2 py-0.5 text-[10px] text-lime-400 border border-stone-700">
+                      <span className="rounded bg-base-300 px-2 py-0.5 text-[10px] text-primary border border-base-300">
                         {log.category}
                       </span>
 
                       {/* Timestamp */}
-                      <span className="text-stone-500 text-[11px]">
+                      <span className="text-base-content/50 text-[11px]">
                         {formatLogTimestamp(log.createdAt)}
                       </span>
 
@@ -6569,7 +6574,7 @@ export function LogsView({ onSelectMeeting }: { onSelectMeeting: (id: string) =>
                         <button
                           type="button"
                           onClick={() => onSelectMeeting(log.meetingId!)}
-                          className="rounded bg-stone-800/60 px-2 py-0.5 text-[10px] text-cyan-300 hover:bg-cyan-500/20 transition border border-cyan-500/30 truncate max-w-[220px]"
+                          className="rounded bg-base-300/60 px-2 py-0.5 text-[10px] text-accent hover:bg-accent/20 transition border border-accent/30 truncate max-w-[220px]"
                           title={`Open meeting ${log.meetingTitle || log.meetingId}`}
                         >
                           📌 {log.meetingTitle || log.meetingId.slice(0, 8)}
@@ -6582,21 +6587,21 @@ export function LogsView({ onSelectMeeting }: { onSelectMeeting: (id: string) =>
                       <button
                         type="button"
                         onClick={() => toggleExpand(log.id)}
-                        className="rounded border border-stone-700 bg-stone-800/60 px-2 py-0.5 text-[10px] text-stone-300 hover:bg-stone-700 transition"
+                        className="rounded border border-base-300 bg-base-300/60 px-2 py-0.5 text-[10px] text-base-content hover:bg-base-300 transition"
                       >
-                        {isExpanded ? "▲ Hide Details" : `▼ Details (${Object.keys(log.details!).length})`}
+                        {isExpanded ? <><ChevronUp className="h-3 w-3 shrink-0" aria-hidden="true" /> Hide Details</> : <><ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" /> Details ({Object.keys(log.details!).length})</>}
                       </button>
                     )}
                   </div>
 
                   {/* Message */}
-                  <div className="mt-2 text-stone-200 font-sans text-xs sm:text-sm leading-relaxed">
+                  <div className="mt-2 text-base-content font-sans text-xs sm:text-sm leading-relaxed">
                     {log.message}
                   </div>
 
                   {/* Expanded JSON details */}
                   {isExpanded && log.details && (
-                    <div className="mt-3 rounded-lg border border-stone-800 bg-stone-950 p-3 text-xs text-stone-300 overflow-x-auto">
+                    <div className="mt-3 rounded-lg border border-base-300 bg-base-100 p-3 text-xs text-base-content overflow-x-auto">
                       <pre className="font-mono text-[11px] leading-snug">
                         {JSON.stringify(log.details, null, 2)}
                       </pre>
@@ -6675,7 +6680,7 @@ export function BackupRestoreView({ onRestoreComplete }: { onRestoreComplete: ()
   };
 
   const handleDeleteBackup = async (filename: string) => {
-    if (!confirm(`Are you sure you want to delete backup archive "${filename}" from server?`)) {
+    if (!(await confirmAction({ title: "Delete backup", message: `Are you sure you want to delete backup archive "${filename}" from server?`, confirmLabel: "Delete", danger: true }))) {
       return;
     }
     try {
@@ -6743,9 +6748,9 @@ export function BackupRestoreView({ onRestoreComplete }: { onRestoreComplete: ()
       <a
         href={`/api/backup/download/${encodeURIComponent(b.filename)}`}
         download
-        className="inline-flex min-h-[44px] flex-1 items-center justify-center whitespace-nowrap rounded border border-stone-700 bg-stone-800 px-2.5 py-1 text-xs text-stone-200 hover:bg-stone-700 hover:text-white transition sm:min-h-0 sm:flex-none"
+        className="inline-flex min-h-[44px] flex-1 items-center justify-center whitespace-nowrap rounded border border-base-300 bg-base-300 px-2.5 py-1 text-xs text-base-content hover:bg-base-300 hover:text-white transition sm:min-h-0 sm:flex-none"
       >
-        ⬇️ Download
+        <Download className="h-4 w-4 shrink-0" aria-hidden="true" /> Download
       </a>
       <button
         type="button"
@@ -6760,16 +6765,16 @@ export function BackupRestoreView({ onRestoreComplete }: { onRestoreComplete: ()
             }
           });
         }}
-        className="inline-flex min-h-[44px] flex-1 items-center justify-center whitespace-nowrap rounded border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs text-amber-300 hover:bg-amber-500/20 transition sm:min-h-0 sm:flex-none"
+        className="inline-flex min-h-[44px] flex-1 items-center justify-center whitespace-nowrap rounded border border-warning/40 bg-warning/10 px-2.5 py-1 text-xs text-warning hover:bg-warning/20 transition sm:min-h-0 sm:flex-none"
       >
-        ♻️ Restore
+        <RefreshCw className="h-4 w-4 shrink-0" aria-hidden="true" /> Restore
       </button>
       <button
         type="button"
         onClick={() => void handleDeleteBackup(b.filename)}
-        className="inline-flex min-h-[44px] flex-1 items-center justify-center whitespace-nowrap rounded border border-red-500/30 bg-red-500/10 px-2.5 py-1 text-xs text-red-400 hover:bg-red-500/20 transition sm:min-h-0 sm:flex-none"
+        className="btn btn-error btn-soft btn-sm inline-flex min-h-[44px] flex-1 items-center justify-center whitespace-nowrap border border-error/30 text-error hover:bg-error/20 sm:min-h-0 sm:flex-none"
       >
-        🗑️ Delete
+        <Trash2 className="h-4 w-4 shrink-0" aria-hidden="true" /> Delete
       </button>
     </>
   );
@@ -6779,8 +6784,8 @@ export function BackupRestoreView({ onRestoreComplete }: { onRestoreComplete: ()
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-stone-100">Backup & Restore</h1>
-          <p className="text-sm text-stone-400">
+          <h1 className="text-2xl font-bold tracking-tight text-base-content">Backup & Restore</h1>
+          <p className="text-sm text-base-content/70">
             Create complete portable archives of your database, settings, templates, transcripts, notes, and all audio files.
           </p>
         </div>
@@ -6788,18 +6793,18 @@ export function BackupRestoreView({ onRestoreComplete }: { onRestoreComplete: ()
           <a
             href="/api/backup/export"
             download
-            className="inline-flex items-center gap-2 rounded-lg bg-lime-400 px-4 py-2 text-xs font-semibold text-stone-950 transition hover:bg-lime-300 shadow"
+            className="btn btn-primary btn-sm min-h-11"
           >
-            <span>⬇️</span>
+            <span><Download className="h-4 w-4 shrink-0" aria-hidden="true" /></span>
             <span>Download Full Backup (.tar.gz)</span>
           </a>
           <button
             type="button"
             onClick={() => void handleCreateServerBackup()}
             disabled={creating}
-            className="inline-flex items-center gap-2 rounded-lg border border-stone-700 bg-stone-900 px-4 py-2 text-xs font-semibold text-stone-200 transition hover:border-stone-500 hover:text-white disabled:opacity-50"
+            className="btn btn-sm inline-flex items-center gap-2 bg-base-200 font-semibold min-h-11"
           >
-            <span>💾</span>
+            <span><Save className="h-4 w-4 shrink-0" aria-hidden="true" /></span>
             <span>{creating ? "Creating Snapshot…" : "Save Server Snapshot"}</span>
           </button>
         </div>
@@ -6810,33 +6815,33 @@ export function BackupRestoreView({ onRestoreComplete }: { onRestoreComplete: ()
         <div
           className={`rounded-xl border p-4 text-sm flex items-start justify-between ${
             statusMessage.type === "success"
-              ? "border-lime-400/40 bg-lime-400/10 text-lime-300"
+              ? "border-primary/40 bg-primary/10 text-primary"
               : statusMessage.type === "error"
-              ? "border-red-500/40 bg-red-500/10 text-red-300"
-              : "border-cyan-500/40 bg-cyan-500/10 text-cyan-300"
+              ? "border-error/40 bg-error/10 text-error"
+              : "border-accent/40 bg-accent/10 text-accent"
           }`}
         >
           <div className="flex items-center gap-3">
-            <span>{statusMessage.type === "success" ? "✅" : statusMessage.type === "error" ? "❌" : "ℹ️"}</span>
+            <span>{statusMessage.type === "success" ? <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden="true" /> : statusMessage.type === "error" ? <XCircle className="h-4 w-4 shrink-0" aria-hidden="true" /> : <Info className="h-4 w-4 shrink-0" aria-hidden="true" />}</span>
             <span>{statusMessage.text}</span>
           </div>
           <button
             type="button"
             onClick={() => setStatusMessage(null)}
-            className="text-stone-400 hover:text-stone-200 text-xs px-2"
+            className="text-base-content/70 hover:text-base-content text-xs px-2"
           >
-            ✕
+            <X className="h-4 w-4 shrink-0" aria-hidden="true" />
           </button>
         </div>
       )}
 
       {/* Restore from Upload Box */}
-      <div className="rounded-xl border border-stone-800 bg-stone-900/60 p-5 backdrop-blur">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-stone-300 mb-2">
+      <div className="rounded-xl border border-base-300 bg-base-200/60 p-5 backdrop-blur">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-base-content mb-2">
           Restore from Backup Archive
         </h2>
-        <p className="text-xs text-stone-400 mb-4">
-          Select an Olive <code className="text-stone-300">.tar.gz</code> archive from your computer. All meetings, audio recordings, transcripts, summaries, and configuration will be restored.
+        <p className="text-xs text-base-content/70 mb-4">
+          Select an Olive <code className="text-base-content">.tar.gz</code> archive from your computer. All meetings, audio recordings, transcripts, summaries, and configuration will be restored.
         </p>
 
         <div className="flex flex-col sm:flex-row items-center gap-4">
@@ -6848,7 +6853,7 @@ export function BackupRestoreView({ onRestoreComplete }: { onRestoreComplete: ()
               const file = e.target.files?.[0] || null;
               setSelectedFile(file);
             }}
-            className="block min-h-[44px] w-full text-base text-stone-400 file:mr-4 file:min-h-[44px] file:rounded-lg file:border-0 file:bg-stone-800 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-lime-400 hover:file:bg-stone-700 cursor-pointer sm:min-h-0 sm:text-xs sm:file:min-h-0 sm:file:text-xs"
+            className="block min-h-[44px] w-full text-base text-base-content/70 file:mr-4 file:min-h-[44px] file:rounded-lg file:border-0 file:bg-base-300 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-primary hover:file:bg-base-300 cursor-pointer sm:min-h-0 sm:text-xs sm:file:min-h-0 sm:file:text-xs"
           />
           {selectedFile && (
             <button
@@ -6860,7 +6865,7 @@ export function BackupRestoreView({ onRestoreComplete }: { onRestoreComplete: ()
                   stats: { meetings: 0, audioFiles: 0, sizeBytes: selectedFile.size }
                 });
               }}
-              className="min-h-[44px] w-full whitespace-nowrap rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-stone-950 hover:bg-amber-300 transition shadow sm:w-auto sm:min-h-0 sm:text-xs"
+              className="btn btn-warning min-h-[44px] w-full whitespace-nowrap shadow sm:w-auto sm:min-h-0 sm:text-xs"
             >
               Restore Uploaded File
             </button>
@@ -6869,33 +6874,33 @@ export function BackupRestoreView({ onRestoreComplete }: { onRestoreComplete: ()
       </div>
 
       {/* Saved Backups Table */}
-      <div className="rounded-xl border border-stone-800 bg-stone-900/60 backdrop-blur overflow-hidden">
-        <div className="flex items-center justify-between border-b border-stone-800 px-5 py-4">
+      <div className="rounded-xl border border-base-300 bg-base-200/60 backdrop-blur overflow-hidden">
+        <div className="flex items-center justify-between border-b border-base-300 px-5 py-4">
           <div>
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-stone-300">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-base-content">
               Server Backup Snapshots
             </h2>
-            <p className="text-xs text-stone-500">Stored on server persistent storage</p>
+            <p className="text-xs text-base-content/50">Stored on server persistent storage</p>
           </div>
           <button
             type="button"
             onClick={() => void loadBackups()}
             disabled={loading}
-            className="rounded-lg border border-stone-800 bg-stone-950/60 px-3 py-1 text-xs text-stone-400 hover:text-stone-200 transition"
+            className="btn btn-sm bg-base-100/60 min-h-11"
           >
-            {loading ? "Refreshing…" : "🔄 Refresh List"}
+            {loading ? "Refreshing…" : <><RotateCw className="h-4 w-4 shrink-0" aria-hidden="true" /> Refresh List</>}
           </button>
         </div>
 
         {backups.length === 0 ? (
-          <div className="p-8 text-center text-stone-500 text-sm">
+          <div className="p-8 text-center text-base-content/50 text-sm">
             No backup snapshots currently saved on the server. Click &ldquo;Save Server Snapshot&rdquo; or &ldquo;Download Full Backup&rdquo; above.
           </div>
         ) : (
           <>
           <div className="hidden overflow-x-auto sm:block">
-            <table className="w-full text-left text-xs text-stone-300">
-              <thead className="border-b border-stone-800 bg-stone-950/40 text-stone-400 font-medium">
+            <table className="table table-xs w-full text-left text-base-content/80">
+              <thead className="border-b border-base-300 bg-base-100/40 text-base-content/70 font-medium">
                 <tr>
                   <th className="px-5 py-3">Archive File</th>
                   <th className="px-5 py-3">Created</th>
@@ -6906,37 +6911,37 @@ export function BackupRestoreView({ onRestoreComplete }: { onRestoreComplete: ()
                   <th className="px-5 py-3 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-stone-800/60">
+              <tbody className="divide-y divide-base-300/60">
                 {backups.map((b) => (
-                  <tr key={b.filename} className="hover:bg-stone-800/30 transition">
-                    <td className="px-5 py-3.5 font-mono text-lime-400 font-medium">
+                  <tr key={b.filename} className="hover:bg-base-300/30 transition">
+                    <td className="px-5 py-3.5 font-mono text-primary font-medium">
                       {b.filename}
                     </td>
-                    <td className="px-5 py-3.5 text-stone-400">
+                    <td className="px-5 py-3.5 text-base-content/70">
                       {formatDate(new Date(b.createdAt).getTime())}
                     </td>
-                    <td className="px-5 py-3.5 font-mono text-stone-300">
+                    <td className="px-5 py-3.5 font-mono text-base-content">
                       {formatBytes(b.sizeBytes)}
                     </td>
                     <td className="px-5 py-3.5">
-                      <span className="rounded bg-stone-800 px-2 py-0.5 font-mono text-stone-200">
+                      <span className="rounded bg-base-300 px-2 py-0.5 font-mono text-base-content">
                         {b.manifest?.stats.meetingCount ?? "—"}
                       </span>
                     </td>
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-1.5">
-                        <span className="rounded bg-stone-800 px-2 py-0.5 font-mono text-stone-200">
+                        <span className="rounded bg-base-300 px-2 py-0.5 font-mono text-base-content">
                           {b.manifest?.stats.audioFilesCount ?? "—"} files
                         </span>
                         {b.manifest?.stats.totalAudioSizeBytes ? (
-                          <span className="text-[10px] text-stone-500 font-mono">
+                          <span className="text-[10px] text-base-content/50 font-mono">
                             ({formatBytes(b.manifest.stats.totalAudioSizeBytes)})
                           </span>
                         ) : null}
                       </div>
                     </td>
                     <td className="px-5 py-3.5">
-                      <span className="rounded bg-stone-800 px-2 py-0.5 font-mono text-stone-200">
+                      <span className="rounded bg-base-300 px-2 py-0.5 font-mono text-base-content">
                         {b.manifest?.stats.summaryCount ?? "—"}
                       </span>
                     </td>
@@ -6948,23 +6953,23 @@ export function BackupRestoreView({ onRestoreComplete }: { onRestoreComplete: ()
               </tbody>
             </table>
           </div>
-          <ul className="divide-y divide-stone-800/60 sm:hidden">
+          <ul className="divide-y divide-base-300/60 sm:hidden">
             {backups.map((b) => (
               <li key={b.filename} className="space-y-3 p-4">
                 <div>
-                  <div className="break-all font-mono text-sm font-medium text-lime-400">{b.filename}</div>
-                  <div className="mt-1 text-xs text-stone-400">
-                    {formatDate(new Date(b.createdAt).getTime())} · <span className="font-mono text-stone-300">{formatBytes(b.sizeBytes)}</span>
+                  <div className="break-all font-mono text-sm font-medium text-primary">{b.filename}</div>
+                  <div className="mt-1 text-xs text-base-content/70">
+                    {formatDate(new Date(b.createdAt).getTime())} · <span className="font-mono text-base-content">{formatBytes(b.sizeBytes)}</span>
                   </div>
                 </div>
                 <dl className="grid grid-cols-2 gap-2 text-xs">
                   <div>
-                    <dt className="text-stone-500">Meetings</dt>
-                    <dd className="font-mono text-stone-200">{b.manifest?.stats.meetingCount ?? "—"}</dd>
+                    <dt className="text-base-content/50">Meetings</dt>
+                    <dd className="font-mono text-base-content">{b.manifest?.stats.meetingCount ?? "—"}</dd>
                   </div>
                   <div>
-                    <dt className="text-stone-500">Audio</dt>
-                    <dd className="font-mono text-stone-200">{b.manifest?.stats.audioFilesCount ?? "—"} files</dd>
+                    <dt className="text-base-content/50">Audio</dt>
+                    <dd className="font-mono text-base-content">{b.manifest?.stats.audioFilesCount ?? "—"} files</dd>
                   </div>
                 </dl>
                 <div className="flex flex-wrap gap-2">{backupActions(b)}</div>
@@ -6977,43 +6982,43 @@ export function BackupRestoreView({ onRestoreComplete }: { onRestoreComplete: ()
 
       {/* Confirmation Modal for Restore */}
       {confirmRestoreTarget && (
-        <div className="fixed inset-0 z-50 flex max-h-[100dvh] items-center justify-center overflow-y-auto bg-stone-950/80 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="Confirm system restore">
-          <div className="my-auto w-full max-w-lg rounded-2xl border border-amber-500/40 bg-stone-900 p-6 shadow-2xl space-y-4">
-            <div className="flex items-center gap-3 text-amber-400">
+        <div className="fixed inset-0 z-50 flex max-h-[100dvh] items-center justify-center overflow-y-auto bg-base-100/80 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="Confirm system restore">
+          <div className="my-auto w-full max-w-lg rounded-2xl border border-warning/40 bg-base-200 p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-warning">
               <span className="text-2xl">⚠️</span>
-              <h3 className="text-lg font-bold text-stone-100">Confirm System Restore</h3>
+              <h3 className="text-lg font-bold text-base-content">Confirm System Restore</h3>
             </div>
 
-            <p className="text-sm text-stone-300 leading-relaxed">
-              Restoring from <strong className="text-amber-300 font-mono">{confirmRestoreTarget.filename}</strong> will overwrite current meetings, audio recordings, transcripts, summaries, and configuration with the contents of this archive.
+            <p className="text-sm text-base-content leading-relaxed">
+              Restoring from <strong className="text-warning font-mono">{confirmRestoreTarget.filename}</strong> will overwrite current meetings, audio recordings, transcripts, summaries, and configuration with the contents of this archive.
             </p>
 
-            <div className="rounded-xl border border-stone-800 bg-stone-950 p-4 space-y-1.5 text-xs text-stone-400">
+            <div className="rounded-xl border border-base-300 bg-base-100 p-4 space-y-1.5 text-xs text-base-content/70">
               <div className="flex justify-between">
                 <span>Source Archive:</span>
-                <span className="font-mono text-stone-200">{confirmRestoreTarget.filename}</span>
+                <span className="font-mono text-base-content">{confirmRestoreTarget.filename}</span>
               </div>
               {confirmRestoreTarget.stats?.sizeBytes && (
                 <div className="flex justify-between">
                   <span>Archive Size:</span>
-                  <span className="font-mono text-stone-200">{formatBytes(confirmRestoreTarget.stats.sizeBytes)}</span>
+                  <span className="font-mono text-base-content">{formatBytes(confirmRestoreTarget.stats.sizeBytes)}</span>
                 </div>
               )}
               {confirmRestoreTarget.stats?.meetings ? (
                 <div className="flex justify-between">
                   <span>Meetings included:</span>
-                  <span className="font-mono text-stone-200">{confirmRestoreTarget.stats.meetings}</span>
+                  <span className="font-mono text-base-content">{confirmRestoreTarget.stats.meetings}</span>
                 </div>
               ) : null}
               {confirmRestoreTarget.stats?.audioFiles ? (
                 <div className="flex justify-between">
                   <span>Audio recordings included:</span>
-                  <span className="font-mono text-stone-200">{confirmRestoreTarget.stats.audioFiles}</span>
+                  <span className="font-mono text-base-content">{confirmRestoreTarget.stats.audioFiles}</span>
                 </div>
               ) : null}
             </div>
 
-            <p className="text-xs text-stone-500">
+            <p className="text-xs text-base-content/50">
               Note: An automatic rollback snapshot will be created in temporary storage before file replacement in case of unexpected errors.
             </p>
 
@@ -7022,7 +7027,7 @@ export function BackupRestoreView({ onRestoreComplete }: { onRestoreComplete: ()
                 type="button"
                 onClick={() => setConfirmRestoreTarget(null)}
                 disabled={restoring}
-                className="rounded-lg border border-stone-700 px-4 py-2 text-xs font-medium text-stone-300 hover:bg-stone-800 transition"
+                className="btn btn-sm min-h-11"
               >
                 Cancel
               </button>
@@ -7030,7 +7035,7 @@ export function BackupRestoreView({ onRestoreComplete }: { onRestoreComplete: ()
                 type="button"
                 onClick={() => void handleExecuteRestore()}
                 disabled={restoring}
-                className="inline-flex items-center gap-2 rounded-lg bg-amber-400 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-amber-300 disabled:opacity-50 shadow"
+                className="btn btn-warning btn-sm inline-flex items-center gap-2 font-bold shadow min-h-11"
               >
                 {restoring ? "Restoring System…" : "Yes, Restore System"}
               </button>
@@ -7147,31 +7152,25 @@ function DebugQueuesPage() {
   const queuedTranscriptionCount = allTranscriptionEntries.length - activeTranscriptionEntries.length;
 
   return (
-    <div className="min-h-screen bg-stone-950 text-stone-100 p-6 font-sans">
+    <div className="min-h-screen bg-base-100 text-base-content p-6 font-sans">
       <div className="max-w-7xl mx-auto space-y-6">
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-stone-800 pb-4">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-base-300 pb-4">
           <div>
             <div className="flex items-center gap-3">
-              <h1 className="text-xl font-bold tracking-tight text-stone-100 font-mono">
+              <h1 className="text-xl font-bold tracking-tight font-mono">
                 /debug · DBOS Stage Queues
               </h1>
               <span
-                className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                  paused
-                    ? "bg-stone-800 text-stone-400"
-                    : "bg-emerald-950/80 text-emerald-300 border border-emerald-800/60"
-                }`}
+                className={`badge badge-sm gap-1.5 font-medium ${paused ? "badge-neutral" : "badge-success badge-soft"}}`}
               >
                 <span
-                  className={`h-1.5 w-1.5 rounded-full ${
-                    paused ? "bg-stone-500" : "bg-emerald-400 animate-pulse"
-                  }`}
+                  className={`status status-xs ${paused ? "status-neutral" : "status-success animate-pulse"}}`}
                 />
                 {paused ? "Paused" : "Live (1.5s)"}
               </span>
             </div>
             {snapshot && (
-              <p className="text-xs text-stone-400 font-mono mt-1">
+              <p className="text-xs text-base-content/50 font-mono mt-1">
                 DB: {snapshot.dbosDatabaseUrl} · Updated{" "}
                 {new Date(snapshot.timestamp).toLocaleTimeString()}
               </p>
@@ -7181,21 +7180,21 @@ function DebugQueuesPage() {
           <div className="flex items-center gap-2">
             <a
               href="/"
-              className="rounded-lg border border-stone-800 bg-stone-900 px-3 py-1.5 text-xs font-medium text-stone-300 hover:bg-stone-800 transition"
+              className="btn btn-sm min-h-11"
             >
               ← Back to Olive
             </a>
             <button
               type="button"
               onClick={() => setPaused((p) => !p)}
-              className="rounded-lg border border-stone-700 bg-stone-900 px-3 py-1.5 text-xs font-medium text-stone-200 hover:bg-stone-800 transition"
+              className="btn btn-sm min-h-11"
             >
               {paused ? "Resume Polling" : "Pause Polling"}
             </button>
             <button
               type="button"
               onClick={() => void fetchSnapshot()}
-              className="rounded-lg bg-amber-400 px-3 py-1.5 text-xs font-semibold text-stone-950 hover:bg-amber-300 transition"
+              className="btn btn-warning btn-sm min-h-11"
             >
               Refresh Now
             </button>
@@ -7203,47 +7202,43 @@ function DebugQueuesPage() {
         </div>
 
         {error && (
-          <div className="rounded-xl border border-red-800/70 bg-red-950/40 p-4 text-xs text-red-200 font-mono">
+          <div className="alert alert-soft alert-error p-4 text-xs font-mono">
             Error loading queue state: {error}
           </div>
         )}
 
         {loading && !snapshot ? (
-          <div className="text-sm text-stone-400 font-mono">Loading DBOS queue state…</div>
+          <div className="text-sm text-base-content/50 font-mono">Loading DBOS queue state…</div>
         ) : null}
 
         {snapshot && (
           <>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <div className="rounded-xl border border-stone-800 bg-stone-900/70 p-4">
-                <div className="text-xs text-stone-400">Stage Queues</div>
-                <div className="text-2xl font-bold font-mono text-stone-100 mt-1">
+              <div className="stat rounded-box border border-base-300 bg-base-200 p-4">
+                <div className="stat-title">Stage Queues</div>
+                <div className="stat-value font-mono mt-1">
                   {snapshot.summary.totalQueues}
                 </div>
               </div>
-              <div className="rounded-xl border border-stone-800 bg-stone-900/70 p-4">
-                <div className="text-xs text-stone-400">Active Stage Jobs</div>
+              <div className="stat rounded-box border border-base-300 bg-base-200 p-4">
+                <div className="stat-title">Active Stage Jobs</div>
                 <div
-                  className={`text-2xl font-bold font-mono mt-1 ${
-                    snapshot.summary.totalActiveJobs > 0 ? "text-amber-300" : "text-stone-100"
-                  }`}
+                  className={`stat-value font-mono mt-1 ${snapshot.summary.totalActiveJobs > 0 ? "text-warning" : ""}`}
                 >
                   {snapshot.summary.totalActiveJobs}
                 </div>
               </div>
-              <div className="rounded-xl border border-stone-800 bg-stone-900/70 p-4">
-                <div className="text-xs text-stone-400">Waiting in Queues</div>
+              <div className="stat rounded-box border border-base-300 bg-base-200 p-4">
+                <div className="stat-title">Waiting in Queues</div>
                 <div
-                  className={`text-2xl font-bold font-mono mt-1 ${
-                    snapshot.summary.totalWaitingJobs > 0 ? "text-sky-300" : "text-stone-100"
-                  }`}
+                  className={`stat-value font-mono mt-1 ${snapshot.summary.totalWaitingJobs > 0 ? "text-info" : ""}`}
                 >
                   {snapshot.summary.totalWaitingJobs}
                 </div>
               </div>
-              <div className="rounded-xl border border-stone-800 bg-stone-900/70 p-4">
-                <div className="text-xs text-stone-400">Active Parent Workflows</div>
-                <div className="text-2xl font-bold font-mono text-stone-100 mt-1">
+              <div className="stat rounded-box border border-base-300 bg-base-200 p-4">
+                <div className="stat-title">Active Parent Workflows</div>
+                <div className="stat-value font-mono mt-1">
                   {snapshot.summary.activeParentWorkflows}
                 </div>
               </div>
@@ -7252,13 +7247,13 @@ function DebugQueuesPage() {
             {(activeTranscriptionEntries.length > 0 ||
               queuedTranscriptionCount > 0 ||
               snapshot.runningStageRuns.length > 0) && (
-              <div className="rounded-xl border border-amber-500/30 bg-amber-950/10 p-4 space-y-3">
+              <div className="rounded-box border border-warning/30 bg-warning/5 p-4 space-y-3">
                 <div className="flex items-center justify-between gap-2">
-                  <h2 className="text-xs font-semibold uppercase tracking-wider text-amber-300">
+                  <h2 className="text-xs font-semibold uppercase tracking-wider text-warning">
                     Live Pipeline Activity
                   </h2>
                   {queuedTranscriptionCount > 0 && (
-                    <span className="rounded-full bg-sky-950/80 border border-sky-800/60 px-2.5 py-0.5 text-[11px] font-mono text-sky-300">
+                    <span className="badge badge-sm badge-info badge-soft font-mono">
                       +{queuedTranscriptionCount} queued in pipeline
                     </span>
                   )}
@@ -7266,16 +7261,16 @@ function DebugQueuesPage() {
                 {activeTranscriptionEntries.map(([mid, prog]) => (
                   <div
                     key={mid}
-                    className="rounded-lg border border-stone-800 bg-stone-900/90 p-3 flex flex-wrap items-center justify-between gap-3 text-xs"
+                    className="rounded-lg border border-base-300 bg-base-200/90 p-3 flex flex-wrap items-center justify-between gap-3 text-xs"
                   >
                     <div className="space-y-0.5">
-                      <div className="font-mono text-stone-200">
-                        Meeting <span className="text-amber-300">{mid}</span> · Stage{" "}
-                        <span className="font-semibold text-stone-100">{prog.stage}</span>
+                      <div className="font-mono text-base-content">
+                        Meeting <span className="text-warning">{mid}</span> · Stage{" "}
+                        <span className="font-semibold text-base-content">{prog.stage}</span>
                       </div>
-                      <div className="text-stone-400">{prog.message}</div>
+                      <div className="text-base-content/70">{prog.message}</div>
                     </div>
-                    <div className="font-mono text-sm font-bold text-amber-300">
+                    <div className="font-mono text-sm font-bold text-warning">
                       {Math.round(prog.percent ?? 0)}%
                     </div>
                   </div>
@@ -7285,16 +7280,16 @@ function DebugQueuesPage() {
                     {snapshot.runningStageRuns.map((sr) => (
                       <div
                         key={sr.id}
-                        className="rounded-lg border border-stone-800 bg-stone-900/70 px-3 py-2 flex items-center justify-between text-xs font-mono"
+                        className="rounded-lg border border-base-300 bg-base-200/70 px-3 py-2 flex items-center justify-between text-xs font-mono"
                       >
                         <div className="truncate">
-                          <span className="text-amber-300">{sr.stage}</span> ·{" "}
-                          <span className="text-stone-200">
+                          <span className="text-warning">{sr.stage}</span> ·{" "}
+                          <span className="text-base-content">
                             {sr.meetingTitle || sr.meetingId}
                           </span>{" "}
-                          <span className="text-stone-500">({sr.jobId || sr.id.slice(0, 8)})</span>
+                          <span className="text-base-content/50">({sr.jobId || sr.id.slice(0, 8)})</span>
                         </div>
-                        <span className="text-stone-400 ml-2 shrink-0">
+                        <span className="text-base-content/70 ml-2 shrink-0">
                           {formatDurationCompact(sr.elapsedMs)}
                         </span>
                       </div>
@@ -7311,73 +7306,73 @@ function DebugQueuesPage() {
                 return (
                   <div
                     key={q.name}
-                    className={`rounded-xl border p-4 space-y-3 ${
+                    className={`card card-border bg-base-200 p-4 space-y-3 ${
                       isBusy
-                        ? "border-amber-500/50 bg-stone-900/90"
+                        ? "border-warning/50"
                         : hasWaiting
-                        ? "border-sky-500/40 bg-stone-900/80"
-                        : "border-stone-800 bg-stone-900/50"
+                        ? "border-info/40"
+                        : "border-base-300"
                     }`}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2.5">
-                        <span className="font-mono text-sm font-bold text-stone-100">
+                        <span className="font-mono text-sm font-bold text-base-content">
                           {q.name}
                         </span>
                         <span
-                          className={`rounded px-2 py-0.5 text-[11px] font-mono font-semibold ${
+                          className={`badge badge-sm font-mono font-semibold ${
                             isBusy
-                              ? "bg-amber-400/20 text-amber-300 border border-amber-400/30"
+                              ? "badge-warning"
                               : hasWaiting
-                              ? "bg-sky-400/20 text-sky-300 border border-sky-400/30"
-                              : "bg-stone-800 text-stone-400"
+                              ? "badge-info badge-soft"
+                              : "badge-neutral"
                           }`}
                         >
                           {isBusy ? "ACTIVE" : hasWaiting ? "QUEUED" : "IDLE"}
                         </span>
                       </div>
-                      <div className="flex items-center gap-3 text-xs font-mono text-stone-400">
+                      <div className="flex items-center gap-3 text-xs font-mono text-base-content/70">
                         <span>
-                          Workers: <strong className="text-stone-200">{q.activeCount}</strong>/
+                          Workers: <strong className="text-base-content">{q.activeCount}</strong>/
                           {q.workerConcurrency}
                         </span>
                         <span>
-                          Depth: <strong className="text-stone-200">{q.waitingCount}</strong>
+                          Depth: <strong className="text-base-content">{q.waitingCount}</strong>
                         </span>
                       </div>
                     </div>
 
                     <div className="space-y-1.5">
-                      <div className="text-[11px] font-semibold uppercase tracking-wider text-stone-400">
+                      <div className="text-[11px] font-semibold uppercase tracking-wider text-base-content/70">
                         Currently Active ({q.activeJobs.length})
                       </div>
                       {q.activeJobs.length === 0 ? (
-                        <div className="rounded-lg border border-stone-800/70 bg-stone-950/50 px-3 py-2 text-xs text-stone-500 font-mono">
+                        <div className="rounded-lg border border-base-300/70 bg-base-100/50 px-3 py-2 text-xs text-base-content/50 font-mono">
                           No active job
                         </div>
                       ) : (
                         q.activeJobs.map((job) => (
                           <div
                             key={job.workflowId}
-                            className="rounded-lg border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-xs font-mono space-y-1"
+                            className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs font-mono space-y-1"
                           >
                             <div className="flex items-center justify-between gap-2">
-                              <span className="font-semibold text-amber-200">{job.name}</span>
-                              <span className="text-amber-300">
+                              <span className="font-semibold text-warning">{job.name}</span>
+                              <span className="text-warning">
                                 {formatDurationCompact(job.elapsedMs)}
                               </span>
                             </div>
-                            <div className="text-stone-300 truncate">
-                              ID: <span className="text-stone-400">{job.workflowId}</span>
+                            <div className="text-base-content truncate">
+                              ID: <span className="text-base-content/70">{job.workflowId}</span>
                             </div>
                             {(job.meetingTitle || job.meetingId) && (
-                              <div className="text-stone-300 truncate">
+                              <div className="text-base-content truncate">
                                 Meeting:{" "}
-                                <span className="text-stone-100">
+                                <span className="text-base-content">
                                   {job.meetingTitle || job.meetingId}
                                 </span>
                                 {job.meetingTitle && job.meetingId ? (
-                                  <span className="text-stone-500"> ({job.meetingId})</span>
+                                  <span className="text-base-content/50"> ({job.meetingId})</span>
                                 ) : null}
                               </div>
                             )}
@@ -7388,14 +7383,14 @@ function DebugQueuesPage() {
                               if (!prog) return null;
                               return (
                                 <div className="space-y-0.5 pt-0.5">
-                                  <div className="text-amber-300">
-                                    Stage: <span className="text-stone-100">{prog.stage}</span> · {Math.round(prog.percent ?? 0)}%
+                                  <div className="text-warning">
+                                    Stage: <span className="text-base-content">{prog.stage}</span> · {Math.round(prog.percent ?? 0)}%
                                     {prog.current != null && prog.total != null
                                       ? ` · batch ${prog.current}/${prog.total}`
                                       : ""}
                                   </div>
                                   {prog.message && (
-                                    <div className="text-stone-400">{prog.message}</div>
+                                    <div className="text-base-content/70">{prog.message}</div>
                                   )}
                                 </div>
                               );
@@ -7406,11 +7401,11 @@ function DebugQueuesPage() {
                     </div>
 
                     <div className="space-y-1.5">
-                      <div className="text-[11px] font-semibold uppercase tracking-wider text-stone-400">
+                      <div className="text-[11px] font-semibold uppercase tracking-wider text-base-content/70">
                         Waiting Queue ({q.waitingJobs.length})
                       </div>
                       {q.waitingJobs.length === 0 ? (
-                        <div className="rounded-lg border border-stone-800/70 bg-stone-950/50 px-3 py-2 text-xs text-stone-500 font-mono">
+                        <div className="rounded-lg border border-base-300/70 bg-base-100/50 px-3 py-2 text-xs text-base-content/50 font-mono">
                           Queue empty
                         </div>
                       ) : (
@@ -7418,22 +7413,22 @@ function DebugQueuesPage() {
                           {q.waitingJobs.map((job) => (
                             <div
                               key={job.workflowId}
-                              className="rounded-lg border border-sky-500/30 bg-sky-950/20 px-3 py-2 text-xs font-mono space-y-1"
+                              className="rounded-lg border border-info/30 bg-info/20 px-3 py-2 text-xs font-mono space-y-1"
                             >
                               <div className="flex items-center justify-between gap-2">
                                 <span>
-                                  <span className="text-sky-300 font-bold">
+                                  <span className="text-info font-bold">
                                     #{job.queuePosition}
                                   </span>{" "}
-                                  <span className="text-stone-100 font-semibold">{job.name}</span>
+                                  <span className="text-base-content font-semibold">{job.name}</span>
                                 </span>
-                                <span className="text-stone-400">
+                                <span className="text-base-content/70">
                                   wait {formatDurationCompact(job.waitingMs)}
                                 </span>
                               </div>
-                              <div className="text-stone-400 truncate">ID: {job.workflowId}</div>
+                              <div className="text-base-content/70 truncate">ID: {job.workflowId}</div>
                               {(job.meetingTitle || job.meetingId) && (
-                                <div className="text-stone-300 truncate">
+                                <div className="text-base-content truncate">
                                   Meeting: {job.meetingTitle || job.meetingId}
                                 </div>
                               )}
@@ -7445,37 +7440,37 @@ function DebugQueuesPage() {
 
                     {q.recentJobs.length > 0 && (
                       <details className="group pt-1">
-                        <summary className="cursor-pointer text-[11px] font-mono text-stone-400 hover:text-stone-200 select-none">
+                        <summary className="cursor-pointer text-[11px] font-mono text-base-content/70 hover:text-base-content select-none">
                           Recent jobs ({q.recentJobs.length})
                         </summary>
                         <div className="mt-2 space-y-1 max-h-40 overflow-y-auto">
                           {q.recentJobs.map((job) => (
                             <div
                               key={job.workflowId}
-                              className="rounded border border-stone-800 bg-stone-950/80 px-2.5 py-1.5 text-[11px] font-mono flex items-center justify-between gap-2"
+                              className="rounded border border-base-300 bg-base-100/80 px-2.5 py-1.5 text-[11px] font-mono flex items-center justify-between gap-2"
                             >
                               <div className="truncate">
                                 <span
                                   className={`mr-2 ${
                                     job.status === "SUCCESS"
-                                      ? "text-emerald-400"
+                                      ? "text-success"
                                       : job.status === "CANCELLED"
-                                      ? "text-stone-400"
-                                      : "text-red-400"
+                                      ? "text-base-content/70"
+                                      : "text-error"
                                   }`}
                                 >
                                   {job.status}
                                 </span>
-                                <span className="text-stone-200">{job.name}</span>
+                                <span className="text-base-content">{job.name}</span>
                                 {job.meetingTitle || job.meetingId ? (
-                                  <span className="text-stone-400">
+                                  <span className="text-base-content/70">
                                     {" "}
                                     · {job.meetingTitle || job.meetingId}
                                   </span>
                                 ) : null}
-                                <span className="text-stone-500"> ({job.workflowId})</span>
+                                <span className="text-base-content/50"> ({job.workflowId})</span>
                               </div>
-                              <span className="text-stone-400 shrink-0">
+                              <span className="text-base-content/70 shrink-0">
                                 {formatDurationCompact(job.elapsedMs)}
                               </span>
                             </div>
@@ -7499,5 +7494,10 @@ const isDebugRoute =
   (window.location.pathname === "/debug" || window.location.pathname.startsWith("/debug/"));
 
 createRoot(document.getElementById("root")!).render(
-  <StrictMode>{isDebugRoute ? <DebugQueuesPage /> : <App />}</StrictMode>
+  <StrictMode>
+    <ToastProvider>
+      <ConfirmHostRoot />
+      {isDebugRoute ? <DebugQueuesPage /> : <App />}
+    </ToastProvider>
+  </StrictMode>
 );
