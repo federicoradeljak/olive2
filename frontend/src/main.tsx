@@ -1816,6 +1816,7 @@ function MeetingDetailView({
   const [audioRetryNotice, setAudioRetryNotice] = useState<string | null>(null);
   const [audioDurationMs, setAudioDurationMs] = useState<number | null>(null);
   const [splitMs, setSplitMs] = useState<number | null>(null);
+  const [showSplitCard, setShowSplitCard] = useState(false);
   const [showSplitConfirm, setShowSplitConfirm] = useState(false);
   const [splittingMeeting, setSplittingMeeting] = useState(false);
   const [splitResult, setSplitResult] = useState<{ newMeetingId: string; newTitle: string } | null>(null);
@@ -1842,11 +1843,18 @@ function MeetingDetailView({
 
   const splitTotalMs =
     audioDurationMs ?? detail?.recordings[0]?.durationMs ?? null;
+  const SPLIT_EDGE_MS = 5000;
   const splitValid =
     splitMs !== null &&
     splitTotalMs !== null &&
-    splitMs >= 5000 &&
-    splitMs <= splitTotalMs - 5000;
+    splitMs >= SPLIT_EDGE_MS &&
+    splitMs <= splitTotalMs - SPLIT_EDGE_MS;
+  const splitAllowedAt = (ms: number) =>
+    splitTotalMs === null || (ms >= SPLIT_EDGE_MS && ms <= splitTotalMs - SPLIT_EDGE_MS);
+  const clampSplitMs = (ms: number) =>
+    splitTotalMs === null
+      ? ms
+      : Math.min(Math.max(ms, SPLIT_EDGE_MS), splitTotalMs - SPLIT_EDGE_MS);
 
   const confirmSplitMeeting = async () => {
     if (splitMs === null || splittingMeeting) return;
@@ -1865,6 +1873,7 @@ function MeetingDetailView({
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       if (!data.newMeeting) throw new Error("Split returned no new meeting");
       setShowSplitConfirm(false);
+      setShowSplitCard(false);
       setSplitMs(null);
       setSplitResult({ newMeetingId: data.newMeeting.id, newTitle: data.newMeeting.title });
       await fetchDetail();
@@ -3027,6 +3036,7 @@ function MeetingDetailView({
                   )}
                 </div>
 
+                <div className="flex items-center gap-2 shrink-0">
                 {/* Voice Clarity Enhancement Toggle */}
                 <button
                   type="button"
@@ -3050,6 +3060,27 @@ function MeetingDetailView({
                 >
                   <span>{enhancedAudio ? "✨ Voice Enhanced (Active)" : "🔉 Original Raw Audio"}</span>
                 </button>
+                {splitTotalMs !== null && splitTotalMs > 15000 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!showSplitCard && splitMs === null) {
+                        const secs = audioRef.current?.currentTime;
+                        if (secs && Number.isFinite(secs)) setSplitMs(clampSplitMs(Math.round(secs * 1000)));
+                      }
+                      setShowSplitCard(!showSplitCard);
+                    }}
+                    className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition shrink-0 ${
+                      showSplitCard
+                        ? "border-lime-400/40 bg-lime-400/10 text-lime-300 hover:bg-lime-400/20"
+                        : "border-stone-700 bg-stone-800 text-stone-400 hover:text-stone-200"
+                    }`}
+                    title="Cut this meeting in two at a chosen point"
+                  >
+                    <span>✂ Split Meeting</span>
+                  </button>
+                )}
+                </div>
               </div>
               {splitResult && (
                 <div className="flex flex-wrap items-center gap-2 rounded-lg border border-lime-500/40 bg-lime-500/10 px-3 py-2 text-xs text-lime-200">
@@ -3100,7 +3131,7 @@ function MeetingDetailView({
                 }}
               />
               </div>
-              {splitTotalMs !== null && splitTotalMs > 15000 && (
+              {showSplitCard && splitTotalMs !== null && splitTotalMs > 15000 && (
                 <div className="space-y-2 rounded-lg border border-stone-800 bg-stone-950/60 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                     <span className="font-semibold uppercase tracking-wider text-stone-400">✂ Split meeting</span>
@@ -3108,7 +3139,7 @@ function MeetingDetailView({
                       type="button"
                       onClick={() => {
                         const secs = audioRef.current?.currentTime;
-                        if (secs && Number.isFinite(secs)) setSplitMs(Math.round(secs * 1000));
+                        if (secs && Number.isFinite(secs)) setSplitMs(clampSplitMs(Math.round(secs * 1000)));
                       }}
                       className="text-stone-400 hover:text-lime-300"
                       title="Set the split point to the current playback position"
@@ -3118,11 +3149,11 @@ function MeetingDetailView({
                   </div>
                   <input
                     type="range"
-                    min={0}
-                    max={Math.floor(splitTotalMs / 1000)}
+                    min={Math.floor(SPLIT_EDGE_MS / 1000)}
+                    max={Math.floor((splitTotalMs - SPLIT_EDGE_MS) / 1000)}
                     step={1}
-                    value={splitMs !== null ? Math.floor(splitMs / 1000) : 0}
-                    onChange={(e) => setSplitMs(Number(e.target.value) * 1000)}
+                    value={splitMs !== null ? Math.floor(clampSplitMs(splitMs) / 1000) : Math.floor(SPLIT_EDGE_MS / 1000)}
+                    onChange={(e) => setSplitMs(clampSplitMs(Number(e.target.value) * 1000))}
                     aria-label="Split point in seconds"
                     className="w-full accent-lime-400"
                   />
@@ -3383,8 +3414,8 @@ function MeetingDetailView({
               <div className="space-y-3 sm:space-y-4 rounded-xl border border-stone-800 bg-stone-900/60 p-3 sm:p-6 w-full max-w-full min-w-0">
                 {parsedTranscriptSegments.map((seg, idx) => (
                   <Fragment key={idx}>
-                    {idx > 0 && (
-                      <div className="group/split flex items-center gap-2 opacity-60 hover:opacity-100 transition focus-within:opacity-100">
+                    {idx > 0 && splitAllowedAt(seg.startMs) && (
+                      <div className="flex items-center gap-2 py-1 opacity-0 hover:opacity-100 focus-within:opacity-100 transition">
                         <div className="h-px flex-1 bg-stone-800" />
                         <button
                           type="button"
