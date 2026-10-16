@@ -3057,7 +3057,7 @@ function MeetingDetailView({
                   <span className="truncate">{detail.recordings[0].mime} • {(detail.recordings[0].sizeBytes / 1024 / 1024).toFixed(2)} MB</span>
                   {playingSegmentIndex !== null && (
                     <span className="inline-flex items-center gap-1.5 rounded bg-primary/20 px-2 py-0.5 text-[11px] font-semibold text-primary border border-primary/40 animate-pulse shrink-0">
-                      <span><Play className="h-4 w-4 shrink-0" aria-hidden="true" /> Playing turn #{playingSegmentIndex + 1}</span>
+                      <span className="inline-flex items-center gap-1.5"><Play className="h-4 w-4 shrink-0" aria-hidden="true" /> Playing turn #{playingSegmentIndex + 1}</span>
                     </span>
                   )}
                 </div>
@@ -3103,14 +3103,14 @@ function MeetingDetailView({
                     }`}
                     title="Cut this meeting in two at a chosen point"
                   >
-                    <span><Scissors className="h-4 w-4 shrink-0" aria-hidden="true" /> Split Meeting</span>
+                    <span className="inline-flex items-center gap-1.5"><Scissors className="h-4 w-4 shrink-0" aria-hidden="true" /> Split Meeting</span>
                   </button>
                 )}
                 </div>
               </div>
               {splitResult && (
                 <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-3 py-2 text-xs text-primary">
-                  <span><Check className="h-4 w-4 shrink-0" aria-hidden="true" /> Split complete — Part 2 created as “{splitResult.newTitle}”.</span>
+                  <span className="inline-flex items-center gap-1.5"><Check className="h-4 w-4 shrink-0" aria-hidden="true" /> Split complete — Part 2 created as “{splitResult.newTitle}”.</span>
                   <button
                     type="button"
                     onClick={() => window.location.assign(`/meetings/${splitResult.newMeetingId}`)}
@@ -3160,7 +3160,7 @@ function MeetingDetailView({
               {showSplitCard && splitTotalMs !== null && splitTotalMs > 15000 && (
                 <div className="space-y-2 rounded-lg border border-base-300 bg-base-100/60 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                    <span className="font-semibold uppercase tracking-wider text-base-content/70"><Scissors className="h-4 w-4 shrink-0" aria-hidden="true" /> Split meeting</span>
+                    <span className="inline-flex items-center gap-1.5 font-semibold uppercase tracking-wider text-base-content/70"><Scissors className="h-4 w-4 shrink-0" aria-hidden="true" /> Split meeting</span>
                     <button
                       type="button"
                       onClick={() => {
@@ -3444,7 +3444,7 @@ function MeetingDetailView({
                             setShowSplitConfirm(true);
                           }}
                           title={`Split meeting before this turn (${formatTimeOffset(seg.startMs)})`}
-                          className="rounded-full border border-base-300 bg-base-100 px-2.5 py-0.5 text-[11px] font-medium text-base-content/50 shadow-lg transition hover:border-primary/50 hover:text-primary"
+                          className="inline-flex items-center gap-1 rounded-full border border-base-300 bg-base-100 px-2.5 py-0.5 text-[11px] font-medium text-base-content/50 shadow-lg transition hover:border-primary/50 hover:text-primary"
                         >
                           <Scissors className="h-4 w-4 shrink-0" aria-hidden="true" /> Split meeting here · {formatTimeOffset(seg.startMs)}
                         </button>
@@ -4481,7 +4481,7 @@ function SplitSegmentModal({
   };
 
   return (
-    <Modal onClose={onClose} title={<><span><Scissors className="h-4 w-4 shrink-0" aria-hidden="true" /> Split Turn:</span> <span className="text-primary">{segment.speaker}</span></>} ariaLabel="Split turn" maxWidth="max-w-2xl">
+    <Modal onClose={onClose} title={<><span className="inline-flex items-center gap-1.5"><Scissors className="h-4 w-4 shrink-0" aria-hidden="true" /> Split Turn:</span> <span className="text-primary">{segment.speaker}</span></>} ariaLabel="Split turn" maxWidth="max-w-2xl">
       <p className="text-xs text-base-content/70">Click any word to choose where to split this turn into two separate segments.</p>
       <form onSubmit={handleSubmit} className="space-y-4">
         {/* Interactive Word Picker */}
