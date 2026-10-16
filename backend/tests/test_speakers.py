@@ -608,7 +608,7 @@ async def test_enforces_protected_anchor_and_diversity_cap_and_rebuild_profiles(
         assert res["voiceprintEnrolled"] is True
         assert res["voiceprintStatus"] == "enrolled"
 
-    upd_spk = (await service.get_speaker(initial_speaker["id"]))["speaker"]
+    upd_spk = (await service.get_speaker(initial_speaker["id"], {"includeVoiceprints": True}))["speaker"]
     assert len(upd_spk["enrollmentClipPaths"]) == 8
     assert upd_spk["enrollmentClipPaths"][0] == anchor_path
     clip1_path = upd_spk["enrollmentClipPaths"][1]
@@ -619,7 +619,7 @@ async def test_enforces_protected_anchor_and_diversity_cap_and_rebuild_profiles(
     assert res8["voiceprintEnrolled"] is True
     assert res8["voiceprintStatus"] == "enrolled_evicted"
 
-    upd_spk = (await service.get_speaker(initial_speaker["id"]))["speaker"]
+    upd_spk = (await service.get_speaker(initial_speaker["id"], {"includeVoiceprints": True}))["speaker"]
     assert len(upd_spk["enrollmentClipPaths"]) == 8
     assert upd_spk["enrollmentClipPaths"][0] == anchor_path
     assert clip1_path not in upd_spk["enrollmentClipPaths"]
@@ -981,7 +981,7 @@ async def test_adopt_trims_overlong_confirm_sample_to_12s(tmp_path: Path) -> Non
     assert "Trimmed" in (res["statusReason"] or "")
 
     # Saved clip on disk is the trimmed audio.
-    updated = await service.get_speaker(speaker["id"])
+    updated = await service.get_speaker(speaker["id"], {"includeVoiceprints": True})
     assert updated is not None
     clip_path = Path(config_dir) / updated["speaker"]["enrollmentClipPaths"][-1]
     assert clip_path.exists()

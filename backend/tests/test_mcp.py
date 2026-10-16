@@ -204,7 +204,76 @@ def test_mcp_calls_meeting_transcript_action_item_and_speaker_tools(tmp_path: Pa
         {"name": "list_meetings", "arguments": {"search": "MCP fixture"}},
     )
     assert list_body["result"].get("isError") is not True
-    assert json.loads(list_body["result"]["content"][0]["text"])["meetings"][0]["id"] == meeting_id
+    slim_meeting = json.loads(list_body["result"]["content"][0]["text"])["meetings"][0]
+    assert slim_meeting["id"] == meeting_id
+    assert set(slim_meeting.keys()) == {"id", "title", "startTime", "endTime", "source", "tags"}
+
+    _, full_body = _mcp_request(
+        client,
+        "tools/call",
+        {
+            "name": "list_meetings",
+            "arguments": {"search": "MCP fixture", "includeDetails": True},
+        },
+    )
+    full_meeting = json.loads(full_body["result"]["content"][0]["text"])["meetings"][0]
+    assert full_meeting["id"] == meeting_id
+    assert full_meeting["status"] == "ready"
+    assert "audioStatus" in full_meeting
+    assert "primaryTranscriptArtifactId" in full_meeting
+
+    _, detail_body = _mcp_request(
+        client,
+        "tools/call",
+        {"name": "get_meeting", "arguments": {"meetingId": meeting_id}},
+    )
+    detail = json.loads(detail_body["result"]["content"][0]["text"])
+    assert "launch plan" in (detail["transcriptContent"] or "")
+    assert detail["summaryContent"] is not None
+    assert len(detail["summaries"]) == 1
+    assert detail["summaries"][0]["content"]
+    # Meeting speakers default to vector-free summaries.
+    assert detail["speakers"][0]["name"] == "Matt"
+    assert detail["speakers"][0]["providerIds"] == {}
+
+    _, no_text_body = _mcp_request(
+        client,
+        "tools/call",
+        {
+            "name": "get_meeting",
+            "arguments": {
+                "meetingId": meeting_id,
+                "includeTranscript": False,
+                "includeSummaries": False,
+            },
+        },
+    )
+    slim_detail = json.loads(no_text_body["result"]["content"][0]["text"])
+    assert slim_detail["transcriptContent"] is None
+    assert slim_detail["summaryContent"] is None
+    assert slim_detail["summaries"] == []
+    assert slim_detail["meeting"]["id"] == meeting_id
+
+    _, slim_spk_body = _mcp_request(
+        client,
+        "tools/call",
+        {"name": "get_speaker_profile", "arguments": {"speakerId": speaker_id}},
+    )
+    slim_spk = json.loads(slim_spk_body["result"]["content"][0]["text"])
+    assert slim_spk["speaker"]["name"] == "Matt"
+    assert "providerIds" not in slim_spk["speaker"]
+    assert slim_spk["speaker"]["voiceprintCounts"] == {}
+
+    _, full_spk_body = _mcp_request(
+        client,
+        "tools/call",
+        {
+            "name": "get_speaker_profile",
+            "arguments": {"speakerId": speaker_id, "includeVoiceprints": True},
+        },
+    )
+    full_spk = json.loads(full_spk_body["result"]["content"][0]["text"])
+    assert "providerIds" in full_spk["speaker"]
 
     _, tr_body = _mcp_request(
         client,

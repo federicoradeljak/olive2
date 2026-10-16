@@ -55,6 +55,13 @@ def _numeric_query_param(value: str | None) -> int | None:
         return None
 
 
+def _bool_query_param(value: str | None, default: bool) -> bool:
+    """Parse an opt-out section flag (absent/blank → default)."""
+    if value is None or value == "":
+        return default
+    return value.strip().lower() in ("true", "1", "yes")
+
+
 def _is_loopback_host(hostname: str) -> bool:
     return hostname in ("127.0.0.1", "localhost", "::1")
 
@@ -564,6 +571,9 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                 "hasTranscript": q.get("hasTranscript"),
                 "startTime": _numeric_query_param(q.get("startTime")),
                 "endTime": _numeric_query_param(q.get("endTime")),
+                "includeDetails": q.get("includeDetails")
+                if q.get("includeDetails") is not None
+                else q.get("include_details"),
             },
             meetings_dir,
         )
@@ -656,8 +666,20 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             return JSONResponse({"error": str(exc)}, status_code=500)
 
     @app.get("/api/meetings/{meeting_id}")
-    async def get_meeting_detail_route(meeting_id: str) -> JSONResponse:
-        detail = get_meeting(db, meeting_id, meetings_dir)
+    async def get_meeting_detail_route(meeting_id: str, request: Request) -> JSONResponse:
+        q = request.query_params
+        detail = get_meeting(
+            db,
+            meeting_id,
+            meetings_dir,
+            {
+                # Full detail by default (the web UI renders transcript +
+                # summaries + enrolled-speaker state from this route).
+                "includeTranscript": _bool_query_param(q.get("includeTranscript"), True),
+                "includeSummaries": _bool_query_param(q.get("includeSummaries"), True),
+                "includeVoiceprints": _bool_query_param(q.get("includeVoiceprints"), True),
+            },
+        )
         if not detail:
             return JSONResponse({"error": "Meeting not found"}, status_code=404)
 
@@ -1527,12 +1549,23 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
 
     @app.get("/api/speakers")
     async def get_speakers_route() -> JSONResponse:
-        speakers = await _call_maybe_async(get_speaker_service(), ("list_speakers", "listSpeakers"))
+        # Full speaker payloads: the People view + assignment combobox read
+        # voiceprint lengths and clip counts off providerIds/enrollmentClipPaths.
+        speakers = await _call_maybe_async(
+            get_speaker_service(),
+            ("list_speakers", "listSpeakers"),
+            {"includeVoiceprints": True},
+        )
         return JSONResponse({"speakers": speakers})
 
     @app.get("/api/speakers/{speaker_id}")
     async def get_speaker_route(speaker_id: str) -> JSONResponse:
-        res = await _call_maybe_async(get_speaker_service(), ("get_speaker", "getSpeaker"), speaker_id)
+        res = await _call_maybe_async(
+            get_speaker_service(),
+            ("get_speaker", "getSpeaker"),
+            speaker_id,
+            {"includeVoiceprints": True},
+        )
         if not res:
             return JSONResponse({"error": "Speaker not found"}, status_code=404)
         return JSONResponse(res)

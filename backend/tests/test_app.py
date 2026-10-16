@@ -84,6 +84,22 @@ def test_serves_health_and_lists_meetings() -> None:
                 "startTime": now,
                 "endTime": now + 30_000,
                 "source": "upload",
+                "tags": ["test", "api"],
+            }
+        ],
+        "pagination": {"limit": 50, "offset": 0, "total": 1, "hasMore": False, "nextOffset": None},
+    }
+
+    full_res = client.get("/api/meetings?includeDetails=true")
+    assert full_res.status_code == 200
+    assert full_res.json() == {
+        "meetings": [
+            {
+                "id": "meeting-api-1",
+                "title": "API fixture",
+                "startTime": now,
+                "endTime": now + 30_000,
+                "source": "upload",
                 "status": "ready",
                 "tags": ["test", "api"],
                 "primaryTranscriptArtifactId": None,
