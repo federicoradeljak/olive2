@@ -28,8 +28,6 @@ from .meetings import update_meeting_title
 
 # Transcript characters sent to the LLM (head-truncated to bound cost/latency).
 AUTO_TITLE_MAX_INPUT_CHARS = 12_000
-# Small completion: a title needs only a few words.
-AUTO_TITLE_MAX_OUTPUT_TOKENS = 32
 # Default title format limits: single line, at most 80 chars, at least 3.
 AUTO_TITLE_MAX_LENGTH = 80
 AUTO_TITLE_MIN_LENGTH = 3
@@ -200,7 +198,6 @@ class TitleService:
                 "systemPrompt": AUTO_TITLE_SYSTEM_PROMPT,
                 "prompt": user_prompt,
                 "temperature": 0.3,
-                "maxTokens": AUTO_TITLE_MAX_OUTPUT_TOKENS,
             },
         )
         title = sanitize_generated_title(llm_result.text)

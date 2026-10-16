@@ -2218,7 +2218,6 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                     "apiKeyOverride": body.get("apiKey"),
                     "baseUrlOverride": body.get("baseUrl"),
                     "thinkingLevel": body.get("thinkingLevel"),
-                    "maxTokens": 50,
                 },
             )
             r_dict = res.model_dump() if hasattr(res, "model_dump") else res
