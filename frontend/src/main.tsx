@@ -3413,10 +3413,12 @@ function MeetingDetailView({
             {parsedTranscriptSegments.length > 0 ? (
               <div className="space-y-3 sm:space-y-4 rounded-xl border border-stone-800 bg-stone-900/60 p-3 sm:p-6 w-full max-w-full min-w-0">
                 {parsedTranscriptSegments.map((seg, idx) => (
-                  <Fragment key={idx}>
+                  <div
+                    key={idx}
+                    className="group relative rounded-xl border border-stone-800/70 bg-stone-900/40 p-3 sm:p-4 transition hover:border-stone-700 hover:bg-stone-900/80 space-y-2 w-full max-w-full min-w-0"
+                  >
                     {idx > 0 && splitAllowedAt(seg.startMs) && (
-                      <div className="flex items-center gap-2 py-1 opacity-0 hover:opacity-100 focus-within:opacity-100 transition">
-                        <div className="h-px flex-1 bg-stone-800" />
+                      <div className="absolute -top-3 left-0 right-0 z-10 flex justify-center opacity-0 transition group-hover:opacity-100 hover:opacity-100 focus-within:opacity-100">
                         <button
                           type="button"
                           onClick={() => {
@@ -3424,16 +3426,12 @@ function MeetingDetailView({
                             setShowSplitConfirm(true);
                           }}
                           title={`Split meeting before this turn (${formatTimeOffset(seg.startMs)})`}
-                          className="rounded-full border border-stone-700 bg-stone-900 px-2.5 py-1 text-[11px] font-medium text-stone-500 transition hover:border-lime-400/50 hover:text-lime-300"
+                          className="rounded-full border border-stone-700 bg-stone-950 px-2.5 py-0.5 text-[11px] font-medium text-stone-500 shadow-lg transition hover:border-lime-400/50 hover:text-lime-300"
                         >
                           ✂ Split meeting here · {formatTimeOffset(seg.startMs)}
                         </button>
-                        <div className="h-px flex-1 bg-stone-800" />
                       </div>
                     )}
-                  <div
-                    className="group rounded-xl border border-stone-800/70 bg-stone-900/40 p-3 sm:p-4 transition hover:border-stone-700 hover:bg-stone-900/80 space-y-2 w-full max-w-full min-w-0"
-                  >
                     {/* Header: Play/Timestamp + Speaker Badge + Action Buttons */}
                     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-800/50 pb-2">
                       <div className="flex flex-wrap items-center gap-2 min-w-0">
@@ -3484,7 +3482,6 @@ function MeetingDetailView({
                     {/* Turn Content */}
                     <p className="text-sm leading-relaxed text-stone-200 pl-0.5 break-words">{seg.text}</p>
                   </div>
-                  </Fragment>
                 ))}
               </div>
             ) : detail.transcriptContent ? (
