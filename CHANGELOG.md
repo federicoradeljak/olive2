@@ -8,6 +8,22 @@ day its changes merged (`## [YYYY-MM-DD]`), with entries grouped under
 `Added` / `Changed` / `Fixed` — pushing a tag publishes the image and turns
 every section newer than the previous tag into the GitHub release notes.
 
+## [2026-10-22]
+
+### Changed
+
+- **Auto-title no longer forces a temperature** — title generation now uses the configured model's default sampling instead of a hardcoded `temperature: 0.3`, so models and providers that reject a forced temperature no longer need a special case.
+
+### Added
+
+- **Merge meetings back together** — the inverse of splitting: select two or more meetings in the meetings list (Select → tick the clips → Merge) and they are joined into the earliest one in chronological order via `POST /api/meetings/merge { meetingIds }`. Audio is concatenated with ffmpeg (mixed formats are re-encoded), transcripts are stitched with timestamp offsets so no re-transcription is needed, tags and speaker links are unioned, stale summaries are dropped, and the source meetings are permanently deleted (including Plaud tombstones, so the poller won't re-import them). Also available to agents as the opt-in MCP write tool `merge_meetings { meetingIds, dryRun? }` (`OLIVE_MCP_WRITE=1`).
+
+### Fixed
+
+- **Checkbox rendered as an empty text box** — the "Set as primary summary for this meeting" option in the Generate AI Summary modal (and the "Set as default summary template" toggle in the summary-template editor) used the wrong style class, so the checkbox appeared as a stretched, empty input instead of a checked box.
+- **Split meeting controls wrapped oddly** — the scissors icon in the audio-player "Split Meeting" button, the split-panel header, the transcript hover "Split meeting here" chip, and the split-turn modal title now sit inline with their labels instead of stacking above them.
+- **Auto-title failing on reasoning models** — generating a meeting title no longer sends a 32-token output cap, so reasoning models that spend their budget on internal reasoning before emitting the title no longer fail with "LLM returned an unusable title". The LLM connection test (`POST /api/llm/test`) no longer caps output either.
+
 ## [2026-10-16]
 
 ### Changed
@@ -19,14 +35,10 @@ every section newer than the previous tag into the GitHub release notes.
 
 ### Added
 
-- **Merge meetings back together** — the inverse of splitting: select two or more meetings in the meetings list (Select → tick the clips → Merge) and they are joined into the earliest one in chronological order via `POST /api/meetings/merge { meetingIds }`. Audio is concatenated with ffmpeg (mixed formats are re-encoded), transcripts are stitched with timestamp offsets so no re-transcription is needed, tags and speaker links are unioned, stale summaries are dropped, and the source meetings are permanently deleted (including Plaud tombstones, so the poller won't re-import them). Also available to agents as the opt-in MCP write tool `merge_meetings { meetingIds, dryRun? }` (`OLIVE_MCP_WRITE=1`).
 - **Split meeting in two** — over-long recordings (meeting + forgotten commute) can be cut at any point via `POST /api/meetings/{id}/split { splitMs }`. The audio is cut with ffmpeg, every JSON transcript is divided on the same boundary and re-anchored (no re-transcription), summaries are discarded on both halves as stale, and the second half becomes a new "(Part 2)" meeting. In the app, drag the split slider under the audio player (or "Use current position"), or hover between transcript turns and hit "✂ Split meeting here", then confirm — delete the half you don't want afterwards. Also available to agents as the opt-in MCP write tool `split_meeting { meetingId, splitMs, expectedTitle?, dryRun? }` (`OLIVE_MCP_WRITE=1`).
 
 ### Fixed
 
-- **Checkbox rendered as an empty text box** — the "Set as primary summary for this meeting" option in the Generate AI Summary modal (and the "Set as default summary template" toggle in the summary-template editor) used the wrong style class, so the checkbox appeared as a stretched, empty input instead of a checked box.
-- **Split meeting controls wrapped oddly** — the scissors icon in the audio-player "Split Meeting" button, the split-panel header, the transcript hover "Split meeting here" chip, and the split-turn modal title now sit inline with their labels instead of stacking above them.
-- **Auto-title failing on reasoning models** — generating a meeting title no longer sends a 32-token output cap, so reasoning models that spend their budget on internal reasoning before emitting the title no longer fail with "LLM returned an unusable title". The LLM connection test (`POST /api/llm/test`) no longer caps output either.
 - **Split audio preview still played the full recording** — splitting a meeting rewrote the original audio but left the cached voice-enhanced file (`audio/{recordingId}.enhanced.mp3`) untouched, and the player defaults to the enhanced stream — so it kept showing the pre-split duration (e.g. 2:27:18 on a 24-minute half). Splitting now deletes the stale enhanced cache so it rebuilds from the cut audio, the audio endpoint rebuilds the cache whenever the source is newer than it, and the UI reloads the player and drops its cached duration after a split.
 - **Upload durations (`0m 0s`)** — `POST /api/ingest` now reads `durationMs` (or `duration`) off the multipart form and the server probes the audio with `ffprobe` when the client doesn't send one, so uploaded meetings get a real `end_time` and recording `duration_ms` instead of showing 0m 0s.
 - **Meetings list pagination** — the meetings page no longer dead-ends at the newest 50: it loads 100 at a time with infinite scroll (plus a Load more button and a "Showing X of Y" count), so large archives are fully browsable and searchable. `GET /api/meetings` and the MCP `list_meetings` / `search_transcripts` / `get_action_items` tools now return `pagination: { limit, offset, total, hasMore, nextOffset }` — follow `offset=nextOffset` while `hasMore` is true to page through everything.
