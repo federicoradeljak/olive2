@@ -5,7 +5,7 @@
       "test -f lefthook.yml && mise exec -- lefthook install",
       "if [ -f \"$PASEO_SOURCE_CHECKOUT_PATH/.env\" ] && [ ! -f .env ]; then cp \"$PASEO_SOURCE_CHECKOUT_PATH/.env\" .env; fi",
       "cd backend && uv sync --frozen",
-      "cd frontend && pnpm install --frozen-lockfile"
+      "cd frontend && mise exec -- pnpm install --frozen-lockfile"
     ],
     "servicePorts": {
       "portScript": "./scripts/paseo_port.py",
@@ -15,7 +15,7 @@
   "scripts": {
     "web": {
       "type": "service",
-      "command": "PORT=$PASEO_PORT python3 scripts/dev.py"
+      "command": "PORT=$PASEO_PORT mise exec -- python3 scripts/dev.py"
     },
     "dev:get:frp-url": {
       "type": "command",
@@ -27,15 +27,15 @@
     },
     "typecheck": {
       "type": "command",
-      "command": "cd backend && uv run ruff check src tests eval && uv run basedpyright && cd ../frontend && pnpm run typecheck"
+      "command": "cd backend && uv run ruff check src tests eval && uv run basedpyright && cd ../frontend && mise exec -- pnpm run typecheck"
     },
     "build": {
       "type": "command",
-      "command": "cd frontend && pnpm run build"
+      "command": "cd frontend && mise exec -- pnpm run build"
     },
     "generate:api": {
       "type": "command",
-      "command": "cd backend && uv run python -c \"import json; from olive.app import export_openapi_schema; open('openapi.json', 'w').write(json.dumps(export_openapi_schema(), indent=2) + '\\n')\" && cd ../frontend && pnpm run generate:api"
+      "command": "cd backend && uv run python -c \"import json; from olive.app import export_openapi_schema; open('openapi.json', 'w').write(json.dumps(export_openapi_schema(), indent=2) + '\\n')\" && cd ../frontend && mise exec -- pnpm run generate:api"
     },
     "deploy:staging": {
       "type": "command",

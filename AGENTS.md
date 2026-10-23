@@ -61,6 +61,17 @@ Olive is a two-part repository:
   - `python3 scripts/dev_config.py frp_url --hostname`
   - `python3 scripts/dev_config.py frp_url --file`
 
+## Paseo worktrees (`paseo.json`)
+
+Paseo runs `worktree.setup` entries and `scripts` commands in non-interactive `bash` (one shell per entry), inheriting the **daemon's** `PATH` — a frozen snapshot of an activated mise env from daemon start. It contains absolute install bins for globally-declared tools (`uv`, `node`, …), so those resolve fine; tools declared **only** in this repo's `mise.toml` (`pnpm`, `lefthook`) land in `~/.local/share/mise/installs` but never reach `PATH`. `mise install` installs them without touching `PATH`, and mise shims are not on the daemon `PATH` either — so bare `pnpm` fails with `pnpm: command not found`.
+
+Wrap every repo-only tool invocation in `mise exec --`, which resolves versions from `mise.toml` at exec time (needs the config trusted — setup line 1 runs `mise trust`):
+- setup entries: `cd frontend && mise exec -- pnpm install --frozen-lockfile`
+- scripts: `cd frontend && mise exec -- pnpm run build` / `... pnpm run typecheck` / `... pnpm run generate:api`
+- services: `PORT=$PASEO_PORT mise exec -- python3 scripts/dev.py` — the wrapper is load-bearing, because `scripts/dev.py` spawns a bare `pnpm exec vite` child that inherits the augmented `PATH`.
+
+This applies to any tool added to `mise.toml` later: the daemon `PATH` stays frozen until the daemon restarts, so either wrap it in `mise exec --` or restart the daemon after `mise install`. To confirm what a Paseo shell actually sees: `tr '\0' '\n' < /proc/<daemon-pid>/environ | grep '^PATH=' | tr ':' '\n'` (pid is in `~/.paseo/paseo.pid` as JSON).
+
 ## Git hooks
 
 Git hooks are managed with [lefthook](https://lefthook.dev) (`lefthook.yml` at repo root, binary via `mise.toml`). Contributors enable them with `mise install && lefthook install`. Active pre-commit jobs: backend `ruff` + `basedpyright`, frontend `pnpm run typecheck`, OpenAPI schema/TS-type regen (drift is auto-staged via `git add` — `stage_fixed` alone doesn't stage previously-unstaged files) — all gated to staged files via `glob`. Pre-push runs backend `pytest` when backend files changed.
