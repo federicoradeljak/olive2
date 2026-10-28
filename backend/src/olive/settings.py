@@ -113,6 +113,10 @@ class AppConfig(BaseModel):
     localAsrModel: str = Field(default=DEFAULT_LOCAL_ASR_MODEL)
     localClusteringThreshold: float = Field(default=0.50, ge=0.1, le=0.99)
     localSimilarityThreshold: float = Field(default=0.45, ge=0.1, le=0.99)
+    # ISO 639-1 codes; "" keeps the provider default (transcription) or the
+    # template's own language (summaries). Requests can still override them.
+    defaultTranscriptionLanguage: str = Field(default="")
+    defaultSummaryLanguage: str = Field(default="")
     primaryArtifactPreference: list[str] = Field(
         default_factory=lambda: ["speechmatics-with-named-speakers", "local", "plaud"]
     )
@@ -135,6 +139,13 @@ class AppConfig(BaseModel):
         if "qwen" in value.lower():
             return DEFAULT_LOCAL_ASR_MODEL
         return value
+
+    @field_validator("defaultTranscriptionLanguage", "defaultSummaryLanguage", mode="before")
+    @classmethod
+    def _normalize_language(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            return ""
+        return value.strip().lower()
 
     @field_validator("primaryArtifactPreference")
     @classmethod
