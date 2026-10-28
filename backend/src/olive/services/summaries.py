@@ -16,6 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from ..db import DbHandle, get_db
+from ..languages import language_name
 from ..layout import meeting_paths
 from ..logging_db import logger
 from ..schemas import LlmGenerateResult, SummaryGenerationStatus, Template
@@ -54,6 +55,7 @@ class SummaryService:
         meetings_dir: str | None = None,
         llm_service: LlmService | Any | None = None,
         template_service: TemplateService | None = None,
+        default_language: str | None = None,
     ) -> None:
         opts = options or {}
         raw_db = db or opts.get("db")
@@ -79,6 +81,11 @@ class SummaryService:
             or opts.get("template_service")
             or TemplateService(self.db)
         )
+        # Settings default; a per-request ``language`` always wins. Empty
+        # leaves the output language to the template.
+        self.default_language: str = str(
+            default_language or opts.get("defaultLanguage") or opts.get("default_language") or ""
+        )
         self._generation_statuses: dict[str, SummaryGenerationStatus] = {}
 
     def get_summary_generation_status(self, meeting_id: str) -> SummaryGenerationStatus | None:
@@ -86,6 +93,11 @@ class SummaryService:
         return status.model_copy() if status else None
 
     getSummaryGenerationStatus = get_summary_generation_status
+
+    def set_default_language(self, language: str | None) -> None:
+        self.default_language = str(language or "")
+
+    setDefaultLanguage = set_default_language
 
     async def start_summary_generation(self, options: dict[str, Any]) -> SummaryGenerationStatus:
         meeting_id = str(options.get("meetingId") or options.get("meeting_id") or "")
@@ -269,16 +281,24 @@ class SummaryService:
             "%b %d, %Y, %I:%M %p"
         )
 
+        raw_language = str(options.get("language") or self.default_language or "").strip()
+        language = language_name(raw_language) if raw_language else ""
+
         def replace_vars(s: str) -> str:
             return (
                 s.replace("{{title}}", meeting["title"])
                 .replace("{{date}}", date_formatted)
                 .replace("{{speakers}}", speaker_names)
+                .replace("{{language}}", language)
                 .replace("{{transcript}}", formatted_dialogue)
             )
 
         system_prompt = replace_vars(template.systemPrompt or "")
         user_prompt = replace_vars(template.userPrompt)
+        uses_language_var = "{{language}}" in f"{template.systemPrompt or ''}{template.userPrompt}"
+        if language and not uses_language_var:
+            instruction = f"Write the entire response in {language}."
+            system_prompt = f"{system_prompt}\n\n{instruction}" if system_prompt else instruction
 
         # 5. Stage run
         stage_run_id = str(uuid.uuid4())

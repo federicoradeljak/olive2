@@ -404,7 +404,11 @@ class _StubTranscription:
 
 
 class _StubSummary:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
     async def start_summary_generation(self, opts: dict[str, Any]) -> dict[str, Any]:
+        self.calls.append(opts)
         return {"meetingId": opts.get("meetingId"), "stage": "running"}
 
 
@@ -704,11 +708,12 @@ def test_update_start_time_auto_title_summarize(tmp_path: Path) -> None:
     handle = create_db(":memory:")
     meetings_dir = str(tmp_path / "meetings")
     _seed_meeting(handle.engine, meetings_dir, "m-st-1", "Time me", [])
+    summary_stub = _StubSummary()
     app = _write_app(
         tmp_path,
         handle.engine,
         titleService=_StubTitle(),
-        summaryService=_StubSummary(),
+        summaryService=summary_stub,
     )
     client = TestClient(app)
 
@@ -744,6 +749,8 @@ def test_update_start_time_auto_title_summarize(tmp_path: Path) -> None:
 
     sm = _parse_text(_call_tool(client, "summarize_meeting", {"meetingId": "m-st-1"}))
     assert sm["started"] is True
+    _call_tool(client, "summarize_meeting", {"meetingId": "m-st-1", "language": "es"})
+    assert [c.get("language") for c in summary_stub.calls] == [None, "es"]
     handle.engine.dispose()
 
 

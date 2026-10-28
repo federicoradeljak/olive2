@@ -116,3 +116,34 @@ def test_ingest_forwards_language_override_only_when_given(tmp_path) -> None:
     assert [o.get("language") for o in started] == ["pt", None]
     handle.engine.dispose()
     clear_app_config_cache()
+
+
+def test_summary_route_and_config_forward_language(tmp_path) -> None:
+    class _Summary:
+        default_language = ""
+
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        async def start_summary_generation(self, opts: dict[str, Any]) -> dict[str, Any]:
+            self.calls.append(opts)
+            return {"meetingId": opts["meetingId"], "stage": "running"}
+
+        def set_default_language(self, language: str) -> None:
+            self.default_language = language
+
+    double = _Summary()
+    clear_app_config_cache()
+    handle = create_db(":memory:")
+    client = TestClient(
+        create_app({"db": handle.engine, "configDir": str(tmp_path), "summaryService": double})
+    )
+
+    assert client.post("/api/meetings/m1/summarize", json={"language": "es"}).status_code == 202
+    assert client.post("/api/meetings/m1/summarize", json={}).status_code == 202
+    assert [c.get("language") for c in double.calls] == ["es", None]
+
+    assert client.post("/api/config", json={"defaultSummaryLanguage": "pt"}).status_code == 200
+    assert double.default_language == "pt"
+    handle.engine.dispose()
+    clear_app_config_cache()

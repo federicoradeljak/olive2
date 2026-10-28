@@ -584,7 +584,10 @@ MCP_WRITE_TOOLS_SPEC: list[dict[str, Any]] = [
                     "enum": ["local", "speechmatics", "assemblyai", "muse", "modal"],
                     "description": "Transcription engine (defaults to server default)",
                 },
-                "language": {"type": "string", "description": "BCP-47 language hint (e.g. en)"},
+                "language": {
+                    "type": "string",
+                    "description": "BCP-47 language hint (e.g. en); defaults to the configured default language",
+                },
                 "force": {
                     "type": "boolean",
                     "default": True,
@@ -639,7 +642,10 @@ MCP_WRITE_TOOLS_SPEC: list[dict[str, Any]] = [
                     "default": True,
                     "description": "Re-transcribe even when transcripts exist",
                 },
-                "language": {"type": "string", "description": "BCP-47 language hint"},
+                "language": {
+                    "type": "string",
+                    "description": "BCP-47 language hint; defaults to the configured default language",
+                },
                 "dryRun": {
                     "type": "boolean",
                     "default": False,
@@ -851,6 +857,10 @@ MCP_WRITE_TOOLS_SPEC: list[dict[str, Any]] = [
                 "templateId": {"type": "string", "description": "Summary template ID"},
                 "provider": {"type": "string", "description": "LLM provider override"},
                 "model": {"type": "string", "description": "LLM model override"},
+                "language": {
+                    "type": "string",
+                    "description": "Summary language (e.g. es); defaults to the configured default language",
+                },
                 "dryRun": {
                     "type": "boolean",
                     "default": False,
@@ -1573,6 +1583,7 @@ async def _handle_lifecycle_mcp_tools(
         sm_template = arguments.get("templateId")
         sm_provider = arguments.get("provider")
         sm_model = arguments.get("model")
+        sm_language = arguments.get("language")
         sm_dry = bool(arguments.get("dryRun"))
         if not sm_mid:
             return _error_result("meetingId is required")
@@ -1604,6 +1615,8 @@ async def _handle_lifecycle_mcp_tools(
             sm_opts["provider"] = sm_provider.strip()
         if isinstance(sm_model, str) and sm_model.strip():
             sm_opts["model"] = sm_model.strip()
+        if isinstance(sm_language, str) and sm_language.strip():
+            sm_opts["language"] = sm_language.strip()
         sm_raw: Any = sm_fn(sm_opts)
         sm_status = await sm_raw if hasattr(sm_raw, "__await__") else sm_raw
         if hasattr(sm_status, "model_dump"):

@@ -353,6 +353,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                 meetings_dir=meetings_dir,
                 llm_service=get_llm_service(),
                 template_service=template_service,
+                default_language=load_app_config(app_config_paths).defaultSummaryLanguage,
             )
         return summary_service
 
@@ -1592,6 +1593,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                     "provider": body.get("provider"),
                     "model": body.get("model"),
                     "thinkingLevel": body.get("thinkingLevel"),
+                    "language": body.get("language"),
                     "setPrimary": body.get("setPrimary"),
                 },
             )
@@ -2365,6 +2367,11 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                     ("set_default_language", "setDefaultLanguage"),
                     updated.defaultTranscriptionLanguage,
                 )
+            _call_sync(
+                get_summary_service(),
+                ("set_default_language", "setDefaultLanguage"),
+                updated.defaultSummaryLanguage,
+            )
             ingest_service.set_default_transcription_provider(updated.transcriptionProvider)
             return JSONResponse({"status": "updated", "config": mask_app_config(updated)})
         except Exception as exc:
