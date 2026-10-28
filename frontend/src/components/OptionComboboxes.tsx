@@ -154,7 +154,7 @@ const LANGUAGES: Array<[code: string, name: string]> = [
   ["vi", "Vietnamese"],
 ];
 
-export const TRANSCRIPTION_AUTO_LABEL = "Auto-detect (local engine uses English)";
+export const TRANSCRIPTION_AUTO_LABEL = "Auto-detect (Cohere models use English)";
 export const SUMMARY_AUTO_LABEL = "Same as transcript";
 
 /**
