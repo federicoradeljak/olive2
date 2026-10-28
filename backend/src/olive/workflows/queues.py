@@ -13,6 +13,7 @@ QUEUE_ALIGN = "align"
 QUEUE_SPEECHMATICS = "speechmatics"
 QUEUE_ASSEMBLYAI = "assemblyai"
 QUEUE_MUSE = "muse"
+QUEUE_MODAL = "modal"
 QUEUE_SUMMARIZE = "summarize"
 
 
@@ -33,12 +34,14 @@ STAGE_QUEUE_SPECS: tuple[StageQueueSpec, ...] = (
     StageQueueSpec(name=QUEUE_SPEECHMATICS, worker_concurrency=2),
     StageQueueSpec(name=QUEUE_ASSEMBLYAI, worker_concurrency=2),
     StageQueueSpec(name=QUEUE_MUSE, worker_concurrency=2),
+    StageQueueSpec(name=QUEUE_MODAL, worker_concurrency=2),
     StageQueueSpec(name=QUEUE_SUMMARIZE, worker_concurrency=2),
 )
 
 __all__ = [
     "QUEUE_ALIGN",
     "QUEUE_ASSEMBLYAI",
+    "QUEUE_MODAL",
     "QUEUE_MUSE",
     "QUEUE_ASR",
     "QUEUE_DIARIZE",

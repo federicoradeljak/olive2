@@ -9,6 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
@@ -21,6 +22,7 @@ from olive.services.usage import (
     backfill_usage_events,
     current_month_str,
     estimate_llm_cost,
+    estimate_modal_gpu_cost,
     estimate_transcription_cost,
     get_meeting_usage,
     get_usage_summary,
@@ -45,6 +47,35 @@ def test_estimate_transcription_cost_uses_hourly_rates() -> None:
     assert estimate_transcription_cost("local", 3600.0) == 0.0
     assert estimate_transcription_cost("unknown-provider", 3600.0) is None
     assert estimate_transcription_cost("assemblyai", None) is None
+
+
+def test_estimate_modal_gpu_cost_uses_per_second_rates() -> None:
+    assert estimate_modal_gpu_cost("L4", 3600.0) == pytest.approx(0.7992)
+    assert estimate_modal_gpu_cost("t4", 100.0) == pytest.approx(0.0164)
+    assert estimate_modal_gpu_cost("B9000", 100.0) is None
+    # Device names as torch reports them inside the worker.
+    assert estimate_modal_gpu_cost("NVIDIA A10", 100.0) == pytest.approx(0.0306)
+    assert estimate_modal_gpu_cost("NVIDIA L40S", 100.0) == pytest.approx(0.0542)
+    assert estimate_modal_gpu_cost("Tesla T4", 100.0) == pytest.approx(0.0164)
+    assert estimate_modal_gpu_cost("L4", None) is None
+
+
+def test_record_transcription_usage_accepts_cost_and_model_override() -> None:
+    handle = create_db(":memory:")
+    record_transcription_usage(
+        handle.engine,
+        meeting_id=None,
+        provider="modal",
+        audio_seconds=600.0,
+        source="modal:fc-1",
+        model="whisper-large-v3",
+        cost_usd=0.0123,
+    )
+    with handle.engine.connect() as conn:
+        row = conn.execute(text("SELECT model, cost_usd FROM usage_events WHERE source = 'modal:fc-1'")).one()
+    assert row.model == "whisper-large-v3"
+    assert row.cost_usd == pytest.approx(0.0123)
+    handle.engine.dispose()
 
 
 def test_month_bounds_rejects_bad_input() -> None:

@@ -20,6 +20,7 @@ from ..schemas import TranscriptWord
 from ..settings import DEFAULT_LOCAL_ASR_MODEL, get_effective_hf_token, resolve_paths
 from .align import proportional_word_timestamps
 from .audio import resample
+from .device import onnx_providers, resolve_device
 from .model_store import (
     _COHERE_STAGED_MIN_SIZES,  # noqa: F401  # re-exported (tests import it from here)
     COHERE_INT8_ONNX_REPO,
@@ -124,7 +125,7 @@ class CohereAsrEngine:
         cfg = {**(config or {}), **kwargs}
         self.model_id: str = str(cfg.get("modelId") or cfg.get("model_id") or DEFAULT_LOCAL_ASR_MODEL)
         self.dtype: str = str(cfg.get("dtype") or "int8")
-        self.device: str = str(cfg.get("device") or "cpu")
+        self.device: str = str(cfg.get("device") or resolve_device())
         self.language: str = str(cfg.get("language") or "en")
         self.num_threads: int = int(cfg.get("numThreads") or max(2, min(8, (os.cpu_count() or 4) // 2)))
 
@@ -174,8 +175,8 @@ class CohereAsrEngine:
         opts.inter_op_num_threads = 1
         opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
-        self._encoder_sess = ort.InferenceSession(enc_path, opts, providers=["CPUExecutionProvider"])
-        self._decoder_sess = ort.InferenceSession(dec_path, opts, providers=["CPUExecutionProvider"])
+        self._encoder_sess = ort.InferenceSession(enc_path, opts, providers=onnx_providers())
+        self._decoder_sess = ort.InferenceSession(dec_path, opts, providers=onnx_providers())
 
     def _detokenize(self, token_ids: list[int]) -> str:
         if not self._id_to_token:

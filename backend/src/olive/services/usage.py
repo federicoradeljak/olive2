@@ -35,6 +35,48 @@ TRANSCRIPTION_USD_PER_HOUR: dict[str, float] = {
     "local": 0.0,
 }
 
+# Modal bills GPU time per second rather than per hour of audio, so ``modal``
+# transcriptions record measured worker seconds x these rates (Modal public
+# pricing, Oct 2026; container CPU/memory is billed on top and not included).
+MODAL_GPU_USD_PER_SEC: dict[str, float] = {
+    "T4": 0.000164,
+    "L4": 0.000222,
+    "A10G": 0.000306,
+    "L40S": 0.000542,
+    "A100": 0.000583,
+    "H100": 0.001097,
+}
+
+
+# Hardware names (torch.cuda.get_device_name) that differ from Modal's price list.
+_MODAL_GPU_ALIASES: dict[str, str] = {"A10": "A10G"}
+
+
+def normalize_modal_gpu(gpu: str | None) -> str:
+    """Maps a Modal GPU type or device name (``NVIDIA A10``) to a pricing key."""
+    name = (gpu or "").strip().upper()
+    for prefix in ("NVIDIA ", "TESLA "):
+        name = name.removeprefix(prefix)
+    name = _MODAL_GPU_ALIASES.get(name, name)
+    if name in MODAL_GPU_USD_PER_SEC:
+        return name
+    # Longest key first so "L40S" wins over "L4" and "A10G" over a bare "A10".
+    for key in sorted(MODAL_GPU_USD_PER_SEC, key=len, reverse=True):
+        if key in name:
+            return key
+    return name
+
+
+def estimate_modal_gpu_cost(gpu: str | None, gpu_seconds: float | None) -> float | None:
+    """Estimates a Modal run's GPU cost in USD; ``None`` for unknown GPUs."""
+    if gpu_seconds is None or gpu_seconds < 0:
+        return None
+    rate = MODAL_GPU_USD_PER_SEC.get(normalize_modal_gpu(gpu))
+    if rate is None:
+        return None
+    return round(gpu_seconds * rate, 6)
+
+
 BACKFILL_MARKER = "usage_backfill_v1"
 
 CREATE_USAGE_EVENTS_SQL = """CREATE TABLE IF NOT EXISTS usage_events (
@@ -267,8 +309,13 @@ def record_transcription_usage(
     created_at: int | None = None,
     source: str | None = None,
     detail: dict[str, Any] | None = None,
+    model: str | None = None,
+    cost_usd: float | None = None,
 ) -> str:
-    """Inserts a transcription usage event; idempotent per ``source`` key."""
+    """Inserts a transcription usage event; idempotent per ``source`` key.
+
+    ``cost_usd`` overrides the per-hour-of-audio estimate (Modal GPU time).
+    """
     ensure_usage_table(db)
     engine = _engine_of(db)
     now = created_at if created_at is not None else int(time.time() * 1000)
@@ -277,7 +324,7 @@ def record_transcription_usage(
         seconds = audio_seconds
         if seconds is None:
             seconds = _resolve_audio_seconds(conn, recording_id, meeting_id, transcript_content)
-        cost = estimate_transcription_cost(provider, seconds)
+        cost = cost_usd if cost_usd is not None else estimate_transcription_cost(provider, seconds)
         conn.execute(
             text(
                 """
@@ -286,7 +333,7 @@ def record_transcription_usage(
                   input_tokens, output_tokens, total_tokens,
                   audio_seconds, cost_usd, source, detail, created_at
                 ) VALUES (
-                  :id, :mid, 'transcription', :provider, NULL,
+                  :id, :mid, 'transcription', :provider, :model,
                   0, 0, 0,
                   :seconds, :cost, :source, :detail, :now
                 )
@@ -297,6 +344,7 @@ def record_transcription_usage(
                 "id": event_id,
                 "mid": meeting_id,
                 "provider": provider,
+                "model": model,
                 "seconds": seconds,
                 "cost": cost,
                 "source": source or f"transcription:{event_id}",

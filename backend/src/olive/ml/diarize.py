@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import gc
 import inspect
 import math
@@ -19,6 +20,7 @@ import torch
 from ..logging_db import logger
 from ..settings import get_effective_hf_token
 from .audio import resample
+from .device import resolve_device
 from .embed import WeSpeakerEmbeddingExtractor
 from .protocols import LocalSpeakerSegment, SpeakerEmbedder, VoiceprintVector
 from .scoring import merge_weighted_voiceprint_vectors
@@ -43,6 +45,22 @@ def _default_diarizer_threads() -> int:
             pass
     cores = os.cpu_count() or 4
     return max(2, min(8, cores // 2))
+
+
+@functools.cache
+def _shutdown_probe() -> Callable[[], bool] | None:
+    # The DBOS runtime only exists inside the Olive server; the Modal GPU
+    # worker runs this module without it (no dbos installed).
+    try:
+        from ..workflows.runtime import is_shutting_down
+    except ImportError:
+        return None
+    return is_shutting_down
+
+
+def _server_shutting_down() -> bool:
+    probe = _shutdown_probe()
+    return bool(probe and probe())
 
 
 def _patch_pipeline_for_fast_cpu(pipe: Any, step_sec: float = 2.5) -> None:
@@ -207,8 +225,10 @@ class PyannoteSpeakerDiarizer:
                             kwargs["token"] = tok
                         pipe: Any = Pipeline.from_pretrained(repo_id, **kwargs)
                         if pipe is not None:
-                            pipe.to(torch.device("cpu"))
-                            _patch_pipeline_for_fast_cpu(pipe, step_sec=self.segmentation_step_sec)
+                            device = resolve_device()
+                            pipe.to(torch.device(device))
+                            if device == "cpu":
+                                _patch_pipeline_for_fast_cpu(pipe, step_sec=self.segmentation_step_sec)
                         _CACHED_PIPELINE = pipe
                         self._pipeline = pipe
                         loaded_repo = repo_id
@@ -271,9 +291,7 @@ class PyannoteSpeakerDiarizer:
             completed: int | None = None,
         ) -> None:
             nonlocal last_batch_time
-            from ..workflows.runtime import is_shutting_down
-
-            if is_shutting_down():
+            if _server_shutting_down():
                 raise RuntimeError("Transcription cancelled: server shutting down")
             now = time.perf_counter()
             if step_name not in step_timers:
@@ -605,10 +623,8 @@ class PyannoteSpeakerDiarizer:
                 if inspect.isawaitable(res):
                     await res
 
-            from ..workflows.runtime import is_shutting_down
-
             for idx in selected_indices:
-                if is_shutting_down():
+                if _server_shutting_down():
                     raise RuntimeError("Transcription cancelled: server shutting down")
                 seg = candidate_segments[idx]
                 clip = seg.samples

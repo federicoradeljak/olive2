@@ -70,13 +70,11 @@ class LocalTranscriptionPipeline:
         asr_cfg = opts.get("asrConfig") or opts.get("asr_config") or {}
         vp_cfg = opts.get("voiceprintConfig") or opts.get("voiceprint_config") or {}
 
-        self.embedding_extractor: SpeakerEmbedder = (
-            custom_extractor
-            or WeSpeakerEmbeddingExtractor({"numThreads": diar_cfg.get("numThreads")})
+        self.embedding_extractor: SpeakerEmbedder = custom_extractor or WeSpeakerEmbeddingExtractor(
+            {"numThreads": diar_cfg.get("numThreads")}
         )
-        self.diarizer: Diarizer = (
-            custom_diarizer
-            or PyannoteSpeakerDiarizer(self.embedding_extractor, diar_cfg)
+        self.diarizer: Diarizer = custom_diarizer or PyannoteSpeakerDiarizer(
+            self.embedding_extractor, diar_cfg
         )
         self.asr_engine: AsrBackend = custom_asr_engine or CohereAsrEngine(asr_cfg)
         self.aligner: Aligner | None = custom_aligner or CtcForcedAligner()
@@ -86,9 +84,12 @@ class LocalTranscriptionPipeline:
         self.similarity_threshold: float = float(vp_sim if vp_sim is not None else 0.45)
         self.decision_margin: float = float(vp_margin if vp_margin is not None else 0.06)
         self.unload_per_stage: bool = bool(opts.get("unloadPerStage", True))
+        # Wall-clock seconds per stage of the last ``transcribe`` run.
+        self.last_timings: dict[str, float] = {}
 
     async def transcribe(self, options: dict[str, Any]) -> LocalTranscriptionResult:
         pipeline_t0 = time.perf_counter()
+        self.last_timings = {}
         signal = options.get("signal")
         on_progress = options.get("onProgress") or options.get("on_progress")
         meeting_id = options.get("meetingId") or options.get("meeting_id")
@@ -145,6 +146,7 @@ class LocalTranscriptionPipeline:
         # 2. Perform Speaker Diarization (and extract turn embeddings)
         clustering_threshold = options.get("clusteringThreshold")
         expected_speaker_count = options.get("expectedSpeakerCount")
+        diarize_t0 = time.perf_counter()
         diarize_fn = self.diarizer.diarize
         diarize_kwargs: dict[str, Any] = {}
         try:
@@ -163,6 +165,8 @@ class LocalTranscriptionPipeline:
             expected_speaker_count,
             **diarize_kwargs,
         )
+
+        self.last_timings["diarizeSec"] = round(time.perf_counter() - diarize_t0, 3)
 
         if self.unload_per_stage:
             if hasattr(self.diarizer, "release"):
@@ -189,18 +193,12 @@ class LocalTranscriptionPipeline:
         all_profiles: list[dict[str, Any]] = []
         raw_candidates = options.get("candidateSpeakers") or options.get("candidate_speakers")
         normalized_candidates = (
-            {str(c).strip().lower() for c in raw_candidates if str(c).strip()}
-            if raw_candidates
-            else None
+            {str(c).strip().lower() for c in raw_candidates if str(c).strip()} if raw_candidates else None
         )
 
         raw_enrolled = options.get("enrolledSpeakers") or options.get("enrolled_speakers") or []
         for spk_raw in raw_enrolled:
-            spk = (
-                spk_raw
-                if isinstance(spk_raw, EnrolledSpeaker)
-                else EnrolledSpeaker.model_validate(spk_raw)
-            )
+            spk = spk_raw if isinstance(spk_raw, EnrolledSpeaker) else EnrolledSpeaker.model_validate(spk_raw)
             local_ids = spk.providerIds.get("local") or []
             trusted_vectors: list[VoiceprintVector] = []
             for item in local_ids:
@@ -258,12 +256,8 @@ class LocalTranscriptionPipeline:
         # 5. Global Cluster-to-Speaker Assignment with decision margin & threshold
         opt_sim = options.get("similarityThreshold")
         opt_margin = options.get("decisionMargin")
-        effective_threshold = float(
-            opt_sim if opt_sim is not None else self.similarity_threshold
-        )
-        effective_margin = float(
-            opt_margin if opt_margin is not None else self.decision_margin
-        )
+        effective_threshold = float(opt_sim if opt_sim is not None else self.similarity_threshold)
+        effective_margin = float(opt_margin if opt_margin is not None else self.decision_margin)
 
         cluster_to_resolved_name: dict[str, str] = {}
         discovered_map: dict[str, DiscoveredSpeakerVoiceprint] = {}
@@ -282,7 +276,9 @@ class LocalTranscriptionPipeline:
                 top2_prof = speaker_scores[1][0] if len(speaker_scores) > 1 else None
                 top2_score = speaker_scores[1][1] if len(speaker_scores) > 1 else -1.0
                 meets_threshold = top1_score >= effective_threshold
-                meets_margin = (top1_score - top2_score >= effective_margin) if len(speaker_scores) > 1 else True
+                meets_margin = (
+                    (top1_score - top2_score >= effective_margin) if len(speaker_scores) > 1 else True
+                )
                 cluster_diagnostics.append(
                     {
                         "cluster": cid,
@@ -367,7 +363,40 @@ class LocalTranscriptionPipeline:
             and self.aligner is not None
         )
 
-        if use_whole_file_align and speaker_segments:
+        # ASR backends with native word timestamps (Whisper) transcribe the
+        # whole file in one pass and skip forced alignment entirely.
+        use_whole_file_native = bool(
+            getattr(self.asr_engine, "provides_word_timestamps", False) and speaker_segments
+        )
+        asr_t0 = time.perf_counter()
+
+        if use_whole_file_native:
+            await _emit(
+                on_progress,
+                {
+                    "stage": "transcribing",
+                    "percent": 50,
+                    "current": 1,
+                    "total": total_segments,
+                    "totalMs": duration_ms,
+                    "message": "Transcribing audio...",
+                },
+            )
+            full_asr = await self._call_asr_segment(
+                samples,
+                target_sr,
+                {"language": language, "startMs": 0, "modelId": model_id},
+            )
+            if self.unload_per_stage and hasattr(self.asr_engine, "release"):
+                self.asr_engine.release()
+            native_words = [
+                w if isinstance(w, TranscriptWord) else TranscriptWord.model_validate(w)
+                for w in (full_asr.get("words") or [])
+            ]
+            final_segments = self._assign_words_to_speaker_turns(
+                native_words, speaker_segments, cluster_to_resolved_name
+            )
+        elif use_whole_file_align and speaker_segments:
             await _emit(
                 on_progress,
                 {
@@ -491,6 +520,8 @@ class LocalTranscriptionPipeline:
                 if self.aligner is not None and hasattr(self.aligner, "release"):
                     self.aligner.release()
 
+        self.last_timings["asrSec"] = round(time.perf_counter() - asr_t0, 3)
+
         await _emit(
             on_progress,
             {
@@ -564,9 +595,7 @@ class LocalTranscriptionPipeline:
             w_mid = 0.5 * (w.startMs + w.endMs)
             best_spk = min(
                 turns,
-                key=lambda t: 0.0
-                if (t[0] <= w_mid <= t[1])
-                else min(abs(w_mid - t[0]), abs(w_mid - t[1])),
+                key=lambda t: 0.0 if (t[0] <= w_mid <= t[1]) else min(abs(w_mid - t[0]), abs(w_mid - t[1])),
             )[2]
             w_with_spk = TranscriptWord(
                 word=w.word,

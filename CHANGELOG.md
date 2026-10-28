@@ -8,6 +8,12 @@ day its changes merged (`## [YYYY-MM-DD]`), with entries grouped under
 `Added` / `Changed` / `Fixed` — pushing a tag publishes the image and turns
 every section newer than the previous tag into the GitHub release notes.
 
+## [2026-10-28]
+
+### Added
+
+- **Modal GPU transcription engine** — a new `modal` engine runs Olive's own pipeline (pyannote diarization + speech-to-text) on a Modal.com cloud GPU instead of your CPU, and speaker voiceprints are still matched locally. You pick the speech-to-text model per meeting or in Settings: Cohere Transcribe (the same one local uses), Whisper large-v3-turbo, or Whisper large-v3. Each run records its measured GPU time and estimated cost in usage, so you can compare it against the other engines. Setup: deploy `backend/modal_app/olive_gpu.py` with `modal deploy`, then enter a Modal token in Settings (or set `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET`).
+
 ## [2026-10-23]
 
 ### Changed

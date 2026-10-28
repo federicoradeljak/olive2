@@ -107,7 +107,9 @@ class AppConfig(BaseModel):
     pollIntervalMinutes: int = Field(default=15, gt=0)
     retranscribePlaudWhenUnnamed: bool = Field(default=False)
     alwaysRetranscribePlaud: bool = Field(default=False)
-    transcriptionProvider: Literal["speechmatics", "assemblyai", "muse", "local"] = Field(default="local")
+    transcriptionProvider: Literal["speechmatics", "assemblyai", "muse", "modal", "local"] = Field(
+        default="local"
+    )
     localAsrModel: str = Field(default=DEFAULT_LOCAL_ASR_MODEL)
     localClusteringThreshold: float = Field(default=0.50, ge=0.1, le=0.99)
     localSimilarityThreshold: float = Field(default=0.45, ge=0.1, le=0.99)
@@ -120,6 +122,10 @@ class AppConfig(BaseModel):
     speechmaticsApiKey: str = Field(default="")
     assemblyaiApiKey: str = Field(default="")
     museApiKey: str = Field(default="")
+    modalTokenId: str = Field(default="")
+    modalTokenSecret: str = Field(default="")
+    modalAppName: str = Field(default="olive-gpu")
+    modalAsrModel: Literal["cohere", "whisper-large-v3-turbo", "whisper-large-v3"] = Field(default="cohere")
 
     @field_validator("localAsrModel", mode="before")
     @classmethod
@@ -254,6 +260,9 @@ def mask_app_config(config: AppConfig) -> dict[str, Any]:
     data["hasAssemblyaiApiKey"] = bool(get_effective_assemblyai_key(config))
     data["museApiKey"] = mask_secret(config.museApiKey)
     data["hasMuseApiKey"] = bool(get_effective_muse_key(config))
+    data["modalTokenSecret"] = mask_secret(config.modalTokenSecret)
+    token_id, token_secret = get_effective_modal_credentials(config)
+    data["hasModalToken"] = bool(token_id and token_secret)
     return data
 
 
@@ -356,3 +365,17 @@ def get_effective_muse_key(
         return env_token
     cfg = config or load_app_config()
     return _effective_stored_secret(cfg.museApiKey)
+
+
+def get_effective_modal_credentials(
+    config: AppConfig | None = None,
+    env: Mapping[str, str] | None = None,
+) -> tuple[str | None, str | None]:
+    """Env ``MODAL_TOKEN_ID``/``MODAL_TOKEN_SECRET`` win (as a pair); otherwise the stored token."""
+    effective_env = env if env is not None else os.environ
+    env_id = (effective_env.get("MODAL_TOKEN_ID") or "").strip()
+    env_secret = (effective_env.get("MODAL_TOKEN_SECRET") or "").strip()
+    if env_id and env_secret:
+        return env_id, env_secret
+    cfg = config or load_app_config()
+    return (cfg.modalTokenId.strip() or None), _effective_stored_secret(cfg.modalTokenSecret)

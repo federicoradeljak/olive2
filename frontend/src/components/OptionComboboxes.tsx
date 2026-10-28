@@ -10,12 +10,13 @@ import {
   Info,
   Star,
   Tag,
+  Zap,
   TriangleAlert,
 } from "lucide-react";
 import { Combobox } from "./Combobox";
 import type { ComboboxOption } from "./Combobox";
 
-/** Transcription provider values used by bulk / settings forms: "local" | "speechmatics" | "assemblyai" | "muse". */
+/** Transcription provider values used by bulk / settings forms: "local" | "speechmatics" | "assemblyai" | "muse" | "modal". */
 export const TRANSCRIBE_PROVIDER_OPTIONS: ComboboxOption[] = [
   {
     value: "assemblyai",
@@ -34,6 +35,12 @@ export const TRANSCRIBE_PROVIDER_OPTIONS: ComboboxOption[] = [
     label: "Speechmatics (Cloud)",
     keywords: "cloud",
     icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-info" aria-hidden="true" />,
+  },
+  {
+    value: "modal",
+    label: "Modal GPU (Local pipeline in the cloud)",
+    keywords: "cloud gpu modal whisper cohere",
+    icon: <Zap className="h-3.5 w-3.5 shrink-0 text-warning" aria-hidden="true" />,
   },
   {
     value: "local",
@@ -88,7 +95,34 @@ export const ENGINE_OPTIONS: ComboboxOption[] = [
     keywords: "cloud meta",
     icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-info" aria-hidden="true" />,
   },
+  {
+    value: "modal",
+    label: "Modal GPU (Local pipeline in the cloud)",
+    keywords: "cloud gpu modal whisper cohere",
+    icon: <Zap className="h-3.5 w-3.5 shrink-0 text-warning" aria-hidden="true" />,
+  },
 ];
+
+/** Speech-to-text models the Modal GPU worker can run. */
+export const MODAL_ASR_MODEL_OPTIONS: ComboboxOption[] = [
+  {
+    value: "cohere",
+    label: "Cohere Transcribe (same as local)",
+    keywords: "cohere default",
+  },
+  {
+    value: "whisper-large-v3-turbo",
+    label: "Whisper large-v3-turbo (fast)",
+    keywords: "whisper openai turbo fast",
+  },
+  {
+    value: "whisper-large-v3",
+    label: "Whisper large-v3 (most accurate, slower)",
+    keywords: "whisper openai accurate",
+  },
+];
+
+export type ModalAsrModel = "cohere" | "whisper-large-v3-turbo" | "whisper-large-v3";
 
 export const TRANSCRIPT_PROVIDER_FILTER_OPTIONS: ComboboxOption[] = [
   { value: "any", label: "Any (no filter)" },
@@ -96,6 +130,7 @@ export const TRANSCRIPT_PROVIDER_FILTER_OPTIONS: ComboboxOption[] = [
   { value: "speechmatics", label: "Speechmatics" },
   { value: "assemblyai", label: "AssemblyAI" },
   { value: "muse", label: "Muse Voice" },
+  { value: "modal", label: "Modal GPU" },
   { value: "plaud", label: "Plaud" },
   { value: "none", label: "No transcript yet" },
 ];

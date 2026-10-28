@@ -7,12 +7,14 @@ from fastapi.testclient import TestClient
 from olive.app import create_app, refresh_transcription_client_keys
 from olive.db import create_db
 from olive.providers.assemblyai import AssemblyAIClient
+from olive.providers.modal import ModalClient
 from olive.providers.muse import MuseClient
 from olive.providers.speechmatics import SpeechmaticsClient
 from olive.settings import (
     AppConfig,
     clear_app_config_cache,
     get_effective_assemblyai_key,
+    get_effective_modal_credentials,
     get_effective_muse_key,
     get_effective_speechmatics_key,
     load_app_config,
@@ -218,3 +220,36 @@ def test_config_routes_round_trip_keys_masked(tmp_path, monkeypatch) -> None:
 
     handle.engine.dispose()
     clear_app_config_cache()
+
+
+def test_modal_credentials_env_pair_wins_and_secret_is_masked() -> None:
+    cfg = AppConfig.model_validate(
+        {"modalTokenId": "ak-stored", "modalTokenSecret": "as-stored-secret-9999", "modalAppName": "my-gpu"}
+    )
+    assert get_effective_modal_credentials(cfg, {}) == ("ak-stored", "as-stored-secret-9999")
+    assert get_effective_modal_credentials(
+        cfg, {"MODAL_TOKEN_ID": "ak-env", "MODAL_TOKEN_SECRET": "as-env"}
+    ) == (
+        "ak-env",
+        "as-env",
+    )
+    # A half-set env pair does not shadow the stored token.
+    assert get_effective_modal_credentials(cfg, {"MODAL_TOKEN_ID": "ak-env"}) == (
+        "ak-stored",
+        "as-stored-secret-9999",
+    )
+
+    masked = mask_app_config(cfg)
+    assert masked["modalTokenSecret"] == "••••••••9999"
+    assert masked["modalTokenId"] == "ak-stored"
+    assert masked["modalAsrModel"] == "cohere"
+
+    client = ModalClient({"tokenId": "", "tokenSecret": ""})
+    assert client.is_configured is False
+    refresh_transcription_client_keys([("modal", client)], cfg, {})
+    assert (client.token_id, client.token_secret, client.app_name) == (
+        "ak-stored",
+        "as-stored-secret-9999",
+        "my-gpu",
+    )
+    assert client.is_configured is True

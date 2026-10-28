@@ -16,6 +16,7 @@ import onnxruntime as ort
 from ..schemas import TranscriptWord
 from ..settings import resolve_paths
 from .audio import resample
+from .device import onnx_providers
 
 _ALIGN_LOCK = threading.Lock()
 _CACHED_ALIGNER: dict[tuple[str, int], tuple[ort.InferenceSession, Any]] = {}
@@ -103,7 +104,7 @@ class CtcForcedAligner:
             sess_opts.inter_op_num_threads = 1
             sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
-            self._session = ort.InferenceSession(path, sess_opts, providers=["CPUExecutionProvider"])
+            self._session = ort.InferenceSession(path, sess_opts, providers=onnx_providers())
             self._tokenizer = Tokenizer()
             _CACHED_ALIGNER[cache_key] = (self._session, self._tokenizer)
             return self._session, self._tokenizer

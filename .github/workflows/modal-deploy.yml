@@ -1,0 +1,57 @@
+name: Deploy Modal GPU worker
+
+# Redeploys backend/modal_app/olive_gpu.py when code bundled into the worker
+# image changes on main. The worker ships its own copy of `olive` (via
+# add_local_python_source), so it must be redeployed to stay in sync.
+# Needs repo secrets MODAL_TOKEN_ID / MODAL_TOKEN_SECRET; optional repo
+# variable OLIVE_MODAL_GPU (comma-separated GPU preference, e.g. "L4,T4,A10G").
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/modal_app/**"
+      - "backend/src/olive/ml/**"
+      - "backend/src/olive/schemas.py"
+      - "backend/src/olive/settings.py"
+      - "backend/src/olive/layout.py"
+      - "backend/src/olive/logging_db.py"
+      - "backend/uv.lock"
+      - ".github/workflows/modal-deploy.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: modal-deploy
+  cancel-in-progress: false
+
+env:
+  MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up uv & Python 3.12
+        uses: astral-sh/setup-uv@v10.3.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "backend/uv.lock"
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: uv sync --frozen
+
+      - name: Warn when Modal secrets are missing
+        if: ${{ env.MODAL_TOKEN_ID == '' }}
+        run: echo "::warning title=Modal deploy skipped::MODAL_TOKEN_ID / MODAL_TOKEN_SECRET are not set; the GPU worker was NOT redeployed and may be out of sync with main."
+
+      - name: Deploy worker
+        working-directory: backend
+        # Forks without Modal secrets skip instead of failing.
+        if: ${{ env.MODAL_TOKEN_ID != '' }}
+        env:
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+          OLIVE_MODAL_GPU: ${{ vars.OLIVE_MODAL_GPU || 'L4,T4,A10G' }}
+        run: uv run modal deploy modal_app/olive_gpu.py

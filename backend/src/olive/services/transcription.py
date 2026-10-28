@@ -26,8 +26,10 @@ from ..ml import (
     AbortController,
     DiscoveredSpeakerVoiceprint,
 )
+from ..ml.asr_registry import normalize_asr_model
 from ..ml.identify import identify_cloud_transcript_speakers
 from ..providers.assemblyai import AssemblyAIClient, parse_assemblyai_transcript
+from ..providers.modal import ModalCancelledError, ModalClient, prepare_modal_flac
 from ..providers.muse import (
     MuseClient,
     MuseTranscribeResponse,
@@ -49,6 +51,7 @@ from ..schemas import (
 from ..speaker_labels import is_generic_speaker_label
 from ..workflows import (
     QUEUE_ASSEMBLYAI,
+    QUEUE_MODAL,
     QUEUE_MUSE,
     QUEUE_PLAUD_SYNC,
     QUEUE_SPEAKER_EMBED,
@@ -73,13 +76,15 @@ from ..workflows import (
 STAGE_SPEECHMATICS_TRANSCRIBE = "speechmatics_transcribe"
 STAGE_ASSEMBLYAI_TRANSCRIBE = "assemblyai_transcribe"
 STAGE_MUSE_TRANSCRIBE = "muse_transcribe"
+STAGE_MODAL_TRANSCRIBE = "modal_transcribe"
 STAGE_SPEAKER_REIDENTIFY = "speaker_reidentify"
 PROVIDER_SPEECHMATICS = "speechmatics"
 PROVIDER_ASSEMBLYAI = "assemblyai"
 PROVIDER_MUSE = "muse"
+PROVIDER_MODAL = "modal"
 PROVIDER_LOCAL = "local"
 
-TranscriptionProviderName = Literal["speechmatics", "assemblyai", "muse", "local"]
+TranscriptionProviderName = Literal["speechmatics", "assemblyai", "muse", "modal", "local"]
 
 # Durable-queue routing for cloud transcription work (see AGENTS.md: the DBOS
 # job queue is the SOLE acceptable path for enqueuing work). ``local`` is not
@@ -90,6 +95,7 @@ TRANSCRIBE_QUEUE_BY_PROVIDER: dict[str, str] = {
     PROVIDER_SPEECHMATICS: QUEUE_SPEECHMATICS,
     PROVIDER_ASSEMBLYAI: QUEUE_ASSEMBLYAI,
     PROVIDER_MUSE: QUEUE_MUSE,
+    PROVIDER_MODAL: QUEUE_MODAL,
 }
 
 
@@ -109,6 +115,8 @@ def normalize_transcription_provider(value: Any, default: str = PROVIDER_LOCAL) 
         return PROVIDER_ASSEMBLYAI
     if raw == PROVIDER_MUSE:
         return PROVIDER_MUSE
+    if raw == PROVIDER_MODAL:
+        return PROVIDER_MODAL
     return PROVIDER_SPEECHMATICS
 
 
@@ -121,7 +129,12 @@ def is_known_transcription_provider(value: Any) -> bool:
         PROVIDER_SPEECHMATICS,
         PROVIDER_ASSEMBLYAI,
         PROVIDER_MUSE,
+        PROVIDER_MODAL,
     )
+
+
+def _title_implies_two_speakers(title: str | None) -> bool:
+    return bool(re.search(r"1[:\-_/]?1|1-on-1|one-on-one|interview", title or "", re.I))
 
 
 def _parse_json_field(value: str | None, fallback: Any) -> Any:
@@ -229,6 +242,8 @@ class TranscriptionService:
         speechmatics_client: SpeechmaticsClient | None = None,
         assemblyai_client: AssemblyAIClient | None = None,
         muse_client: MuseClient | None = None,
+        modal_client: ModalClient | None = None,
+        modal_asr_model: str | Callable[[], str | None] | None = None,
         local_pipeline: Any = None,
         default_provider: TranscriptionProviderName | None = None,
         logger: Logger | None = None,
@@ -256,6 +271,12 @@ class TranscriptionService:
         self.assemblyai_client: AssemblyAIClient = passed_aai or AssemblyAIClient()
         passed_muse = muse_client or opts.get("museClient") or opts.get("muse_client")
         self.muse_client: MuseClient = passed_muse or MuseClient()
+        passed_modal = modal_client or opts.get("modalClient") or opts.get("modal_client")
+        self.modal_client: ModalClient = passed_modal or ModalClient()
+        # Default Modal ASR model: a fixed name or a getter reading live settings.
+        self.modal_asr_model: str | Callable[[], str | None] | None = modal_asr_model or opts.get(
+            "modalAsrModel"
+        )
         # Injectable for tests: async (audio_path, transcript, enrolled) ->
         # (renamed_transcript, discovered) | None. None = use local ML default.
         self.cloud_speaker_identifier = opts.get("cloudSpeakerIdentifier") or opts.get(
@@ -1297,6 +1318,7 @@ class TranscriptionService:
             "similarityThreshold",
             "clusteringThreshold",
             "modelId",
+            "asrModel",
         ):
             if opts.get(key) is not None:
                 per_meeting_opts[key] = opts[key]
@@ -1544,6 +1566,8 @@ class TranscriptionService:
                 return await self.transcribe_meeting_assemblyai(meeting_id, merged_opts)
             if provider == "muse":
                 return await self.transcribe_meeting_muse(meeting_id, merged_opts)
+            if provider == "modal":
+                return await self.transcribe_meeting_modal(meeting_id, merged_opts)
             return await self.transcribe_meeting_speechmatics(meeting_id, merged_opts)
         finally:
             if self._active_jobs.get(meeting_id) is active_job:
@@ -1642,7 +1666,7 @@ class TranscriptionService:
 
         expected_speaker_count = opts.get("expectedSpeakerCount")
         if not expected_speaker_count:
-            if re.search(r"1[:\-_/]?1|1-on-1|one-on-one|interview", meeting["title"], re.I):
+            if _title_implies_two_speakers(meeting["title"]):
                 expected_speaker_count = 2
             elif candidate_speakers:
                 expected_speaker_count = len(candidate_speakers)
@@ -3190,6 +3214,7 @@ class TranscriptionService:
         err_msg: str,
         cancelled: bool = False,
         on_progress: Callable[[TranscriptionProgressUpdate], Any] | None = None,
+        provider_label: str = "Muse",
     ) -> dict[str, Any]:
         err_time = self.now()
         with self.db.begin() as conn:
@@ -3213,7 +3238,9 @@ class TranscriptionService:
                     text("UPDATE meetings SET last_error = :err, updated_at = :t WHERE id = :id"),
                     {"err": err_msg, "t": err_time, "id": meeting_id},
                 )
-        self.logger.error("Muse transcription failed", {"meetingId": meeting_id, "error": err_msg})
+        self.logger.error(
+            f"{provider_label} transcription failed", {"meetingId": meeting_id, "error": err_msg}
+        )
         if callable(on_progress):
             r = on_progress(
                 TranscriptionProgressUpdate(
@@ -3231,6 +3258,253 @@ class TranscriptionService:
             "status": "cancelled" if cancelled else "error",
             "error": "Cancelled by user" if cancelled else err_msg,
         }
+
+    def _resolve_modal_asr_model(self, opts: dict[str, Any]) -> str:
+        raw = opts.get("asrModel") or opts.get("asr_model")
+        if not raw:
+            source = self.modal_asr_model
+            raw = source() if callable(source) else source
+        return normalize_asr_model(raw)
+
+    async def transcribe_meeting_modal(
+        self,
+        meeting_id: str,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Runs the local ML pipeline on a Modal GPU worker (``modal_app/olive_gpu.py``).
+
+        The worker returns a transcript with generic ``Speaker N`` clusters;
+        voiceprint matching stays local via ``_complete_cloud_transcription``.
+        Spend is recorded from the measured worker GPU seconds.
+        """
+        opts = options or {}
+        on_progress = opts.get("onProgress")
+        sig = opts.get("signal")
+
+        with self.db.connect() as conn:
+            meeting = (
+                conn.execute(text("SELECT * FROM meetings WHERE id = :id"), {"id": meeting_id})
+                .mappings()
+                .first()
+            )
+            if not meeting:
+                raise ValueError(f"Meeting not found: {meeting_id}")
+            recording = (
+                conn.execute(
+                    text("SELECT * FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"),
+                    {"mid": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
+            if not recording:
+                raise ValueError(f"No recording found for meeting {meeting_id}")
+            stage_run = (
+                conn.execute(
+                    text("SELECT * FROM stage_runs WHERE meeting_id = :mid AND stage = :stage LIMIT 1"),
+                    {"mid": meeting_id, "stage": STAGE_MODAL_TRANSCRIBE},
+                )
+                .mappings()
+                .first()
+            )
+
+        folder = meeting_paths(
+            self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]
+        ).folder
+        audio_full_path = str(Path(folder) / recording["path"])
+        if not Path(audio_full_path).exists():
+            raise FileNotFoundError(f"Audio file not found on disk at {audio_full_path}")
+
+        if stage_run and stage_run["status"] == "done" and not opts.get("force"):
+            with self.db.connect() as conn:
+                existing_art = (
+                    conn.execute(
+                        text(
+                            """
+                        SELECT id FROM artifacts
+                        WHERE meeting_id = :mid AND provider = :prov AND kind = 'transcript' AND format = 'json'
+                        LIMIT 1
+                        """
+                        ),
+                        {"mid": meeting_id, "prov": PROVIDER_MODAL},
+                    )
+                    .mappings()
+                    .first()
+                )
+            return {
+                "stageRunId": stage_run["id"],
+                "jobId": stage_run.get("provider_job_id") or "",
+                "status": "done",
+                "transcriptArtifactId": existing_art["id"] if existing_art else None,
+            }
+
+        stage_run_id = stage_run["id"] if stage_run else str(uuid.uuid4())
+        job_id = f"modal-{meeting_id[:8]}-{uuid.uuid4().hex[:8]}"
+        current_time = self.now()
+
+        async def _emit(stage: str, percent: float, message: str) -> None:
+            if callable(on_progress):
+                r = on_progress(
+                    TranscriptionProgressUpdate(
+                        stage=stage,  # type: ignore[arg-type]
+                        percent=float(round(percent)),
+                        message=message,
+                    )
+                )
+                if inspect.isawaitable(r):
+                    await r
+
+        async def _fail(err_msg: str, cancelled: bool = False) -> dict[str, Any]:
+            return await self._fail_muse(
+                meeting_id,
+                stage_run_id,
+                job_id,
+                err_msg,
+                cancelled=cancelled,
+                on_progress=on_progress,
+                provider_label="Modal",
+            )
+
+        with self.db.begin() as conn:
+            if stage_run:
+                conn.execute(
+                    text(
+                        """
+                        UPDATE stage_runs
+                        SET status = 'running', attempts = :attempts, last_error = NULL,
+                            provider_job_id = :jid, started_at = :now, updated_at = :now
+                        WHERE id = :id
+                        """
+                    ),
+                    {
+                        "attempts": int(stage_run["attempts"]) + 1,
+                        "jid": job_id,
+                        "now": current_time,
+                        "id": stage_run["id"],
+                    },
+                )
+            else:
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO stage_runs (
+                          id, meeting_id, stage, status, provider_job_id, attempts,
+                          last_error, started_at, finished_at, created_at, updated_at
+                        ) VALUES (
+                          :id, :mid, :stage, 'running', :jid, 1,
+                          NULL, :now, NULL, :now, :now
+                        )
+                        """
+                    ),
+                    {
+                        "id": stage_run_id,
+                        "mid": meeting_id,
+                        "stage": STAGE_MODAL_TRANSCRIBE,
+                        "jid": job_id,
+                        "now": current_time,
+                    },
+                )
+
+        if _signal_aborted(sig):
+            return await _fail("Transcription was cancelled.", cancelled=True)
+
+        try:
+            asr_model = self._resolve_modal_asr_model(opts)
+        except ValueError as exc:
+            return await _fail(str(exc))
+
+        await _emit("uploading", 10, "Converting audio for the Modal GPU worker (16 kHz FLAC)...")
+        try:
+            audio_bytes = await asyncio.to_thread(prepare_modal_flac, audio_full_path)
+        except Exception as exc:
+            return await _fail(str(exc))
+
+        if _signal_aborted(sig):
+            return await _fail("Transcription was cancelled.", cancelled=True)
+
+        def _record_call_id(call_id: str) -> None:
+            nonlocal job_id
+            job_id = call_id
+            with self.db.begin() as conn:
+                conn.execute(
+                    text("UPDATE stage_runs SET provider_job_id = :jid, updated_at = :now WHERE id = :id"),
+                    {"jid": call_id, "now": self.now(), "id": stage_run_id},
+                )
+
+        expected_speaker_count = opts.get("expectedSpeakerCount") or (
+            2 if _title_implies_two_speakers(meeting["title"]) else None
+        )
+        await _emit("transcribing", 20, f"Transcribing on Modal GPU ({asr_model})...")
+        try:
+            result = await self.modal_client.transcribe(
+                audio_bytes,
+                {
+                    "asrModel": asr_model,
+                    "language": opts.get("language"),
+                    "modelId": opts.get("modelId"),
+                    "wholeFileAsr": bool(opts.get("wholeFileAsr")),
+                    "expectedSpeakerCount": expected_speaker_count,
+                    "clusteringThreshold": opts.get("clusteringThreshold"),
+                },
+                signal=sig,
+                on_spawned=_record_call_id,
+            )
+        except ModalCancelledError:
+            return await _fail("Transcription was cancelled.", cancelled=True)
+        except Exception as exc:
+            return await _fail(f"Modal transcription failed: {exc}")
+
+        try:
+            canonical = Transcript.model_validate(result.get("transcript") or {})
+        except Exception as exc:
+            return await _fail(f"Modal returned an invalid transcript: {exc}")
+
+        timings: dict[str, float] = {
+            str(k): float(v)
+            for k, v in dict(result.get("timings") or {}).items()
+            if isinstance(v, int | float)
+        }
+        gpu = str(result.get("gpu") or "")
+        gpu_seconds = float(timings.get("loadSec") or 0.0) + float(timings.get("runSec") or 0.0)
+        try:
+            from .usage import estimate_modal_gpu_cost, record_transcription_usage
+
+            record_transcription_usage(
+                self.db,
+                meeting_id=meeting_id,
+                provider=PROVIDER_MODAL,
+                recording_id=recording["id"],
+                audio_seconds=(canonical.durationMs / 1000.0) if canonical.durationMs else None,
+                created_at=self.now(),
+                source=f"modal:{job_id}",
+                model=str(result.get("asrModel") or asr_model),
+                cost_usd=estimate_modal_gpu_cost(gpu, gpu_seconds),
+                detail={
+                    "gpu": gpu,
+                    "gpuSeconds": round(gpu_seconds, 3),
+                    "timings": timings,
+                    "functionCallId": job_id,
+                },
+            )
+        except Exception as exc:
+            self.logger.warn("Could not record Modal usage", {"meetingId": meeting_id, "error": str(exc)})
+
+        await _emit("finalizing", 75, "Modal transcription complete. Identifying speakers...")
+        res = await self._complete_cloud_transcription(
+            meeting_id,
+            stage_run_id,
+            job_id,
+            canonical,
+            PROVIDER_MODAL,
+            raw_payload=None,
+            options=opts,
+        )
+        if res.get("status") == "cancelled":
+            return await _fail("Transcription was cancelled.", cancelled=True)
+        await _emit("done", 100, "Modal transcription complete!")
+        return res
+
+    transcribeMeetingModal = transcribe_meeting_modal
 
     async def _ensure_artifact(
         self,
@@ -3296,7 +3570,8 @@ class TranscriptionService:
                         "now": self.now(),
                     },
                 )
-        if kind == "transcript" and fmt == "json":
+        if kind == "transcript" and fmt == "json" and provider != PROVIDER_MODAL:
+            # Modal runs record measured GPU time in ``transcribe_meeting_modal``.
             # The JSON artifact is the canonical transcript record (a plain-text
             # twin is saved alongside it); track spend once against it. The
             # usage row is keyed by artifact id, so re-runs stay idempotent.

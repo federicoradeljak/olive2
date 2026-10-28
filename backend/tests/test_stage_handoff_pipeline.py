@@ -301,7 +301,7 @@ def test_local_provider_has_no_single_queue_route() -> None:
     from olive.services.transcription import PROVIDER_LOCAL, TRANSCRIBE_QUEUE_BY_PROVIDER
 
     assert PROVIDER_LOCAL not in TRANSCRIBE_QUEUE_BY_PROVIDER
-    assert set(TRANSCRIBE_QUEUE_BY_PROVIDER) == {"speechmatics", "assemblyai", "muse"}
+    assert set(TRANSCRIBE_QUEUE_BY_PROVIDER) == {"speechmatics", "assemblyai", "muse", "modal"}
 
 
 # --------------------------------------------------------------------------

@@ -19,6 +19,8 @@ import { ConfirmHostRoot, Modal as UiModal, ThemeToggle, ToastProvider, confirmA
 import { SpeakerCombobox, SpeakerStatusBadges } from "./components/SpeakerCombobox";
 import {
   ENGINE_OPTIONS,
+  MODAL_ASR_MODEL_OPTIONS,
+  type ModalAsrModel,
   LOG_LEVEL_OPTIONS,
   PLAUD_RETRANSCRIBE_OPTIONS,
   TRANSCRIBE_PROVIDER_OPTIONS,
@@ -1867,6 +1869,7 @@ function MeetingDetailView({
   const [transcriptionProgress, setTranscriptionProgress] = useState<TranscriptionProgressUpdate | null>(null);
   const transcriptionAbortRef = useRef<AbortController | null>(null);
   const [selectedEngine, setSelectedEngine] = useState<string>("local:cohere");
+  const [modalAsrModel, setModalAsrModel] = useState<ModalAsrModel>("cohere");
   const [showDiarizationSettings, setShowDiarizationSettings] = useState(false);
   const [customClusteringThreshold, setCustomClusteringThreshold] = useState(0.50);
   const [customSimilarityThreshold, setCustomSimilarityThreshold] = useState(0.45);
@@ -2157,11 +2160,12 @@ function MeetingDetailView({
         const cfg = await cfgRes.json();
         if (cfg.localClusteringThreshold !== undefined) setCustomClusteringThreshold(cfg.localClusteringThreshold);
         if (cfg.localSimilarityThreshold !== undefined) setCustomSimilarityThreshold(cfg.localSimilarityThreshold);
-        if (cfg.transcriptionProvider === "speechmatics" || cfg.transcriptionProvider === "assemblyai" || cfg.transcriptionProvider === "muse") {
+        if (cfg.transcriptionProvider === "speechmatics" || cfg.transcriptionProvider === "assemblyai" || cfg.transcriptionProvider === "muse" || cfg.transcriptionProvider === "modal") {
           setSelectedEngine(cfg.transcriptionProvider);
         } else {
           setSelectedEngine("local:cohere");
         }
+        if (cfg.modalAsrModel) setModalAsrModel(cfg.modalAsrModel);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load meeting");
@@ -2357,7 +2361,8 @@ function MeetingDetailView({
           poll: true,
           force: true,
           clusteringThreshold: isLocal ? customClusteringThreshold : undefined,
-          similarityThreshold: isLocal ? customSimilarityThreshold : undefined
+          similarityThreshold: isLocal ? customSimilarityThreshold : undefined,
+          asrModel: selectedEngine === "modal" ? modalAsrModel : undefined
         })
       });
 
@@ -2802,6 +2807,19 @@ function MeetingDetailView({
                 />
               </div>
 
+              {selectedEngine === "modal" && (
+                <div className="w-full sm:w-64">
+                  <Combobox
+                    value={modalAsrModel}
+                    onChange={(v) => setModalAsrModel(v as ModalAsrModel)}
+                    placeholder="Select STT model…"
+                    ariaLabel="Modal speech-to-text model"
+                    searchPlaceholder="Search models…"
+                    options={MODAL_ASR_MODEL_OPTIONS}
+                  />
+                </div>
+              )}
+
               {selectedEngine.startsWith("local") && (
                 <button
                   type="button"
@@ -2945,7 +2963,7 @@ function MeetingDetailView({
                   <span className="font-semibold text-base-content uppercase tracking-wide">
                     {selectedEngine.startsWith("local")
                       ? "Local Pipeline (Cohere Transcribe + Diarization)"
-                      : selectedEngine === "assemblyai" ? "AssemblyAI Cloud" : selectedEngine === "muse" ? "Muse Voice Cloud" : "Speechmatics Cloud"}
+                      : selectedEngine === "assemblyai" ? "AssemblyAI Cloud" : selectedEngine === "muse" ? "Muse Voice Cloud" : selectedEngine === "modal" ? `Modal GPU (${modalAsrModel})` : "Speechmatics Cloud"}
                   </span>
                   <span className="text-base-content/50">•</span>
                   <span className="text-primary font-medium capitalize">
@@ -4679,7 +4697,7 @@ function UploadAudioModal({
     void fetch("/api/config")
       .then((res) => (res.ok ? res.json() : null))
       .then((config) => {
-        if (config?.transcriptionProvider === "speechmatics" || config?.transcriptionProvider === "assemblyai" || config?.transcriptionProvider === "muse") {
+        if (config?.transcriptionProvider === "speechmatics" || config?.transcriptionProvider === "assemblyai" || config?.transcriptionProvider === "muse" || config?.transcriptionProvider === "modal") {
           setSelectedEngine(config.transcriptionProvider);
         } else {
           setSelectedEngine("local:cohere");
@@ -5524,12 +5542,16 @@ function LlmSettingsModal({
   const [localClusteringThreshold, setLocalClusteringThreshold] = useState<number>(0.50);
   const [localSimilarityThreshold, setLocalSimilarityThreshold] = useState<number>(0.45);
   const [localAsrModel, setLocalAsrModel] = useState<string>("onnx-community/cohere-transcribe-03-2026-ONNX");
-  const [transcriptionProvider, setTranscriptionProvider] = useState<"speechmatics" | "local" | "assemblyai" | "muse">("local");
+  const [transcriptionProvider, setTranscriptionProvider] = useState<"speechmatics" | "local" | "assemblyai" | "muse" | "modal">("local");
   const [plaudRetranscribeMode, setPlaudRetranscribeMode] = useState<"off" | "unnamed" | "always">("off");
   const [hfToken, setHfToken] = useState<string>("");
   const [speechmaticsApiKey, setSpeechmaticsApiKey] = useState<string>("");
   const [assemblyaiApiKey, setAssemblyaiApiKey] = useState<string>("");
   const [museApiKey, setMuseApiKey] = useState<string>("");
+  const [modalTokenId, setModalTokenId] = useState<string>("");
+  const [modalTokenSecret, setModalTokenSecret] = useState<string>("");
+  const [modalAppName, setModalAppName] = useState<string>("olive-gpu");
+  const [settingsModalAsrModel, setSettingsModalAsrModel] = useState<ModalAsrModel>("cohere");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [refreshingCatalog, setRefreshingCatalog] = useState(false);
@@ -5571,7 +5593,7 @@ function LlmSettingsModal({
         if (appCfg.localAsrModel !== undefined) {
           setLocalAsrModel(appCfg.localAsrModel);
         }
-        if (appCfg.transcriptionProvider === "speechmatics" || appCfg.transcriptionProvider === "local" || appCfg.transcriptionProvider === "assemblyai" || appCfg.transcriptionProvider === "muse") {
+        if (appCfg.transcriptionProvider === "speechmatics" || appCfg.transcriptionProvider === "local" || appCfg.transcriptionProvider === "assemblyai" || appCfg.transcriptionProvider === "muse" || appCfg.transcriptionProvider === "modal") {
           setTranscriptionProvider(appCfg.transcriptionProvider);
         }
         if (appCfg.alwaysRetranscribePlaud) {
@@ -5593,6 +5615,10 @@ function LlmSettingsModal({
         if (typeof appCfg.museApiKey === "string") {
           setMuseApiKey(appCfg.museApiKey);
         }
+        if (typeof appCfg.modalTokenId === "string") setModalTokenId(appCfg.modalTokenId);
+        if (typeof appCfg.modalTokenSecret === "string") setModalTokenSecret(appCfg.modalTokenSecret);
+        if (typeof appCfg.modalAppName === "string" && appCfg.modalAppName) setModalAppName(appCfg.modalAppName);
+        if (appCfg.modalAsrModel) setSettingsModalAsrModel(appCfg.modalAsrModel);
       }
 
       if (provRes.ok) {
@@ -5732,7 +5758,11 @@ function LlmSettingsModal({
             hfToken,
             speechmaticsApiKey,
             assemblyaiApiKey,
-            museApiKey
+            museApiKey,
+            modalTokenId,
+            modalTokenSecret,
+            modalAppName,
+            modalAsrModel: settingsModalAsrModel
           })
         })
       ]);
@@ -5945,14 +5975,14 @@ function LlmSettingsModal({
             </label>
             <Combobox
               value={transcriptionProvider}
-              onChange={(v) => setTranscriptionProvider(v as "speechmatics" | "local" | "assemblyai" | "muse")}
+              onChange={(v) => setTranscriptionProvider(v as "speechmatics" | "local" | "assemblyai" | "muse" | "modal")}
               placeholder="Select engine…"
               ariaLabel="Automatic transcription engine"
               searchPlaceholder="Search engines…"
               options={TRANSCRIBE_PROVIDER_OPTIONS}
             />
             <p className="text-[11px] text-base-content/50">
-              Controls the default for new uploads and manual transcription. Keys entered below take effect immediately; environment variables (ASSEMBLY_API_KEY, SPEECHMATICS_API_KEY, MUSE_API_KEY) override them when set.
+              Controls the default for new uploads and manual transcription. Keys entered below take effect immediately; environment variables (ASSEMBLY_API_KEY, SPEECHMATICS_API_KEY, MUSE_API_KEY, MODAL_TOKEN_ID/MODAL_TOKEN_SECRET) override them when set.
             </p>
             <div className="space-y-1.5">
               <label className="block text-xs font-semibold uppercase tracking-wider text-base-content">
@@ -6014,6 +6044,53 @@ function LlmSettingsModal({
                 autoComplete="off"
                 className="input input-md w-full placeholder-base-content/50 font-mono"
               />
+            </div>
+            <div className="space-y-1.5 rounded-lg border border-base-300 p-3">
+              <div className="text-xs text-base-content font-medium flex items-center justify-between">
+                <span>Modal GPU worker</span>
+                <span className="text-[10px] text-base-content/50 font-mono">MODAL_TOKEN_ID / MODAL_TOKEN_SECRET env override</span>
+              </div>
+              <input
+                id="modal-token-id-input"
+                aria-label="Modal token ID"
+                type="text"
+                value={modalTokenId}
+                onChange={(e) => setModalTokenId(e.target.value)}
+                placeholder="Token ID (ak-…)"
+                autoComplete="off"
+                className="input input-md w-full placeholder-base-content/50 font-mono"
+              />
+              <input
+                id="modal-token-secret-input"
+                aria-label="Modal token secret"
+                type="password"
+                value={modalTokenSecret}
+                onChange={(e) => setModalTokenSecret(e.target.value)}
+                placeholder="Token secret (as-…)"
+                autoComplete="off"
+                className="input input-md w-full placeholder-base-content/50 font-mono"
+              />
+              <input
+                id="modal-app-name-input"
+                aria-label="Modal app name"
+                type="text"
+                value={modalAppName}
+                onChange={(e) => setModalAppName(e.target.value)}
+                placeholder="Deployed app name (olive-gpu)"
+                autoComplete="off"
+                className="input input-md w-full placeholder-base-content/50 font-mono"
+              />
+              <Combobox
+                value={settingsModalAsrModel}
+                onChange={(v) => setSettingsModalAsrModel(v as ModalAsrModel)}
+                placeholder="Select STT model…"
+                ariaLabel="Default Modal speech-to-text model"
+                searchPlaceholder="Search models…"
+                options={MODAL_ASR_MODEL_OPTIONS}
+              />
+              <p className="text-[11px] text-base-content/50">
+                Default speech-to-text model for the Modal engine; it can be overridden per meeting. Deploy the worker with <span className="font-mono">modal deploy modal_app/olive_gpu.py</span>.
+              </p>
             </div>
           </div>
 
