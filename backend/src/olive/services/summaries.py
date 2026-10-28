@@ -16,7 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from ..db import DbHandle, get_db
-from ..languages import language_name
+from ..languages import is_auto_language, language_name
 from ..layout import meeting_paths
 from ..logging_db import logger
 from ..schemas import LlmGenerateResult, SummaryGenerationStatus, Template
@@ -282,7 +282,10 @@ class SummaryService:
         )
 
         raw_language = str(options.get("language") or self.default_language or "").strip()
-        language = language_name(raw_language) if raw_language else ""
+        if is_auto_language(raw_language):
+            language = "the same language as the transcript"
+        else:
+            language = language_name(raw_language) if raw_language else ""
 
         def replace_vars(s: str) -> str:
             return (

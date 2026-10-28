@@ -160,6 +160,11 @@ async def test_summary_language_defaults_and_overrides(tmp_path: Path) -> None:
     assert "Write the entire response in" not in prompts[0]
     assert prompts[1].endswith("Write the entire response in Spanish.")
     assert prompts[2].endswith("Write the entire response in Portuguese.")
+
+    await summary_service.generate_summary({"meetingId": meeting_id, "language": "auto"})
+    assert (calls[3].get("systemPrompt") or "").endswith(
+        "Write the entire response in the same language as the transcript."
+    )
     handle.engine.dispose()
 
 
