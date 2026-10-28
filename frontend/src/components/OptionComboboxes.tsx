@@ -154,10 +154,17 @@ const LANGUAGES: Array<[code: string, name: string]> = [
   ["vi", "Vietnamese"],
 ];
 
-/** Language picker options; the empty value means "fall back to the default" (described by `defaultLabel`). */
-export function languageOptions(defaultLabel: string): ComboboxOption[] {
+export const TRANSCRIPTION_AUTO_LABEL = "Auto-detect (local engine uses English)";
+export const SUMMARY_AUTO_LABEL = "Same as transcript";
+
+/**
+ * Language picker options. The empty value falls back to the default (described by `defaultLabel`);
+ * "auto" asks the engine to detect it, or the summary to follow the transcript (described by `autoLabel`).
+ */
+export function languageOptions(defaultLabel: string, autoLabel: string): ComboboxOption[] {
   return [
-    { value: "", label: defaultLabel, keywords: "default auto" },
+    { value: "", label: defaultLabel, keywords: "default" },
+    { value: "auto", label: autoLabel, keywords: "auto detect" },
     ...LANGUAGES.map(([code, name]) => ({ value: code, label: name, description: code, keywords: code })),
   ];
 }

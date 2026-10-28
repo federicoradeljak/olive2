@@ -23,7 +23,9 @@ import {
   type ModalAsrModel,
   LOG_LEVEL_OPTIONS,
   PLAUD_RETRANSCRIBE_OPTIONS,
+  SUMMARY_AUTO_LABEL,
   TRANSCRIBE_PROVIDER_OPTIONS,
+  TRANSCRIPTION_AUTO_LABEL,
   TRANSCRIPT_PROVIDER_FILTER_OPTIONS,
   ThinkingLabel,
   languageOptions,
@@ -1757,7 +1759,7 @@ function BulkTranscribeModal({
               placeholder="Select language…"
               ariaLabel="Transcription language"
               searchPlaceholder="Search languages…"
-              options={languageOptions("Default from settings")}
+              options={languageOptions("Default from settings", TRANSCRIPTION_AUTO_LABEL)}
             />
           </label>
 
@@ -2830,7 +2832,7 @@ function MeetingDetailView({
                   placeholder="Select language…"
                   ariaLabel="Transcription language"
                   searchPlaceholder="Search languages…"
-                  options={languageOptions("Default language")}
+                  options={languageOptions("Default language", TRANSCRIPTION_AUTO_LABEL)}
                 />
               </div>
 
@@ -3953,7 +3955,7 @@ function GenerateSummaryModal({
               placeholder="Select language…"
               ariaLabel="Summary language"
               searchPlaceholder="Search languages…"
-              options={languageOptions("Default from settings")}
+              options={languageOptions("Default from settings", SUMMARY_AUTO_LABEL)}
             />
           </div>
 
@@ -4871,7 +4873,7 @@ function UploadAudioModal({
                 placeholder="Select language…"
                 ariaLabel="Transcription language"
                 searchPlaceholder="Search languages…"
-                options={languageOptions("Default from settings")}
+                options={languageOptions("Default from settings", TRANSCRIPTION_AUTO_LABEL)}
               />
             </div>
           )}
@@ -5958,7 +5960,7 @@ function LlmSettingsModal({
                   placeholder="Select language…"
                   ariaLabel="Default transcription language"
                   searchPlaceholder="Search languages…"
-                  options={languageOptions("Engine default (English / auto-detect)")}
+                  options={languageOptions("Engine default (English on local / Speechmatics)", TRANSCRIPTION_AUTO_LABEL)}
                 />
               </div>
               <div className="space-y-1.5">
@@ -5969,7 +5971,7 @@ function LlmSettingsModal({
                   placeholder="Select language…"
                   ariaLabel="Default summary language"
                   searchPlaceholder="Search languages…"
-                  options={languageOptions("Template default")}
+                  options={languageOptions("Template default", SUMMARY_AUTO_LABEL)}
                 />
               </div>
             </div>
