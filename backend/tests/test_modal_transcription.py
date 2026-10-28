@@ -212,6 +212,18 @@ async def test_modal_request_asr_model_overrides_setting(tmp_path: Path) -> None
     handle.engine.dispose()
 
 
+async def test_modal_auto_language_falls_back_to_english_only_for_cohere(tmp_path: Path) -> None:
+    handle, meeting_id, _paths = _seed_meeting(tmp_path)
+    calls: list[dict[str, Any]] = []
+    service = _service(handle, str(tmp_path / "meetings"), calls, _FakeHandle(WORKER_RESULT))
+    for asr_model in ("cohere", "whisper-large-v3"):
+        await service.transcribe_meeting(
+            meeting_id, {"provider": "modal", "asrModel": asr_model, "language": "auto", "force": True}
+        )
+    assert [c["options"]["language"] for c in calls] == ["en", "auto"]
+    handle.engine.dispose()
+
+
 async def test_modal_unknown_asr_model_fails_without_spawning(tmp_path: Path) -> None:
     handle, meeting_id, _paths = _seed_meeting(tmp_path)
     calls: list[dict[str, Any]] = []

@@ -1688,15 +1688,7 @@ class TranscriptionService:
             elif candidate_speakers:
                 expected_speaker_count = len(candidate_speakers)
 
-        language = opts.get("language")
-        if is_auto_language(language):
-            # Cohere and the CTC aligner need a fixed language; there is no
-            # local language-ID model, so auto-detect falls back to English.
-            self.logger.warn(
-                "Local transcription cannot auto-detect language; using English",
-                {"category": "transcription", "meetingId": meeting_id},
-            )
-            language = "en"
+        language = self._fixed_language(opts.get("language"), meeting_id, "local")
 
         task_id = str(uuid.uuid4())
         pipeline_options = dict(opts.get("pipelineOptions") or self.pipeline_options or {})
@@ -3286,6 +3278,17 @@ class TranscriptionService:
             "error": "Cancelled by user" if cancelled else err_msg,
         }
 
+    def _fixed_language(self, language: Any, meeting_id: str, engine: str) -> Any:
+        """Engines that need a fixed language (Cohere ASR, CTC aligner) can't
+        auto-detect: there is no language-ID model, so ``auto`` becomes English."""
+        if not is_auto_language(language):
+            return language
+        self.logger.warn(
+            "Engine cannot auto-detect language; using English",
+            {"category": "transcription", "meetingId": meeting_id, "engine": engine},
+        )
+        return "en"
+
     def _resolve_modal_asr_model(self, opts: dict[str, Any]) -> str:
         raw = opts.get("asrModel") or opts.get("asr_model")
         if not raw:
@@ -3467,7 +3470,11 @@ class TranscriptionService:
                 audio_bytes,
                 {
                     "asrModel": asr_model,
-                    "language": opts.get("language"),
+                    "language": (
+                        self._fixed_language(opts.get("language"), meeting_id, "modal:cohere")
+                        if asr_model == "cohere"
+                        else opts.get("language")
+                    ),
                     "modelId": opts.get("modelId"),
                     "wholeFileAsr": bool(opts.get("wholeFileAsr")),
                     "expectedSpeakerCount": expected_speaker_count,
