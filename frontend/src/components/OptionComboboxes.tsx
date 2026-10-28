@@ -135,6 +135,33 @@ export const TRANSCRIPT_PROVIDER_FILTER_OPTIONS: ComboboxOption[] = [
   { value: "none", label: "No transcript yet" },
 ];
 
+/** ISO 639-1 codes offered for transcription / summary language (mirrors backend olive/languages.py). */
+const LANGUAGES: Array<[code: string, name: string]> = [
+  ["es", "Spanish"],
+  ["en", "English"],
+  ["pt", "Portuguese"],
+  ["fr", "French"],
+  ["de", "German"],
+  ["it", "Italian"],
+  ["nl", "Dutch"],
+  ["pl", "Polish"],
+  ["ru", "Russian"],
+  ["tr", "Turkish"],
+  ["ar", "Arabic"],
+  ["zh", "Chinese"],
+  ["ja", "Japanese"],
+  ["ko", "Korean"],
+  ["vi", "Vietnamese"],
+];
+
+/** Language picker options; the empty value means "fall back to the default" (described by `defaultLabel`). */
+export function languageOptions(defaultLabel: string): ComboboxOption[] {
+  return [
+    { value: "", label: defaultLabel, keywords: "default auto" },
+    ...LANGUAGES.map(([code, name]) => ({ value: code, label: name, description: code, keywords: code })),
+  ];
+}
+
 interface TemplateLike {
   id: string;
   name: string;
