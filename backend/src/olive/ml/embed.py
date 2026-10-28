@@ -16,6 +16,7 @@ from huggingface_hub import hf_hub_download
 
 from ..settings import get_effective_hf_token
 from .audio import resample
+from .device import onnx_providers
 from .model_store import WESPEAKER_FILENAME, WESPEAKER_REPO_ID
 from .protocols import VoiceprintVector
 from .scoring import normalize_vector
@@ -109,7 +110,7 @@ class WeSpeakerEmbeddingExtractor:
             sess = ort.InferenceSession(
                 path,
                 sess_opts,
-                providers=["CPUExecutionProvider"],
+                providers=onnx_providers(),
             )
             in_name = sess.get_inputs()[0].name
             out_shape = sess.get_outputs()[0].shape

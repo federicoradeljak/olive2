@@ -581,7 +581,7 @@ MCP_WRITE_TOOLS_SPEC: list[dict[str, Any]] = [
                 "meetingId": {"type": "string", "description": "Meeting ID"},
                 "provider": {
                     "type": "string",
-                    "enum": ["local", "speechmatics", "assemblyai", "muse"],
+                    "enum": ["local", "speechmatics", "assemblyai", "muse", "modal"],
                     "description": "Transcription engine (defaults to server default)",
                 },
                 "language": {"type": "string", "description": "BCP-47 language hint (e.g. en)"},
@@ -611,7 +611,7 @@ MCP_WRITE_TOOLS_SPEC: list[dict[str, Any]] = [
             "properties": {
                 "provider": {
                     "type": "string",
-                    "enum": ["local", "speechmatics", "assemblyai", "muse"],
+                    "enum": ["local", "speechmatics", "assemblyai", "muse", "modal"],
                     "description": "Transcription engine for all targets",
                 },
                 "meetingIds": {
@@ -1051,8 +1051,16 @@ async def _handle_transcription_mcp_tools(
         tr_dry = bool(arguments.get("dryRun"))
         if not tr_mid:
             return _error_result("meetingId is required")
-        if tr_provider is not None and tr_provider not in ("local", "speechmatics", "assemblyai", "muse"):
-            return _error_result("provider must be one of 'local', 'speechmatics', 'assemblyai', 'muse'")
+        if tr_provider is not None and tr_provider not in (
+            "local",
+            "speechmatics",
+            "assemblyai",
+            "muse",
+            "modal",
+        ):
+            return _error_result(
+                "provider must be one of 'local', 'speechmatics', 'assemblyai', 'muse', 'modal'"
+            )
         tr_detail = get_meeting(db, tr_mid, meetings_dir)
         if not tr_detail:
             return _error_result("Meeting not found")
@@ -1094,8 +1102,10 @@ async def _handle_transcription_mcp_tools(
         bt_force = True if bt_force is None else bool(bt_force)
         bt_language = arguments.get("language")
         bt_dry = bool(arguments.get("dryRun"))
-        if bt_provider not in ("local", "speechmatics", "assemblyai", "muse"):
-            return _error_result("provider must be one of 'local', 'speechmatics', 'assemblyai', 'muse'")
+        if bt_provider not in ("local", "speechmatics", "assemblyai", "muse", "modal"):
+            return _error_result(
+                "provider must be one of 'local', 'speechmatics', 'assemblyai', 'muse', 'modal'"
+            )
         raw_bt_ids = arguments.get("meetingIds")
         bt_ids: list[str] = []
         if raw_bt_ids is not None:

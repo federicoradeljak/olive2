@@ -36,6 +36,7 @@ from .services.templates import TemplateService
 from .settings import (
     OlivePaths,
     get_effective_assemblyai_key,
+    get_effective_modal_credentials,
     get_effective_muse_key,
     get_effective_speechmatics_key,
     is_masked_secret,
@@ -93,6 +94,22 @@ def _safe_web_path(web_root: str, request_path: str) -> Path | None:
     return candidate
 
 
+def _refresh_modal_credentials(client: Any, config: Any = None, env: dict[str, str] | None = None) -> None:
+    setter = getattr(client, "set_credentials", None)
+    if not callable(setter):
+        return
+    try:
+        token_id, token_secret = (
+            get_effective_modal_credentials(config, env)
+            if env is not None
+            else get_effective_modal_credentials(config)
+        )
+        app_name = getattr(config, "modalAppName", None) if config is not None else None
+        setter(token_id, token_secret, app_name)
+    except Exception:
+        pass
+
+
 def refresh_transcription_client_keys(
     clients: list[tuple[str, Any]],
     config: Any = None,
@@ -115,6 +132,9 @@ def refresh_transcription_client_keys(
         if client is None or id(client) in seen:
             continue
         seen.add(id(client))
+        if kind == "modal":
+            _refresh_modal_credentials(client, config, env)
+            continue
         getter = getters.get(kind)
         if getter is None:
             continue
@@ -214,6 +234,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
     speechmatics_client = opts.get("speechmaticsClient") or opts.get("speechmatics_client")
     assemblyai_client = opts.get("assemblyaiClient") or opts.get("assemblyai_client")
     muse_client = opts.get("museClient") or opts.get("muse_client")
+    modal_client = opts.get("modalClient") or opts.get("modal_client")
     transcription_service = opts.get("transcriptionService") or opts.get("transcription_service")
     speaker_service = opts.get("speakerService") or opts.get("speaker_service")
     llm_service = opts.get("llmService") or opts.get("llm_service")
@@ -239,6 +260,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             ("speechmatics", speechmatics_client),
             ("assemblyai", assemblyai_client),
             ("muse", muse_client),
+            ("modal", modal_client),
         ]
         if transcription_service is not None:
             pairs.extend(
@@ -246,6 +268,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                     ("speechmatics", getattr(transcription_service, "client", None)),
                     ("assemblyai", getattr(transcription_service, "assemblyai_client", None)),
                     ("muse", getattr(transcription_service, "muse_client", None)),
+                    ("modal", getattr(transcription_service, "modal_client", None)),
                 ]
             )
         refresh_transcription_client_keys(pairs, cfg)
@@ -288,6 +311,29 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                 initial_key = ""
             muse_client = MuseClient({"apiKey": initial_key})
         return muse_client
+
+    def get_modal_client() -> Any:
+        nonlocal modal_client
+        if modal_client is None:
+            from .providers.modal import ModalClient
+
+            cfg = _current_app_config()
+            try:
+                token_id, token_secret = get_effective_modal_credentials(cfg)
+            except Exception:
+                token_id, token_secret = None, None
+            modal_client = ModalClient(
+                {
+                    "tokenId": token_id or "",
+                    "tokenSecret": token_secret or "",
+                    "appName": getattr(cfg, "modalAppName", None),
+                }
+            )
+        return modal_client
+
+    def _modal_asr_model_setting() -> str | None:
+        cfg = _current_app_config()
+        return getattr(cfg, "modalAsrModel", None) if cfg is not None else None
 
     def get_llm_service() -> Any:
         nonlocal llm_service
@@ -345,6 +391,8 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                 speechmatics_client=get_speechmatics_client(),
                 assemblyai_client=get_assemblyai_client(),
                 muse_client=get_muse_client(),
+                modal_client=get_modal_client(),
+                modal_asr_model=_modal_asr_model_setting,
                 default_provider=default_provider,
                 webhook_secret=speechmatics_webhook_secret,
                 config_dir=config_dir,
@@ -665,7 +713,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
 
         auto_transcribe = str(auto_transcribe_param) in ("true", "1")
         transcription_provider = load_app_config(app_config_paths).transcriptionProvider
-        if provider_param in ("local", "speechmatics", "assemblyai", "muse"):
+        if provider_param in ("local", "speechmatics", "assemblyai", "muse", "modal"):
             transcription_provider = provider_param  # type: ignore[assignment]
         model_id = (
             str(model_id_param).strip()
@@ -1224,6 +1272,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                                 "similarityThreshold": similarity_threshold,
                                 "clusteringThreshold": clustering_threshold,
                                 "modelId": model_id,
+                                "asrModel": body.get("asrModel"),
                                 "onProgress": on_progress,
                             },
                         )
@@ -1333,6 +1382,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             "similarityThreshold": similarity_threshold,
             "clusteringThreshold": clustering_threshold,
             "modelId": model_id,
+            "asrModel": body.get("asrModel"),
         }
         wants_background = (
             body.get("background") is True
@@ -1484,9 +1534,9 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         if isinstance(provider, str) and provider.startswith("local"):
             body = {**body, "provider": "local"}
             provider = "local"
-        if provider not in ("local", "speechmatics", "assemblyai", "muse"):
+        if provider not in ("local", "speechmatics", "assemblyai", "muse", "modal"):
             return JSONResponse(
-                {"error": "provider must be one of 'local', 'speechmatics', 'assemblyai', 'muse'"},
+                {"error": "provider must be one of 'local', 'speechmatics', 'assemblyai', 'muse', 'modal'"},
                 status_code=400,
             )
 
@@ -2285,7 +2335,13 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                 raise ValueError("JSON object required")
             current = load_app_config(app_config_paths)
             merged = {**current.model_dump(), **body}
-            for secret_field in ("hfToken", "speechmaticsApiKey", "assemblyaiApiKey", "museApiKey"):
+            for secret_field in (
+                "hfToken",
+                "speechmaticsApiKey",
+                "assemblyaiApiKey",
+                "museApiKey",
+                "modalTokenSecret",
+            ):
                 if secret_field in body and is_masked_secret(body.get(secret_field)):
                     merged[secret_field] = getattr(current, secret_field)
             updated = save_app_config(merged, app_config_paths)
