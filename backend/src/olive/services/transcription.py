@@ -246,6 +246,7 @@ class TranscriptionService:
         modal_asr_model: str | Callable[[], str | None] | None = None,
         local_pipeline: Any = None,
         default_provider: TranscriptionProviderName | None = None,
+        default_language: str | None = None,
         logger: Logger | None = None,
         webhook_url: str | None = None,
         webhook_secret: str | None = None,
@@ -303,6 +304,10 @@ class TranscriptionService:
                 if (passed_aai or os.environ.get("ASSEMBLY_API_KEY") or os.environ.get("ASSEMBLYAI_API_KEY"))
                 else "local"
             )
+        )
+        # Settings default; a per-request ``language`` always wins.
+        self.default_language: str = str(
+            default_language or opts.get("defaultLanguage") or opts.get("default_language") or ""
         )
         self.logger: Logger = logger or opts.get("logger") or default_logger
         self.webhook_url: str | None = webhook_url or opts.get("webhookUrl") or opts.get("webhook_url")
@@ -445,6 +450,17 @@ class TranscriptionService:
         self.default_provider = provider
 
     setDefaultProvider = set_default_provider
+
+    def set_default_language(self, language: str | None) -> None:
+        self.default_language = str(language or "")
+
+    setDefaultLanguage = set_default_language
+
+    def _with_default_language(self, options: dict[str, Any] | None) -> dict[str, Any]:
+        opts = dict(options or {})
+        if not opts.get("language") and self.default_language:
+            opts["language"] = self.default_language
+        return opts
 
     def stop(self) -> None:
         for job in list(self._active_jobs.values()):
@@ -598,7 +614,7 @@ class TranscriptionService:
         meeting_id: str,
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        opts = dict(options or {})
+        opts = self._with_default_language(options)
         with self.db.connect() as conn:
             meeting = (
                 conn.execute(
@@ -1497,7 +1513,7 @@ class TranscriptionService:
         meeting_id: str,
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        opts = dict(options or {})
+        opts = self._with_default_language(options)
         provider: TranscriptionProviderName = opts.get("provider") or self.default_provider
 
         self.logger.debug(

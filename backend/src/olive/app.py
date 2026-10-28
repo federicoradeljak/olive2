@@ -394,6 +394,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                 modal_client=get_modal_client(),
                 modal_asr_model=_modal_asr_model_setting,
                 default_provider=default_provider,
+                default_language=load_app_config(app_config_paths).defaultTranscriptionLanguage,
                 webhook_secret=speechmatics_webhook_secret,
                 config_dir=config_dir,
             )
@@ -2351,6 +2352,11 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                     transcription_service,
                     ("set_default_provider", "setDefaultProvider"),
                     updated.transcriptionProvider,
+                )
+                _call_sync(
+                    transcription_service,
+                    ("set_default_language", "setDefaultLanguage"),
+                    updated.defaultTranscriptionLanguage,
                 )
             ingest_service.set_default_transcription_provider(updated.transcriptionProvider)
             return JSONResponse({"status": "updated", "config": mask_app_config(updated)})
