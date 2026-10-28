@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from olive.app import create_app
 from olive.db import create_db
+from olive.services.ingest import IngestService
 from olive.services.transcription import TranscriptionService
 from olive.settings import AppConfig, clear_app_config_cache, load_app_config, resolve_paths, save_app_config
 
@@ -77,5 +78,41 @@ def test_config_route_pushes_default_language_to_transcription(tmp_path) -> None
     assert res.status_code == 200
     assert res.json()["config"]["defaultTranscriptionLanguage"] == "es"
     assert double.default_language == "es"
+    handle.engine.dispose()
+    clear_app_config_cache()
+
+
+def test_ingest_forwards_language_override_only_when_given(tmp_path) -> None:
+    started: list[dict[str, Any]] = []
+
+    class _Transcription:
+        async def start_transcription(self, _meeting_id: str, opts: dict[str, Any]) -> dict[str, Any]:
+            started.append(opts)
+            return {"status": "queued"}
+
+    clear_app_config_cache()
+    handle = create_db(":memory:")
+    meetings_dir = str(tmp_path / "meetings")
+    ingest_service = IngestService(
+        db=handle.engine, meetings_dir=meetings_dir, transcription_service=_Transcription()
+    )
+    client = TestClient(
+        create_app(
+            {
+                "db": handle.engine,
+                "configDir": str(tmp_path),
+                "meetingsDir": meetings_dir,
+                "ingestService": ingest_service,
+            }
+        )
+    )
+    for name, extra in (("a.m4a", {"language": "pt"}), ("b.m4a", {})):
+        res = client.post(
+            "/api/ingest",
+            files={"file": (name, name.encode() * 8, "audio/mp4")},
+            data={"autoTranscribe": "true", **extra},
+        )
+        assert res.status_code == 201, res.text
+    assert [o.get("language") for o in started] == ["pt", None]
     handle.engine.dispose()
     clear_app_config_cache()

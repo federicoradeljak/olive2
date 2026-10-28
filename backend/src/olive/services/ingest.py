@@ -374,6 +374,7 @@ class IngestService:
                 or self.default_transcription_provider
             )
             model_id = options.get("modelId") or options.get("model_id")
+            language = options.get("language")
             self.logger.debug(
                 "Triggering auto-transcription after audio ingest",
                 {
@@ -392,10 +393,11 @@ class IngestService:
             )
             if callable(start_fn):
                 try:
-                    res = start_fn(
-                        meeting_id,
-                        {"provider": provider, "modelId": model_id},
-                    )
+                    start_opts: dict[str, Any] = {"provider": provider, "modelId": model_id}
+                    # Omitted language lets the service apply the settings default.
+                    if language:
+                        start_opts["language"] = language
+                    res = start_fn(meeting_id, start_opts)
                     if inspect.isawaitable(res):
                         await res
                 except Exception as exc:

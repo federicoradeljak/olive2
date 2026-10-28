@@ -703,6 +703,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         auto_transcribe_param = form.get("autoTranscribe")
         provider_param = form.get("provider")
         model_id_param = form.get("modelId")
+        language_param = form.get("language")
         duration_ms_param = form.get("durationMs")
         if duration_ms_param is None:
             duration_ms_param = form.get("duration_ms")
@@ -721,6 +722,11 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             if isinstance(model_id_param, str) and model_id_param.strip()
             else None
         )
+        language = (
+            str(language_param).strip()
+            if isinstance(language_param, str) and language_param.strip()
+            else None
+        )
 
         if auto_transcribe and ingest_service.transcription_service is None:
             ingest_service.transcription_service = get_transcription_service()
@@ -737,6 +743,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                     "autoTranscribe": auto_transcribe,
                     "transcriptionProvider": transcription_provider,
                     "modelId": model_id,
+                    "language": language,
                     "durationMs": (
                         str(duration_ms_param)
                         if duration_ms_param is not None and not hasattr(duration_ms_param, "read")
