@@ -19,6 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from ..db import DbHandle, get_db
+from ..languages import is_auto_language
 from ..layout import ensure_meeting_folder, meeting_paths
 from ..logging_db import Logger
 from ..logging_db import logger as default_logger
@@ -1687,13 +1688,23 @@ class TranscriptionService:
             elif candidate_speakers:
                 expected_speaker_count = len(candidate_speakers)
 
+        language = opts.get("language")
+        if is_auto_language(language):
+            # Cohere and the CTC aligner need a fixed language; there is no
+            # local language-ID model, so auto-detect falls back to English.
+            self.logger.warn(
+                "Local transcription cannot auto-detect language; using English",
+                {"category": "transcription", "meetingId": meeting_id},
+            )
+            language = "en"
+
         task_id = str(uuid.uuid4())
         pipeline_options = dict(opts.get("pipelineOptions") or self.pipeline_options or {})
         payload: dict[str, Any] = {
             "taskId": task_id,
             "meetingId": meeting_id,
             "audioPath": audio_full_path,
-            "language": opts.get("language"),
+            "language": language,
             "modelId": opts.get("modelId"),
             "enrolledSpeakers": [
                 s.model_dump() if isinstance(s, EnrolledSpeaker) else s for s in enrolled_speakers

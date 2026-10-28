@@ -147,3 +147,54 @@ def test_summary_route_and_config_forward_language(tmp_path) -> None:
     assert double.default_language == "pt"
     handle.engine.dispose()
     clear_app_config_cache()
+
+
+def test_assemblyai_auto_language_uses_detection() -> None:
+    from olive.providers.assemblyai.client import _build_config  # pyright: ignore[reportPrivateUsage]
+
+    assert _build_config({"language": "auto"}).get("language_detection") is True
+    assert "language_code" not in _build_config({"language": "auto"})
+    assert _build_config({"language": "es"})["language_code"] == "es"
+
+
+async def test_local_auto_language_falls_back_to_english(tmp_path, monkeypatch) -> None:
+    from pathlib import Path
+
+    from sqlalchemy import text
+
+    import olive.services.transcription as transcription_module
+    from olive.layout import meeting_paths
+
+    handle = create_db(":memory:")
+    meetings_dir = str(tmp_path / "meetings")
+    start = 1_700_000_000_000
+    paths = meeting_paths(meetings_dir, start, "Auto", "m-auto")
+    Path(paths.audio_dir).mkdir(parents=True, exist_ok=True)
+    (Path(paths.folder) / "audio/test.m4a").write_bytes(b"audio")
+    with handle.engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO meetings (id, title, start_time, end_time, source, status, tags, created_at, updated_at)"
+                " VALUES ('m-auto', 'Auto', :s, :e, 'upload', 'ready', '[]', :s, :s)"
+            ),
+            {"s": start, "e": start + 5000},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO recordings (id, meeting_id, path, mime, duration_ms, size_bytes, sha256, provider,"
+                " created_at) VALUES ('r-auto', 'm-auto', 'audio/test.m4a', 'audio/mp4', 5000, 5, 'sha',"
+                " 'upload', :s)"
+            ),
+            {"s": start},
+        )
+
+    payloads: list[dict[str, Any]] = []
+
+    async def _capture(payload: dict[str, Any]) -> None:
+        payloads.append(payload)
+
+    monkeypatch.setattr(transcription_module, "enqueue_local_transcription", _capture)
+    svc = TranscriptionService(db=handle.engine, meetings_dir=meetings_dir, default_provider="local")
+    await svc.transcribe_meeting_local("m-auto", {"language": "auto"})
+    assert payloads[0]["language"] == "en"
+    handle.engine.dispose()

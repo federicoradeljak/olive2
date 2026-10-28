@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+# Ask the engine to detect the language (transcription) or follow the
+# transcript's language (summaries).
+AUTO_LANGUAGE = "auto"
+
 LANGUAGE_NAME_BY_CODE: dict[str, str] = {
     "ar": "Arabic",
     "zh": "Chinese",
@@ -19,6 +23,10 @@ LANGUAGE_NAME_BY_CODE: dict[str, str] = {
     "tr": "Turkish",
     "vi": "Vietnamese",
 }
+
+
+def is_auto_language(value: object) -> bool:
+    return isinstance(value, str) and value.strip().lower() == AUTO_LANGUAGE
 
 
 def language_name(code: str) -> str:
