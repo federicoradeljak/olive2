@@ -43,6 +43,10 @@ jobs:
         working-directory: backend
         run: uv sync --frozen
 
+      - name: Warn when Modal secrets are missing
+        if: ${{ env.MODAL_TOKEN_ID == '' }}
+        run: echo "::warning title=Modal deploy skipped::MODAL_TOKEN_ID / MODAL_TOKEN_SECRET are not set; the GPU worker was NOT redeployed and may be out of sync with main."
+
       - name: Deploy worker
         working-directory: backend
         # Forks without Modal secrets skip instead of failing.
