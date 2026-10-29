@@ -103,7 +103,7 @@ export function TemplatePreview({ systemPrompt, userPrompt }: { systemPrompt: st
     const load = async () => {
       try {
         const [mRes, llmRes, cfgRes] = await Promise.all([
-          fetch("/api/meetings?limit=100&offset=0"),
+          fetch("/api/meetings?limit=100&offset=0&includeDetails=true"),
           fetch("/api/llm/config"),
           fetch("/api/config"),
         ]);
