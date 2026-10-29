@@ -1,11 +1,103 @@
 import { useEffect, useState } from "react";
 import type { ReactElement } from "react";
-import { ChevronDown, ChevronUp, Pause, Play, RotateCw, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Pause, Play, RotateCw, Search, Trash2, X } from "lucide-react";
 import { Combobox } from "../components/Combobox";
 import { confirmAction } from "../components/ui";
-import { LOG_LEVEL_OPTIONS, logCategoryOptions } from "../components/OptionComboboxes";
+import { logCategoryOptions } from "../components/OptionComboboxes";
 import type { LogItem, LogLevel, LogListResponse } from "../api/types.ts";
 import { formatLogTimestamp } from "./Usage";
+
+const LEVELS: Array<{ value: LogLevel; label: string; title: string }> = [
+  { value: "debug", label: "All", title: "All levels (debug and above)" },
+  { value: "info", label: "Info+", title: "Info, warnings and errors" },
+  { value: "warn", label: "Warnings", title: "Warnings and errors" },
+  { value: "error", label: "Errors", title: "Errors only" },
+];
+
+const LEVEL_TAG: Record<string, string> = {
+  debug: "tag-gray",
+  info: "tag-blue",
+  warn: "tag-yellow",
+  error: "tag-red",
+};
+
+const btnGhost =
+  "inline-flex min-h-11 items-center gap-1.5 rounded-md px-2.5 text-sm text-base-content/70 hover:bg-hover hover:text-base-content disabled:opacity-50 sm:min-h-[34px]";
+
+function formatLogTime(timestamp: number): string {
+  const d = new Date(timestamp);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  if (d.toDateString() === new Date().toDateString()) return time;
+  return `${new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(d)} ${time}`;
+}
+
+function LogRow({
+  log,
+  expanded,
+  onToggle,
+  onSelectMeeting,
+}: {
+  log: LogItem;
+  expanded: boolean;
+  onToggle: () => void;
+  onSelectMeeting: (id: string) => void;
+}): ReactElement {
+  const detailCount = log.details ? Object.keys(log.details).length : 0;
+  const meetingId = log.meetingId;
+  return (
+    <li
+      className={`border-b border-divider px-3 py-2 text-sm last:border-b-0 sm:px-3.5 ${
+        log.level === "error" ? "bg-error/5" : log.level === "warn" ? "bg-warning/5" : ""
+      }`}
+    >
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 xl:grid xl:grid-cols-[4.75rem_6.5rem_7.5rem_minmax(0,1fr)_minmax(0,11rem)] xl:items-start">
+        <span className={`tag ${LEVEL_TAG[log.level] ?? "tag-gray"} min-h-5 px-1.5 text-[11px] font-semibold uppercase`}>{log.level}</span>
+        <time
+          dateTime={new Date(log.createdAt).toISOString()}
+          title={formatLogTimestamp(log.createdAt)}
+          className="font-mono text-xs tabular-nums text-base-content/60 xl:pt-0.5"
+        >
+          {formatLogTime(log.createdAt)}
+        </time>
+        <span className="min-w-0 max-w-[10rem] truncate text-base-content/60 xl:max-w-none" title={log.category}>
+          {log.category}
+        </span>
+        <div className="order-last w-full min-w-0 xl:order-none xl:w-auto">
+          <p className="break-words leading-snug">{log.message}</p>
+          {detailCount > 0 && (
+            <button
+              type="button"
+              onClick={onToggle}
+              aria-expanded={expanded}
+              className="-ml-1 mt-0.5 inline-flex min-h-11 items-center gap-0.5 rounded px-1 text-xs text-base-content/55 hover:bg-hover hover:text-base-content sm:min-h-6"
+            >
+              {expanded ? <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" /> : <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />}
+              {expanded ? "Hide details" : `Details (${detailCount})`}
+            </button>
+          )}
+        </div>
+        {meetingId ? (
+          <button
+            type="button"
+            onClick={() => onSelectMeeting(meetingId)}
+            title={`Open meeting ${log.meetingTitle || meetingId}`}
+            className="ml-auto min-h-11 max-w-[14rem] truncate text-left text-base-content/60 underline sm:min-h-0 xl:ml-0 xl:max-w-full decoration-base-300 underline-offset-2 hover:text-base-content"
+          >
+            {log.meetingTitle || meetingId.slice(0, 8)}
+          </button>
+        ) : (
+          <span className="hidden xl:block" />
+        )}
+      </div>
+      {expanded && log.details && (
+        <pre className="mt-2 overflow-x-auto rounded-md bg-base-200 p-3 font-mono text-[11px] leading-snug text-base-content/85 xl:ml-[21rem]">
+          {JSON.stringify(log.details, null, 2)}
+        </pre>
+      )}
+    </li>
+  );
+}
 
 export function LogsView({ onSelectMeeting }: { onSelectMeeting: (id: string) => void }): ReactElement {
   const [logs, setLogs] = useState<LogItem[]>([]);
@@ -79,210 +171,102 @@ export function LogsView({ onSelectMeeting }: { onSelectMeeting: (id: string) =>
     }
   };
 
+  const filtered = selectedLevel !== "debug" || !!selectedCategory || !!searchQuery.trim();
+
   return (
-    <div className="space-y-6">
-      {/* Header & Controls */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold tracking-tight text-base-content">System & Job Logs</h1>
-            {autoRefresh && (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 border border-primary/30 px-2.5 py-0.5 text-[10px] font-semibold text-primary">
-                <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
-                Live (3s)
-              </span>
-            )}
-          </div>
-          <p className="text-sm text-base-content/70">
-            Real-time execution trace for ingestion, Speechmatics/local transcription, diarization, speaker enrollment, and AI summarization.
-          </p>
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <div role="radiogroup" aria-label="Minimum log level" className="flex rounded-lg bg-hover p-[3px]">
+          {LEVELS.map((l) => {
+            const on = selectedLevel === l.value;
+            return (
+              <button
+                key={l.value}
+                type="button"
+                role="radio"
+                aria-checked={on}
+                title={l.title}
+                onClick={() => setSelectedLevel(l.value)}
+                className={`min-h-10 rounded-md px-2.5 text-[13px] sm:min-h-7 ${
+                  on ? "bg-base-100 font-semibold shadow-sm" : "text-base-content/70 hover:text-base-content"
+                }`}
+              >
+                {l.label}
+              </button>
+            );
+          })}
         </div>
-
-        <div className="flex flex-wrap items-center gap-2 sm:gap-2.5">
-          <button
-            type="button"
-            onClick={() => setAutoRefresh(!autoRefresh)}
-            className={`min-h-[44px] flex-1 rounded-lg border px-3 py-1.5 text-sm font-medium transition sm:min-h-0 sm:flex-none sm:text-xs ${
-              autoRefresh
-                ? "border-primary/40 bg-primary/10 text-primary hover:bg-primary/20"
-                : "border-base-300 bg-base-300 text-base-content/70 hover:text-base-content"
-            }`}
-          >
-            {autoRefresh ? <><Pause className="h-4 w-4 shrink-0" aria-hidden="true" /> Pause Stream</> : <><Play className="h-4 w-4 shrink-0" aria-hidden="true" /> Auto-Refresh</>}
-          </button>
-          <button
-            type="button"
-            onClick={() => void fetchLogs()}
-            disabled={loading}
-            className="btn min-h-[44px] flex-1 bg-base-300 sm:min-h-0 sm:flex-none sm:text-xs"
-          >
-            {loading ? "Refreshing…" : <><RotateCw className="h-4 w-4 shrink-0" aria-hidden="true" /> Refresh</>}
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleClearLogs()}
-            className="btn btn-error btn-soft min-h-[44px] flex-1 border border-error/30 text-error hover:bg-error/20 sm:min-h-0 sm:flex-none sm:text-xs"
-          >
-            <Trash2 className="h-4 w-4 shrink-0" aria-hidden="true" /> Clear
-          </button>
+        <div className="w-full sm:w-48">
+          <Combobox
+            value={selectedCategory}
+            onChange={setSelectedCategory}
+            placeholder="All categories"
+            ariaLabel="Log category"
+            searchPlaceholder="Search categories…"
+            emptyText="No categories match your search."
+            options={logCategoryOptions(categories)}
+          />
         </div>
-      </div>
-
-      {/* Filter Toolbar */}
-      <div className="flex flex-col gap-3 rounded-xl border border-base-300 bg-base-200/60 p-3.5 sm:flex-row sm:flex-wrap sm:items-center">
-        {/* Severity Level Filter */}
-        <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-2">
-          <span className="text-xs font-medium text-base-content/70">
-            Min Level:
-          </span>
-          <div className="w-full sm:w-56">
-            <Combobox
-              value={selectedLevel}
-              onChange={(v) => setSelectedLevel(v as LogLevel)}
-              placeholder="Select level…"
-              ariaLabel="Minimum log level"
-              searchPlaceholder="Search levels…"
-              options={LOG_LEVEL_OPTIONS}
-            />
-          </div>
-        </div>
-
-        {/* Category Filter */}
-        <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-2">
-          <span className="text-xs font-medium text-base-content/70">
-            Category:
-          </span>
-          <div className="w-full sm:w-56">
-            <Combobox
-              value={selectedCategory}
-              onChange={setSelectedCategory}
-              placeholder="Select category…"
-              ariaLabel="Log category"
-              searchPlaceholder="Search categories…"
-              emptyText="No categories match your search."
-              options={logCategoryOptions(categories)}
-            />
-          </div>
-        </div>
-
-        {/* Search Input */}
-        <div className="flex flex-1 min-w-0 items-center gap-2 sm:min-w-[200px]">
+        <label className="flex min-h-11 min-w-0 flex-[1_1_220px] items-center gap-1.5 rounded-md bg-hover px-2.5 text-base-content/60 sm:min-h-[34px] sm:max-w-sm">
+          <Search className="h-4 w-4 shrink-0" aria-hidden="true" />
           <input
-            type="text"
+            type="search"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search logs by message, meeting, or detail…"
-            className="input input-md w-full py-1.5 sm:text-xs"
+            placeholder="Search message, meeting or detail"
+            aria-label="Search logs"
+            className="w-full min-w-0 bg-transparent text-sm text-base-content outline-none placeholder:text-base-content/50 [&::-webkit-search-cancel-button]:hidden"
           />
           {searchQuery && (
             <button
               type="button"
+              aria-label="Clear search"
               onClick={() => setSearchQuery("")}
-              className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center text-base-content/50 hover:text-base-content text-xs sm:min-h-0 sm:min-w-0 sm:px-1"
+              className="-mr-1.5 inline-flex min-h-11 min-w-11 items-center justify-center rounded hover:text-base-content sm:min-h-6 sm:min-w-6"
             >
-              <X className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <X className="h-4 w-4" aria-hidden="true" />
             </button>
           )}
-        </div>
-
-        {/* Total Badge */}
-        <span className="text-[11px] font-mono text-base-content/50">
-          Showing {logs.length} of {totalCount} logs
+        </label>
+        <span className="flex-1" />
+        <span className={`inline-flex items-center gap-1.5 text-[13px] font-medium ${autoRefresh ? "text-primary" : "text-base-content/60"}`}>
+          <span className={`h-2 w-2 rounded-full ${autoRefresh ? "animate-pulse bg-primary" : "bg-base-content/40"}`} aria-hidden="true" />
+          {autoRefresh ? "Live" : "Paused"}
         </span>
+        <button type="button" className={btnGhost} onClick={() => setAutoRefresh(!autoRefresh)} aria-pressed={!autoRefresh} title={autoRefresh ? "Stop refreshing every 3 s" : "Refresh every 3 s"}>
+          {autoRefresh ? <Pause className="h-4 w-4" aria-hidden="true" /> : <Play className="h-4 w-4" aria-hidden="true" />}
+          {autoRefresh ? "Pause" : "Resume"}
+        </button>
+        <button type="button" className={btnGhost} onClick={() => void fetchLogs()} disabled={loading} aria-label="Refresh logs" title="Refresh now">
+          <RotateCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} aria-hidden="true" />
+        </button>
+        <button type="button" className={`${btnGhost} hover:text-error`} onClick={() => void handleClearLogs()}>
+          <Trash2 className="h-4 w-4" aria-hidden="true" />
+          Clear
+        </button>
       </div>
 
-      {/* Logs Table / List */}
-      <div className="rounded-xl border border-base-300 bg-base-200/60 backdrop-blur overflow-hidden">
+      <p className="text-xs text-base-content/50">
+        Showing {logs.length} of {totalCount} logs
+      </p>
+
+      <div className="overflow-hidden rounded-box border border-base-300">
         {logs.length === 0 ? (
-          <div className="p-12 text-center text-base-content/50 text-sm">
-            No log entries match the current filter criteria.
-          </div>
+          <p className="p-12 text-center text-sm text-base-content/60">
+            {loading ? "Loading logs…" : filtered ? "No log entries match these filters." : "No logs yet."}
+          </p>
         ) : (
-          <div className="divide-y divide-base-300/60 font-mono text-xs">
-            {logs.map((log) => {
-              const isExpanded = expandedLogIds.has(log.id);
-              const hasDetails = log.details && Object.keys(log.details).length > 0;
-
-              return (
-                <div
-                  key={log.id}
-                  className={`p-3.5 transition hover:bg-base-300/30 ${
-                    log.level === "error"
-                      ? "bg-error/5"
-                      : log.level === "warn"
-                      ? "bg-warning/5"
-                      : ""
-                  }`}
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="flex flex-wrap items-center gap-2.5">
-                      {/* Level Badge */}
-                      <span
-                        className={`rounded px-2 py-0.5 font-bold uppercase tracking-wider text-[10px] border ${
-                          log.level === "error"
-                            ? "border-error/40 bg-error/10 text-error"
-                            : log.level === "warn"
-                            ? "border-warning/40 bg-warning/10 text-warning"
-                            : log.level === "info"
-                            ? "border-info/40 bg-info/10 text-info"
-                            : "border-base-300 bg-base-300/80 text-base-content/70"
-                        }`}
-                      >
-                        {log.level}
-                      </span>
-
-                      {/* Category Badge */}
-                      <span className="rounded bg-base-300 px-2 py-0.5 text-[10px] text-primary border border-base-300">
-                        {log.category}
-                      </span>
-
-                      {/* Timestamp */}
-                      <span className="text-base-content/50 text-[11px]">
-                        {formatLogTimestamp(log.createdAt)}
-                      </span>
-
-                      {/* Linked Meeting */}
-                      {log.meetingId && (
-                        <button
-                          type="button"
-                          onClick={() => onSelectMeeting(log.meetingId!)}
-                          className="rounded bg-base-300/60 px-2 py-0.5 text-[10px] text-accent hover:bg-accent/20 transition border border-accent/30 truncate max-w-[220px]"
-                          title={`Open meeting ${log.meetingTitle || log.meetingId}`}
-                        >
-                          📌 {log.meetingTitle || log.meetingId.slice(0, 8)}
-                        </button>
-                      )}
-                    </div>
-
-                    {/* Details toggle */}
-                    {hasDetails && (
-                      <button
-                        type="button"
-                        onClick={() => toggleExpand(log.id)}
-                        className="rounded border border-base-300 bg-base-300/60 px-2 py-0.5 text-[10px] text-base-content hover:bg-base-300 transition"
-                      >
-                        {isExpanded ? <><ChevronUp className="h-3 w-3 shrink-0" aria-hidden="true" /> Hide Details</> : <><ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" /> Details ({Object.keys(log.details!).length})</>}
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Message */}
-                  <div className="mt-2 text-base-content font-sans text-xs sm:text-sm leading-relaxed">
-                    {log.message}
-                  </div>
-
-                  {/* Expanded JSON details */}
-                  {isExpanded && log.details && (
-                    <div className="mt-3 rounded-lg border border-base-300 bg-base-100 p-3 text-xs text-base-content overflow-x-auto">
-                      <pre className="font-mono text-[11px] leading-snug">
-                        {JSON.stringify(log.details, null, 2)}
-                      </pre>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+          <ul>
+            {logs.map((log) => (
+              <LogRow
+                key={log.id}
+                log={log}
+                expanded={expandedLogIds.has(log.id)}
+                onToggle={() => toggleExpand(log.id)}
+                onSelectMeeting={onSelectMeeting}
+              />
+            ))}
+          </ul>
         )}
       </div>
     </div>
