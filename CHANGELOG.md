@@ -20,6 +20,7 @@ every section newer than the previous tag into the GitHub release notes.
 - **Use your ChatGPT plan** — connect a ChatGPT Go, Plus or Pro subscription under Settings → AI models and pick one of its models for summaries or meeting chat, with no API key. Usage counts against your plan's limits. On a remote server, sign in from your browser and paste back the `127.0.0.1` address it lands on.
 - **Separate model for meeting chat** — choose which model answers meeting chat, among providers with a key and your connected ChatGPT plan. By default chat keeps using the default model.
 - **What Modal actually billed** — the Usage page now shows Modal's billed cost next to the GPU-time estimate, including CPU, memory and idle time. Olive fetches it from Modal every hour (or on Refresh) and splits each hour's bill across that hour's transcriptions. Existing totals still add up the estimates, as before.
+- **Custom vocabulary** — list names, acronyms and jargon under Settings → Transcription so they come out spelled right. Speechmatics, AssemblyAI, Muse Voice and Modal GPU with a Whisper model use the list; the Local pipeline and Modal GPU with Cohere can't, and the settings page says so. Summaries also get the list as a spelling glossary, and templates can place it with `{{glossary}}`.
 
 ### Changed
 
