@@ -382,40 +382,94 @@ export function ConfirmHostRoot(): ReactElement {
 /* ------------------------------------------------------------------ */
 
 export type OliveTheme = "olive-dark" | "olive-light";
+export type ThemePreference = "system" | "light" | "dark";
 
-const THEME_KEY = "olive-theme";
+const THEME_PREF_KEY = "olive-theme-pref";
+const LEGACY_THEME_KEY = "olive-theme";
+const DARK_QUERY = "(prefers-color-scheme: dark)";
 
-export function getInitialTheme(): OliveTheme {
-  if (typeof window === "undefined") return "olive-dark";
-  const stored = window.localStorage.getItem(THEME_KEY);
-  if (stored === "olive-light" || stored === "olive-dark") return stored;
-  return "olive-dark";
+export function getThemePreference(): ThemePreference {
+  if (typeof window === "undefined") return "system";
+  try {
+    const stored = window.localStorage.getItem(THEME_PREF_KEY);
+    if (stored === "system" || stored === "light" || stored === "dark") return stored;
+    const legacy = window.localStorage.getItem(LEGACY_THEME_KEY);
+    if (legacy === "olive-light") return "light";
+    if (legacy === "olive-dark") return "dark";
+  } catch {
+    // storage blocked: fall back to the OS preference
+  }
+  return "system";
 }
 
-export function applyTheme(theme: OliveTheme): void {
+export function resolveTheme(pref: ThemePreference): OliveTheme {
+  if (pref === "light") return "olive-light";
+  if (pref === "dark") return "olive-dark";
+  return window.matchMedia(DARK_QUERY).matches ? "olive-dark" : "olive-light";
+}
+
+function applyResolvedTheme(theme: OliveTheme): void {
   document.documentElement.setAttribute("data-theme", theme);
-  window.localStorage.setItem(THEME_KEY, theme);
   const meta = document.querySelector('meta[name="theme-color"]');
-  meta?.setAttribute("content", theme === "olive-dark" ? "#0c0a09" : "#ffffff");
+  meta?.setAttribute("content", theme === "olive-dark" ? "#191919" : "#ffffff");
 }
 
-export function ThemeToggle(): ReactElement {
-  const [theme, setTheme] = useState<OliveTheme>(getInitialTheme);
+const themeListeners = new Set<(pref: ThemePreference) => void>();
+
+export function setThemePreference(pref: ThemePreference): void {
+  try {
+    window.localStorage.setItem(THEME_PREF_KEY, pref);
+    window.localStorage.removeItem(LEGACY_THEME_KEY);
+  } catch {
+    // ignore
+  }
+  applyResolvedTheme(resolveTheme(pref));
+  for (const listener of themeListeners) listener(pref);
+}
+
+/* Current preference plus the theme it resolves to; follows OS changes
+   while the preference is "system". */
+export function useTheme(): { preference: ThemePreference; theme: OliveTheme; setPreference: (pref: ThemePreference) => void } {
+  const [preference, setPref] = useState<ThemePreference>(getThemePreference);
+  const [theme, setTheme] = useState<OliveTheme>(() => resolveTheme(getThemePreference()));
 
   useEffect(() => {
-    applyTheme(theme);
-  }, [theme]);
+    themeListeners.add(setPref);
+    return () => {
+      themeListeners.delete(setPref);
+    };
+  }, []);
 
-  const next = theme === "olive-dark" ? "olive-light" : "olive-dark";
+  useEffect(() => {
+    const resolved = resolveTheme(preference);
+    setTheme(resolved);
+    applyResolvedTheme(resolved);
+    if (preference !== "system") return;
+    const media = window.matchMedia(DARK_QUERY);
+    const onChange = () => {
+      const next = resolveTheme("system");
+      setTheme(next);
+      applyResolvedTheme(next);
+    };
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
+  }, [preference]);
+
+  return { preference, theme, setPreference: setThemePreference };
+}
+
+export function ThemeToggle({ className = "" }: { className?: string }): ReactElement {
+  const { theme, setPreference } = useTheme();
+  const isDark = theme === "olive-dark";
   return (
     <button
       type="button"
-      onClick={() => setTheme(next)}
-      title={theme === "olive-dark" ? "Switch to light theme" : "Switch to dark theme"}
-      aria-label={theme === "olive-dark" ? "Switch to light theme" : "Switch to dark theme"}
-      className="btn btn-ghost btn-sm btn-square"
+      onClick={() => setPreference(isDark ? "light" : "dark")}
+      title={isDark ? "Switch to light theme" : "Switch to dark theme"}
+      aria-label={isDark ? "Switch to light theme" : "Switch to dark theme"}
+      className={`btn btn-ghost btn-sm btn-square ${className}`}
     >
-      {theme === "olive-dark" ? <Sun className="h-4 w-4" aria-hidden="true" /> : <Moon className="h-4 w-4" aria-hidden="true" />}
+      {isDark ? <Sun className="h-4 w-4" aria-hidden="true" /> : <Moon className="h-4 w-4" aria-hidden="true" />}
     </button>
   );
 }
