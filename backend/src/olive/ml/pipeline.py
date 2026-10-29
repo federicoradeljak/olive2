@@ -354,6 +354,8 @@ class LocalTranscriptionPipeline:
         # 6. Transcribe audio & align word timestamps
         language = str(options.get("language") or "en")
         model_id = options.get("modelId") or options.get("model_id")
+        # Biasing terms; only engines with a prompt hook (Whisper) use them.
+        additional_vocab = options.get("additionalVocab") or None
         final_segments: list[TranscriptSegment] = []
 
         use_whole_file_align = bool(
@@ -385,7 +387,12 @@ class LocalTranscriptionPipeline:
             full_asr = await self._call_asr_segment(
                 samples,
                 target_sr,
-                {"language": language, "startMs": 0, "modelId": model_id},
+                {
+                    "language": language,
+                    "startMs": 0,
+                    "modelId": model_id,
+                    "additionalVocab": additional_vocab,
+                },
             )
             if self.unload_per_stage and hasattr(self.asr_engine, "release"):
                 self.asr_engine.release()
@@ -411,7 +418,12 @@ class LocalTranscriptionPipeline:
             full_asr = await self._call_asr_segment(
                 samples,
                 target_sr,
-                {"language": language, "startMs": 0, "modelId": model_id},
+                {
+                    "language": language,
+                    "startMs": 0,
+                    "modelId": model_id,
+                    "additionalVocab": additional_vocab,
+                },
             )
             if self.unload_per_stage and hasattr(self.asr_engine, "release"):
                 self.asr_engine.release()
@@ -473,6 +485,7 @@ class LocalTranscriptionPipeline:
                         "language": language,
                         "startMs": s_start,
                         "modelId": model_id,
+                        "additionalVocab": additional_vocab,
                     },
                 )
                 seg_elapsed_ms = int(round((time.perf_counter() - seg_t0) * 1000))

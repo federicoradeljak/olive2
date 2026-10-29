@@ -65,7 +65,13 @@ class FasterWhisperAsrEngine:
                 )
             return self._model
 
-    def _transcribe_sync(self, samples: np.ndarray, language: str | None, start_ms: int) -> dict[str, Any]:
+    def _transcribe_sync(
+        self,
+        samples: np.ndarray,
+        language: str | None,
+        start_ms: int,
+        hotwords: str | None = None,
+    ) -> dict[str, Any]:
         model = self._load()
         segments, _info = model.transcribe(
             samples,
@@ -73,6 +79,7 @@ class FasterWhisperAsrEngine:
             beam_size=self.beam_size,
             word_timestamps=True,
             vad_filter=True,
+            hotwords=hotwords,
         )
         words: list[TranscriptWord] = []
         texts: list[str] = []
@@ -112,7 +119,9 @@ class FasterWhisperAsrEngine:
         raw_lang = str(opts.get("language") or "").strip().lower()
         language = None if raw_lang in ("", "auto") else raw_lang
         start_ms = int(opts.get("startMs") or opts.get("start_ms") or 0)
-        return await asyncio.to_thread(self._transcribe_sync, arr, language, start_ms)
+        terms = [str(t).strip() for t in opts.get("additionalVocab") or [] if str(t).strip()]
+        hotwords = ", ".join(terms) or None
+        return await asyncio.to_thread(self._transcribe_sync, arr, language, start_ms, hotwords)
 
     def release(self) -> None:
         with self._lock:

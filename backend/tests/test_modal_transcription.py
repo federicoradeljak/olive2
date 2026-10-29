@@ -271,3 +271,21 @@ async def test_modal_abort_cancels_remote_call(tmp_path: Path) -> None:
     assert fake.cancelled is True
     assert _stage_status(handle, meeting_id)["status"] == "cancelled"
     handle.engine.dispose()
+
+
+async def test_modal_sends_custom_vocabulary_only_to_whisper(tmp_path: Path) -> None:
+    handle, meeting_id, _paths = _seed_meeting(tmp_path)
+    calls: list[dict[str, Any]] = []
+    service = _service(
+        handle,
+        str(tmp_path / "meetings"),
+        calls,
+        _FakeHandle(WORKER_RESULT),
+        customVocabulary=["Olive", "Plaud"],
+    )
+    for asr_model in ("cohere", "whisper-large-v3"):
+        await service.transcribe_meeting(
+            meeting_id, {"provider": "modal", "asrModel": asr_model, "force": True}
+        )
+    assert [c["options"]["additionalVocab"] for c in calls] == [None, ["Olive", "Plaud"]]
+    handle.engine.dispose()
