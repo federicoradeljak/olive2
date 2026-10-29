@@ -191,6 +191,8 @@ async def test_restores_database_settings_and_audio_files_from_backup_archive(
         "# Sprint Review Note", encoding="utf-8"
     )
     Path(settings_path).write_text(json.dumps({"defaultProvider": "anthropic"}), encoding="utf-8")
+    chatgpt_tokens = Path(config_dir) / "chatgpt-plan-tokens.json"
+    chatgpt_tokens.write_text(json.dumps({"clientId": "oaiapp_backup"}), encoding="utf-8")
 
     backup_service = BackupService(
         {
@@ -209,6 +211,7 @@ async def test_restores_database_settings_and_audio_files_from_backup_archive(
     shutil.rmtree(meetings_dir, ignore_errors=True)
     Path(meetings_dir).mkdir(parents=True, exist_ok=True)
     Path(settings_path).write_text(json.dumps({"defaultProvider": "wiped"}), encoding="utf-8")
+    chatgpt_tokens.unlink()
 
     restore_result = await backup_service.restore_backup(backup_result["path"])
     assert restore_result["success"] is True
@@ -225,6 +228,7 @@ async def test_restores_database_settings_and_audio_files_from_backup_archive(
 
     restored_settings = json.loads(Path(settings_path).read_text(encoding="utf-8"))
     assert restored_settings["defaultProvider"] == "anthropic"
+    assert json.loads(chatgpt_tokens.read_text(encoding="utf-8")) == {"clientId": "oaiapp_backup"}
 
     # Also test legacy backup layout (database/olive.sqlite + backup_manifest.json)
     legacy_staging = tmp_path / "legacy-staging"

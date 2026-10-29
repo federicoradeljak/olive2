@@ -455,6 +455,16 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             oauth_manager = getattr(get_plaud_poller(), "oauth", None)
         return oauth_manager
 
+    chatgpt_plan_sessions: Any = None
+
+    def get_chatgpt_plan_sessions() -> Any:
+        nonlocal chatgpt_plan_sessions
+        if chatgpt_plan_sessions is None:
+            from .plaud.auth import PlaudAuthSessionStore
+
+            chatgpt_plan_sessions = PlaudAuthSessionStore()
+        return chatgpt_plan_sessions
+
     def get_auth_sessions() -> Any:
         nonlocal auth_sessions
         if auth_sessions is None:
@@ -2301,6 +2311,63 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             {"models": [m.model_dump(exclude_none=True) if hasattr(m, "model_dump") else m for m in models]}
         )
 
+    @app.get("/api/llm/chatgpt-plan/status")
+    async def get_chatgpt_plan_status_route() -> JSONResponse:
+        return JSONResponse(get_llm_service().chatgpt_plan_auth().status())
+
+    @app.post("/api/llm/chatgpt-plan/auth/start")
+    async def post_chatgpt_plan_auth_start_route() -> JSONResponse:
+        try:
+            login = get_llm_service().chatgpt_plan_auth().start_login()
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+        session_id = get_chatgpt_plan_sessions().create(
+            {k: login[k] for k in ("verifier", "state", "nonce", "clientId")}
+        )
+        return JSONResponse({"authUrl": login["authUrl"], "sessionId": session_id})
+
+    @app.post("/api/llm/chatgpt-plan/auth/complete")
+    async def post_chatgpt_plan_auth_complete_route(request: Request) -> JSONResponse:
+        from .providers.chatgpt_plan import ChatGptPlanError
+
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Request body must be valid JSON"}, status_code=400)
+        pasted = body.get("pastedUrlOrCode") if isinstance(body, dict) else None
+        session_id = body.get("sessionId") if isinstance(body, dict) else None
+        if not isinstance(pasted, str) or not pasted.strip():
+            return JSONResponse({"error": "pastedUrlOrCode is required"}, status_code=400)
+        if not isinstance(session_id, str) or not session_id:
+            return JSONResponse({"error": "sessionId is required"}, status_code=400)
+
+        sessions = get_chatgpt_plan_sessions()
+        session = sessions.get(session_id)
+        if not session:
+            return JSONResponse({"error": "This sign-in link expired. Start again."}, status_code=400)
+        try:
+            status = await get_llm_service().chatgpt_plan_auth().complete_login(session, pasted)
+        except ChatGptPlanError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except Exception as exc:
+            return JSONResponse({"error": f"Could not reach ChatGPT: {exc}"}, status_code=502)
+        sessions.delete(session_id)
+        if not status["planEnabled"]:
+            return JSONResponse(
+                {
+                    "error": "Signed in, but ChatGPT plan usage was not allowed. "
+                    "Connect again and tick the option to use your ChatGPT plan in Olive.",
+                    "status": status,
+                },
+                status_code=400,
+            )
+        return JSONResponse({"status": "completed", "account": status})
+
+    @app.post("/api/llm/chatgpt-plan/logout")
+    async def post_chatgpt_plan_logout_route() -> JSONResponse:
+        result = await get_llm_service().chatgpt_plan_auth().logout()
+        return JSONResponse({"status": "disconnected", **result})
+
     @app.post("/api/llm/refresh-catalog")
     async def post_llm_refresh_catalog_route() -> JSONResponse:
         result = await _call_maybe_async(get_llm_service(), ("refresh_catalog", "refreshCatalog"))
@@ -2365,6 +2432,8 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                 "defaultThinkingLevel": settings_dict.get("defaultThinkingLevel") or "off",
                 "providers": sanitized_providers,
                 "customModels": settings_dict.get("customModels") or [],
+                "chatProvider": settings_dict.get("chatProvider"),
+                "chatModel": settings_dict.get("chatModel"),
             }
         )
 

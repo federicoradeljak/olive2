@@ -871,6 +871,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/llm/chatgpt-plan/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Chatgpt Plan Status Route */
+        get: operations["get_chatgpt_plan_status_route_api_llm_chatgpt_plan_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/llm/chatgpt-plan/auth/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Chatgpt Plan Auth Start Route */
+        post: operations["post_chatgpt_plan_auth_start_route_api_llm_chatgpt_plan_auth_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/llm/chatgpt-plan/auth/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Chatgpt Plan Auth Complete Route */
+        post: operations["post_chatgpt_plan_auth_complete_route_api_llm_chatgpt_plan_auth_complete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/llm/chatgpt-plan/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Chatgpt Plan Logout Route */
+        post: operations["post_chatgpt_plan_logout_route_api_llm_chatgpt_plan_logout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/llm/refresh-catalog": {
         parameters: {
             query?: never;
@@ -1562,7 +1630,7 @@ export interface components {
              * Source
              * @enum {string}
              */
-            source: "builtin" | "web" | "custom";
+            source: "builtin" | "web" | "custom" | "account";
         };
         /** LlmProviderSummary */
         LlmProviderSummary: {
@@ -4205,6 +4273,86 @@ export interface operations {
         };
     };
     get_llm_models_route_api_llm_models_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_chatgpt_plan_status_route_api_llm_chatgpt_plan_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    post_chatgpt_plan_auth_start_route_api_llm_chatgpt_plan_auth_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    post_chatgpt_plan_auth_complete_route_api_llm_chatgpt_plan_auth_complete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    post_chatgpt_plan_logout_route_api_llm_chatgpt_plan_logout_post: {
         parameters: {
             query?: never;
             header?: never;

@@ -462,12 +462,17 @@ class LlmSettings(CamelModel):
     defaultThinkingLevel: LlmThinkingLevel = "off"
     providers: dict[str, LlmProviderConfig] = Field(default_factory=dict)
     customModels: list[LlmCustomModel] = Field(default_factory=list)
+    # Meeting chat model; both unset means chat uses the default model.
+    chatProvider: str | None = None
+    chatModel: str | None = None
 
 
 class UpdateLlmSettingsInput(CamelModel):
     defaultProvider: str | None = None
     defaultModel: str | None = None
     defaultThinkingLevel: LlmThinkingLevel | None = None
+    chatProvider: str | None = None
+    chatModel: str | None = None
     providers: dict[str, LlmProviderConfig] | None = None
     customModels: list[LlmCustomModel] | None = None
 
@@ -502,7 +507,7 @@ class LlmModelCatalogItem(CamelModel):
     reasoning: bool | None = None
     supportedThinkingLevels: list[LlmThinkingLevel] | None = None
     cost: LlmModelCost | None = None
-    source: Literal["builtin", "web", "custom"]
+    source: Literal["builtin", "web", "custom", "account"]
 
 
 class LlmProviderSummary(CamelModel):

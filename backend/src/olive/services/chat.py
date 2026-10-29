@@ -206,15 +206,13 @@ class ChatService:
                 for m in history
             ] + [{"role": "user", "content": content, "timestamp": created_at}]
 
-            res = await _call_llm_stream(
-                self.llm_service,
-                {
-                    "systemPrompt": system_prompt,
-                    "prompt": content,
-                    "messages": messages_payload,
-                },
-                on_delta,
-            )
+            llm_options: dict[str, Any] = {
+                "systemPrompt": system_prompt,
+                "prompt": content,
+                "messages": messages_payload,
+            }
+            llm_options.update(await self._chat_model())
+            res = await _call_llm_stream(self.llm_service, llm_options, on_delta)
 
             asst_created_at = max(int(time.time() * 1000), created_at + 1)
             if res.usage is not None:
@@ -290,6 +288,20 @@ class ChatService:
             raise
 
     streamMessage = stream_message
+
+    async def _chat_model(self) -> dict[str, str]:
+        """``provider``/``model`` picked for chat in Settings; empty means the default model."""
+        get_settings = getattr(self.llm_service, "get_settings", None)
+        if not callable(get_settings):
+            return {}
+        settings = get_settings()
+        if inspect.isawaitable(settings):
+            settings = await settings
+        provider = getattr(settings, "chatProvider", None)
+        model = getattr(settings, "chatModel", None)
+        if isinstance(provider, str) and provider and isinstance(model, str) and model:
+            return {"provider": provider, "model": model}
+        return {}
 
     async def _load_meeting_context(self, meeting_id: str) -> str:
         with self.db.connect() as conn:

@@ -17,6 +17,8 @@ every section newer than the previous tag into the GitHub release notes.
 - **Running jobs at a glance** — the sidebar shows what Olive is working on in the background, with a popover that links to each meeting.
 - **Activity** — the queue view that used to hide at `/debug` and the logs now live together under Activity, with plain-language job names, a step-by-step view of local transcriptions, and Cancel for running transcriptions. The technical details are still there behind a disclosure.
 - **Template preview** — try a template against one of your transcribed meetings before saving it. On wide screens the preview sits next to the editor.
+- **Use your ChatGPT plan** — connect a ChatGPT Go, Plus or Pro subscription under Settings → AI models and pick one of its models for summaries or meeting chat, with no API key. Usage counts against your plan's limits. On a remote server, sign in from your browser and paste back the `127.0.0.1` address it lands on.
+- **Separate model for meeting chat** — choose which model answers meeting chat, among providers with a key and your connected ChatGPT plan. By default chat keeps using the default model.
 - **What Modal actually billed** — the Usage page now shows Modal's billed cost next to the GPU-time estimate, including CPU, memory and idle time. Olive fetches it from Modal every hour (or on Refresh) and splits each hour's bill across that hour's transcriptions. Existing totals still add up the estimates, as before.
 
 ### Changed
