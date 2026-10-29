@@ -353,6 +353,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                 meetings_dir=meetings_dir,
                 llm_service=get_llm_service(),
                 template_service=template_service,
+                default_language=load_app_config(app_config_paths).defaultSummaryLanguage,
             )
         return summary_service
 
@@ -394,6 +395,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                 modal_client=get_modal_client(),
                 modal_asr_model=_modal_asr_model_setting,
                 default_provider=default_provider,
+                default_language=load_app_config(app_config_paths).defaultTranscriptionLanguage,
                 webhook_secret=speechmatics_webhook_secret,
                 config_dir=config_dir,
             )
@@ -702,6 +704,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         auto_transcribe_param = form.get("autoTranscribe")
         provider_param = form.get("provider")
         model_id_param = form.get("modelId")
+        language_param = form.get("language")
         duration_ms_param = form.get("durationMs")
         if duration_ms_param is None:
             duration_ms_param = form.get("duration_ms")
@@ -720,6 +723,11 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             if isinstance(model_id_param, str) and model_id_param.strip()
             else None
         )
+        language = (
+            str(language_param).strip()
+            if isinstance(language_param, str) and language_param.strip()
+            else None
+        )
 
         if auto_transcribe and ingest_service.transcription_service is None:
             ingest_service.transcription_service = get_transcription_service()
@@ -736,6 +744,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                     "autoTranscribe": auto_transcribe,
                     "transcriptionProvider": transcription_provider,
                     "modelId": model_id,
+                    "language": language,
                     "durationMs": (
                         str(duration_ms_param)
                         if duration_ms_param is not None and not hasattr(duration_ms_param, "read")
@@ -1584,6 +1593,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                     "provider": body.get("provider"),
                     "model": body.get("model"),
                     "thinkingLevel": body.get("thinkingLevel"),
+                    "language": body.get("language"),
                     "setPrimary": body.get("setPrimary"),
                 },
             )
@@ -2352,6 +2362,16 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                     ("set_default_provider", "setDefaultProvider"),
                     updated.transcriptionProvider,
                 )
+                _call_sync(
+                    transcription_service,
+                    ("set_default_language", "setDefaultLanguage"),
+                    updated.defaultTranscriptionLanguage,
+                )
+            _call_sync(
+                get_summary_service(),
+                ("set_default_language", "setDefaultLanguage"),
+                updated.defaultSummaryLanguage,
+            )
             ingest_service.set_default_transcription_provider(updated.transcriptionProvider)
             return JSONResponse({"status": "updated", "config": mask_app_config(updated)})
         except Exception as exc:

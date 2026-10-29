@@ -17,6 +17,7 @@ import inspect
 import os
 from typing import Any
 
+from ...languages import is_auto_language
 from .types import AssemblyAITranscript
 
 SPEECH_MODELS = ["universal-3-5-pro"]
@@ -122,7 +123,7 @@ def _build_config(options: dict[str, Any]) -> dict[str, Any]:
         "format_text": True,
     }
     language = str(options.get("language") or "").strip()
-    if language:
+    if language and not is_auto_language(language):
         config["language_code"] = language
     else:
         config["language_detection"] = True

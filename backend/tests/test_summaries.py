@@ -133,6 +133,58 @@ async def test_generates_and_stores_summary_artifact(tmp_path: Path) -> None:
     handle.engine.dispose()
 
 
+def _capture_llm_calls(llm_service: LlmService) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+    original = llm_service.generate_text
+
+    async def capture(options: dict[str, Any]) -> Any:
+        calls.append(options)
+        return await original(options)
+
+    llm_service.generate_text = capture  # type: ignore[method-assign]
+    llm_service.generateText = capture  # type: ignore[assignment]
+    return calls
+
+
+async def test_summary_language_defaults_and_overrides(tmp_path: Path) -> None:
+    handle, meetings_dir, llm_service, _, summary_service = _create_test_context(tmp_path)
+    meeting_id, _ = _seed_meeting_with_transcript(handle.engine, meetings_dir)
+    calls = _capture_llm_calls(llm_service)
+
+    await summary_service.generate_summary({"meetingId": meeting_id})
+    summary_service.set_default_language("es")
+    await summary_service.generate_summary({"meetingId": meeting_id})
+    await summary_service.generate_summary({"meetingId": meeting_id, "language": "pt-BR"})
+
+    prompts = [c.get("systemPrompt") or "" for c in calls]
+    assert "Write the entire response in" not in prompts[0]
+    assert prompts[1].endswith("Write the entire response in Spanish.")
+    assert prompts[2].endswith("Write the entire response in Portuguese.")
+
+    await summary_service.generate_summary({"meetingId": meeting_id, "language": "auto"})
+    assert (calls[3].get("systemPrompt") or "").endswith(
+        "Write the entire response in the same language as the transcript."
+    )
+    handle.engine.dispose()
+
+
+async def test_summary_language_template_variable(tmp_path: Path) -> None:
+    handle, meetings_dir, llm_service, template_service, summary_service = _create_test_context(tmp_path)
+    meeting_id, _ = _seed_meeting_with_transcript(handle.engine, meetings_dir)
+    calls = _capture_llm_calls(llm_service)
+    template = await template_service.create_template(
+        {"name": "Localized", "userPrompt": "Summarize in {{language}}:\n{{transcript}}"}
+    )
+
+    await summary_service.generate_summary(
+        {"meetingId": meeting_id, "templateId": template.id, "language": "fr"}
+    )
+
+    assert calls[0]["prompt"].startswith("Summarize in French:")
+    assert "Write the entire response in" not in (calls[0].get("systemPrompt") or "")
+    handle.engine.dispose()
+
+
 async def test_start_summary_generation_runs_in_background_and_tracks_status(
     tmp_path: Path,
 ) -> None:
@@ -210,9 +262,7 @@ async def test_validates_transcript_before_backgrounding_and_manages_primary_fal
 async def test_summaries_api_and_full_text_search(tmp_path: Path) -> None:
     import httpx
 
-    handle, meetings_dir, llm_service, template_service, summary_service = _create_test_context(
-        tmp_path
-    )
+    handle, meetings_dir, llm_service, template_service, summary_service = _create_test_context(tmp_path)
     meeting_id, _ = _seed_meeting_with_transcript(handle.engine, meetings_dir)
     app = create_app(
         {
@@ -226,9 +276,7 @@ async def test_summaries_api_and_full_text_search(tmp_path: Path) -> None:
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://localhost"
     ) as client:
-        res = await client.post(
-            f"/api/meetings/{meeting_id}/summarize", json={"setPrimary": True}
-        )
+        res = await client.post(f"/api/meetings/{meeting_id}/summarize", json={"setPrimary": True})
         assert res.status_code == 202
         assert res.json()["started"] is True
 
@@ -241,9 +289,7 @@ async def test_summaries_api_and_full_text_search(tmp_path: Path) -> None:
             await asyncio.sleep(0.02)
         assert artifact_id is not None
 
-        primary_res = await client.post(
-            f"/api/meetings/{meeting_id}/summaries/{artifact_id}/primary"
-        )
+        primary_res = await client.post(f"/api/meetings/{meeting_id}/summaries/{artifact_id}/primary")
         assert primary_res.status_code == 200
 
         # Full-text search in transcript

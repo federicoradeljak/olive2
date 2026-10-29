@@ -19,6 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from ..db import DbHandle, get_db
+from ..languages import is_auto_language
 from ..layout import ensure_meeting_folder, meeting_paths
 from ..logging_db import Logger
 from ..logging_db import logger as default_logger
@@ -246,6 +247,7 @@ class TranscriptionService:
         modal_asr_model: str | Callable[[], str | None] | None = None,
         local_pipeline: Any = None,
         default_provider: TranscriptionProviderName | None = None,
+        default_language: str | None = None,
         logger: Logger | None = None,
         webhook_url: str | None = None,
         webhook_secret: str | None = None,
@@ -303,6 +305,10 @@ class TranscriptionService:
                 if (passed_aai or os.environ.get("ASSEMBLY_API_KEY") or os.environ.get("ASSEMBLYAI_API_KEY"))
                 else "local"
             )
+        )
+        # Settings default; a per-request ``language`` always wins.
+        self.default_language: str = str(
+            default_language or opts.get("defaultLanguage") or opts.get("default_language") or ""
         )
         self.logger: Logger = logger or opts.get("logger") or default_logger
         self.webhook_url: str | None = webhook_url or opts.get("webhookUrl") or opts.get("webhook_url")
@@ -445,6 +451,17 @@ class TranscriptionService:
         self.default_provider = provider
 
     setDefaultProvider = set_default_provider
+
+    def set_default_language(self, language: str | None) -> None:
+        self.default_language = str(language or "")
+
+    setDefaultLanguage = set_default_language
+
+    def _with_default_language(self, options: dict[str, Any] | None) -> dict[str, Any]:
+        opts = dict(options or {})
+        if not opts.get("language") and self.default_language:
+            opts["language"] = self.default_language
+        return opts
 
     def stop(self) -> None:
         for job in list(self._active_jobs.values()):
@@ -598,7 +615,7 @@ class TranscriptionService:
         meeting_id: str,
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        opts = dict(options or {})
+        opts = self._with_default_language(options)
         with self.db.connect() as conn:
             meeting = (
                 conn.execute(
@@ -1497,7 +1514,7 @@ class TranscriptionService:
         meeting_id: str,
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        opts = dict(options or {})
+        opts = self._with_default_language(options)
         provider: TranscriptionProviderName = opts.get("provider") or self.default_provider
 
         self.logger.debug(
@@ -1671,13 +1688,15 @@ class TranscriptionService:
             elif candidate_speakers:
                 expected_speaker_count = len(candidate_speakers)
 
+        language = self._fixed_language(opts.get("language"), meeting_id, "local")
+
         task_id = str(uuid.uuid4())
         pipeline_options = dict(opts.get("pipelineOptions") or self.pipeline_options or {})
         payload: dict[str, Any] = {
             "taskId": task_id,
             "meetingId": meeting_id,
             "audioPath": audio_full_path,
-            "language": opts.get("language"),
+            "language": language,
             "modelId": opts.get("modelId"),
             "enrolledSpeakers": [
                 s.model_dump() if isinstance(s, EnrolledSpeaker) else s for s in enrolled_speakers
@@ -3259,6 +3278,17 @@ class TranscriptionService:
             "error": "Cancelled by user" if cancelled else err_msg,
         }
 
+    def _fixed_language(self, language: Any, meeting_id: str, engine: str) -> Any:
+        """Engines that need a fixed language (Cohere ASR, CTC aligner) can't
+        auto-detect: there is no language-ID model, so ``auto`` becomes English."""
+        if not is_auto_language(language):
+            return language
+        self.logger.warn(
+            "Engine cannot auto-detect language; using English",
+            {"category": "transcription", "meetingId": meeting_id, "engine": engine},
+        )
+        return "en"
+
     def _resolve_modal_asr_model(self, opts: dict[str, Any]) -> str:
         raw = opts.get("asrModel") or opts.get("asr_model")
         if not raw:
@@ -3440,7 +3470,11 @@ class TranscriptionService:
                 audio_bytes,
                 {
                     "asrModel": asr_model,
-                    "language": opts.get("language"),
+                    "language": (
+                        self._fixed_language(opts.get("language"), meeting_id, "modal:cohere")
+                        if asr_model == "cohere"
+                        else opts.get("language")
+                    ),
                     "modelId": opts.get("modelId"),
                     "wholeFileAsr": bool(opts.get("wholeFileAsr")),
                     "expectedSpeakerCount": expected_speaker_count,

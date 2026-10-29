@@ -23,9 +23,12 @@ import {
   type ModalAsrModel,
   LOG_LEVEL_OPTIONS,
   PLAUD_RETRANSCRIBE_OPTIONS,
+  SUMMARY_AUTO_LABEL,
   TRANSCRIBE_PROVIDER_OPTIONS,
+  TRANSCRIPTION_AUTO_LABEL,
   TRANSCRIPT_PROVIDER_FILTER_OPTIONS,
   ThinkingLabel,
+  languageOptions,
   llmProviderOptions,
   logCategoryOptions,
   modelOptions,
@@ -1599,6 +1602,7 @@ function BulkTranscribeModal({
 }): ReactElement {
   const [scope, setScope] = useState<"selected" | "filtered">(selectedIds.length > 0 ? "selected" : "filtered");
   const [provider, setProvider] = useState<string>("assemblyai");
+  const [language, setLanguage] = useState("");
   const [force, setForce] = useState(true);
   const [search, setSearch] = useState(listSearch);
   const [startDate, setStartDate] = useState("");
@@ -1631,6 +1635,7 @@ function BulkTranscribeModal({
         if (currentProvider && currentProvider !== "any") filters.currentProvider = currentProvider;
       }
       const body: Record<string, unknown> = { provider, force };
+      if (language) body.language = language;
       if (scope === "selected") {
         body.meetingIds = selectedIds;
       } else {
@@ -1743,6 +1748,18 @@ function BulkTranscribeModal({
               ariaLabel="Transcribe with"
               searchPlaceholder="Search engines…"
               options={TRANSCRIBE_PROVIDER_OPTIONS}
+            />
+          </label>
+
+          <label className="space-y-1 text-xs text-base-content/70">
+            <span className="text-xs font-semibold uppercase tracking-wider">Language</span>
+            <Combobox
+              value={language}
+              onChange={setLanguage}
+              placeholder="Select language…"
+              ariaLabel="Transcription language"
+              searchPlaceholder="Search languages…"
+              options={languageOptions("Default from settings", TRANSCRIPTION_AUTO_LABEL)}
             />
           </label>
 
@@ -1870,6 +1887,7 @@ function MeetingDetailView({
   const transcriptionAbortRef = useRef<AbortController | null>(null);
   const [selectedEngine, setSelectedEngine] = useState<string>("local:cohere");
   const [modalAsrModel, setModalAsrModel] = useState<ModalAsrModel>("cohere");
+  const [transcriptionLanguage, setTranscriptionLanguage] = useState("");
   const [showDiarizationSettings, setShowDiarizationSettings] = useState(false);
   const [customClusteringThreshold, setCustomClusteringThreshold] = useState(0.50);
   const [customSimilarityThreshold, setCustomSimilarityThreshold] = useState(0.45);
@@ -2362,7 +2380,8 @@ function MeetingDetailView({
           force: true,
           clusteringThreshold: isLocal ? customClusteringThreshold : undefined,
           similarityThreshold: isLocal ? customSimilarityThreshold : undefined,
-          asrModel: selectedEngine === "modal" ? modalAsrModel : undefined
+          asrModel: selectedEngine === "modal" ? modalAsrModel : undefined,
+          language: transcriptionLanguage || undefined
         })
       });
 
@@ -2804,6 +2823,16 @@ function MeetingDetailView({
                   ariaLabel="Transcription engine"
                   searchPlaceholder="Search engines…"
                   options={ENGINE_OPTIONS}
+                />
+              </div>
+              <div className="w-full sm:w-48">
+                <Combobox
+                  value={transcriptionLanguage}
+                  onChange={setTranscriptionLanguage}
+                  placeholder="Select language…"
+                  ariaLabel="Transcription language"
+                  searchPlaceholder="Search languages…"
+                  options={languageOptions("Default language", TRANSCRIPTION_AUTO_LABEL)}
                 />
               </div>
 
@@ -3743,6 +3772,7 @@ function GenerateSummaryModal({
   const [selectedModel, setSelectedModel] = useState<string>("gemini-2.5-flash");
   const [thinkingLevel, setThinkingLevel] = useState<string>("low");
   const [setPrimary, setSetPrimary] = useState(true);
+  const [language, setLanguage] = useState("");
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -3820,6 +3850,7 @@ function GenerateSummaryModal({
           provider: selectedProvider,
           model: selectedModel,
           thinkingLevel: selectedModelObj?.reasoning ? thinkingLevel : undefined,
+          language: language || undefined,
           setPrimary
         })
       });
@@ -3915,6 +3946,18 @@ function GenerateSummaryModal({
               />
             </div>
           )}
+
+          <div className="space-y-1">
+            <label className="text-xs font-medium uppercase tracking-wider text-base-content/70">Language</label>
+            <Combobox
+              value={language}
+              onChange={setLanguage}
+              placeholder="Select language…"
+              ariaLabel="Summary language"
+              searchPlaceholder="Search languages…"
+              options={languageOptions("Default from settings", SUMMARY_AUTO_LABEL)}
+            />
+          </div>
 
           <div className="flex items-center gap-2 pt-1">
             <input
@@ -4690,6 +4733,7 @@ function UploadAudioModal({
   const [title, setTitle] = useState("");
   const [autoTranscribe, setAutoTranscribe] = useState(true);
   const [selectedEngine, setSelectedEngine] = useState<string>("local:cohere");
+  const [transcriptionLanguage, setTranscriptionLanguage] = useState("");
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -4736,6 +4780,9 @@ function UploadAudioModal({
     formData.append("provider", isLocal ? "local" : selectedEngine);
     if (isLocal) {
       formData.append("modelId", "onnx-community/cohere-transcribe-03-2026-ONNX");
+    }
+    if (transcriptionLanguage) {
+      formData.append("language", transcriptionLanguage);
     }
 
     try {
@@ -4818,6 +4865,15 @@ function UploadAudioModal({
                 ariaLabel="Transcription engine"
                 searchPlaceholder="Search engines…"
                 options={ENGINE_OPTIONS}
+              />
+              <label className="block text-xs text-base-content/70 mb-1 mt-2">Language:</label>
+              <Combobox
+                value={transcriptionLanguage}
+                onChange={setTranscriptionLanguage}
+                placeholder="Select language…"
+                ariaLabel="Transcription language"
+                searchPlaceholder="Search languages…"
+                options={languageOptions("Default from settings", TRANSCRIPTION_AUTO_LABEL)}
               />
             </div>
           )}
@@ -5467,7 +5523,7 @@ function TemplateEditorModal({
             </label>
             <div className="flex items-center gap-1">
               <span className="text-[11px] text-base-content/50 mr-1">Insert tags:</span>
-              {["{{title}}", "{{date}}", "{{speakers}}", "{{transcript}}"].map((tag) => (
+              {["{{title}}", "{{date}}", "{{speakers}}", "{{language}}", "{{transcript}}"].map((tag) => (
                 <button
                   key={tag}
                   type="button"
@@ -5544,6 +5600,8 @@ function LlmSettingsModal({
   const [localAsrModel, setLocalAsrModel] = useState<string>("onnx-community/cohere-transcribe-03-2026-ONNX");
   const [transcriptionProvider, setTranscriptionProvider] = useState<"speechmatics" | "local" | "assemblyai" | "muse" | "modal">("local");
   const [plaudRetranscribeMode, setPlaudRetranscribeMode] = useState<"off" | "unnamed" | "always">("off");
+  const [defaultTranscriptionLanguage, setDefaultTranscriptionLanguage] = useState("");
+  const [defaultSummaryLanguage, setDefaultSummaryLanguage] = useState("");
   const [hfToken, setHfToken] = useState<string>("");
   const [speechmaticsApiKey, setSpeechmaticsApiKey] = useState<string>("");
   const [assemblyaiApiKey, setAssemblyaiApiKey] = useState<string>("");
@@ -5593,6 +5651,8 @@ function LlmSettingsModal({
         if (appCfg.localAsrModel !== undefined) {
           setLocalAsrModel(appCfg.localAsrModel);
         }
+        setDefaultTranscriptionLanguage(appCfg.defaultTranscriptionLanguage || "");
+        setDefaultSummaryLanguage(appCfg.defaultSummaryLanguage || "");
         if (appCfg.transcriptionProvider === "speechmatics" || appCfg.transcriptionProvider === "local" || appCfg.transcriptionProvider === "assemblyai" || appCfg.transcriptionProvider === "muse" || appCfg.transcriptionProvider === "modal") {
           setTranscriptionProvider(appCfg.transcriptionProvider);
         }
@@ -5753,6 +5813,8 @@ function LlmSettingsModal({
             localSimilarityThreshold,
             localAsrModel,
             transcriptionProvider,
+            defaultTranscriptionLanguage,
+            defaultSummaryLanguage,
             retranscribePlaudWhenUnnamed: plaudRetranscribeMode === "unnamed",
             alwaysRetranscribePlaud: plaudRetranscribeMode === "always",
             hfToken,
@@ -5885,6 +5947,37 @@ function LlmSettingsModal({
               placeholder="e.g. http://localhost:11434/v1 for Ollama, or custom LiteLLM proxy"
               className="input input-md w-full placeholder-base-content/50 font-mono"
             />
+          </div>
+
+          <div className="rounded-xl border border-base-300 bg-base-100/60 p-4 space-y-3">
+            <span className="block text-xs font-semibold uppercase tracking-wider text-base-content">Default Language</span>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <label className="block text-xs text-base-content font-medium">Transcriptions</label>
+                <Combobox
+                  value={defaultTranscriptionLanguage}
+                  onChange={setDefaultTranscriptionLanguage}
+                  placeholder="Select language…"
+                  ariaLabel="Default transcription language"
+                  searchPlaceholder="Search languages…"
+                  options={languageOptions("Engine default (English on local / Speechmatics)", TRANSCRIPTION_AUTO_LABEL)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="block text-xs text-base-content font-medium">Summaries</label>
+                <Combobox
+                  value={defaultSummaryLanguage}
+                  onChange={setDefaultSummaryLanguage}
+                  placeholder="Select language…"
+                  ariaLabel="Default summary language"
+                  searchPlaceholder="Search languages…"
+                  options={languageOptions("Template default", SUMMARY_AUTO_LABEL)}
+                />
+              </div>
+            </div>
+            <p className="text-[11px] text-base-content/50">
+              Used for uploads, Plaud syncs and auto-summaries. Each transcription or summary can still pick another language. Templates can reference it with {"{{language}}"}.
+            </p>
           </div>
 
           {/* Local Audio Diarization & Speaker Recognition Settings */}

@@ -212,6 +212,18 @@ async def test_modal_request_asr_model_overrides_setting(tmp_path: Path) -> None
     handle.engine.dispose()
 
 
+async def test_modal_auto_language_falls_back_to_english_only_for_cohere(tmp_path: Path) -> None:
+    handle, meeting_id, _paths = _seed_meeting(tmp_path)
+    calls: list[dict[str, Any]] = []
+    service = _service(handle, str(tmp_path / "meetings"), calls, _FakeHandle(WORKER_RESULT))
+    for asr_model in ("cohere", "whisper-large-v3"):
+        await service.transcribe_meeting(
+            meeting_id, {"provider": "modal", "asrModel": asr_model, "language": "auto", "force": True}
+        )
+    assert [c["options"]["language"] for c in calls] == ["en", "auto"]
+    handle.engine.dispose()
+
+
 async def test_modal_unknown_asr_model_fails_without_spawning(tmp_path: Path) -> None:
     handle, meeting_id, _paths = _seed_meeting(tmp_path)
     calls: list[dict[str, Any]] = []
@@ -246,9 +258,10 @@ async def test_modal_abort_cancels_remote_call(tmp_path: Path) -> None:
     controller = AbortController()
 
     async def _abort_soon() -> None:
-        while not service._active_jobs:
+        # Abort only once the remote call is being polled: FLAC conversion runs
+        # before spawn and can outlast any fixed delay on a slow CI runner.
+        while fake.polls_left == 10_000:
             await asyncio.sleep(0.001)
-        await asyncio.sleep(0.02)
         controller.abort()
 
     aborter = asyncio.ensure_future(_abort_soon())

@@ -135,6 +135,40 @@ export const TRANSCRIPT_PROVIDER_FILTER_OPTIONS: ComboboxOption[] = [
   { value: "none", label: "No transcript yet" },
 ];
 
+/** ISO 639-1 codes offered for transcription / summary language (mirrors backend olive/languages.py). */
+const LANGUAGES: Array<[code: string, name: string]> = [
+  ["es", "Spanish"],
+  ["en", "English"],
+  ["pt", "Portuguese"],
+  ["fr", "French"],
+  ["de", "German"],
+  ["it", "Italian"],
+  ["nl", "Dutch"],
+  ["pl", "Polish"],
+  ["ru", "Russian"],
+  ["tr", "Turkish"],
+  ["ar", "Arabic"],
+  ["zh", "Chinese"],
+  ["ja", "Japanese"],
+  ["ko", "Korean"],
+  ["vi", "Vietnamese"],
+];
+
+export const TRANSCRIPTION_AUTO_LABEL = "Auto-detect (Cohere models use English)";
+export const SUMMARY_AUTO_LABEL = "Same as transcript";
+
+/**
+ * Language picker options. The empty value falls back to the default (described by `defaultLabel`);
+ * "auto" asks the engine to detect it, or the summary to follow the transcript (described by `autoLabel`).
+ */
+export function languageOptions(defaultLabel: string, autoLabel: string): ComboboxOption[] {
+  return [
+    { value: "", label: defaultLabel, keywords: "default" },
+    { value: "auto", label: autoLabel, keywords: "auto detect" },
+    ...LANGUAGES.map(([code, name]) => ({ value: code, label: name, description: code, keywords: code })),
+  ];
+}
+
 interface TemplateLike {
   id: string;
   name: string;
