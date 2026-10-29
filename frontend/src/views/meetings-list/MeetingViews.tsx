@@ -72,18 +72,18 @@ export function StatusPill({
   );
 }
 
-export function TagList({ tags, max }: { tags: string[]; max?: number }): ReactElement | null {
+export function TagList({ tags, max, nowrap = false }: { tags: string[]; max?: number; nowrap?: boolean }): ReactElement | null {
   if (tags.length === 0) return null;
   const shown = max ? tags.slice(0, max) : tags;
   const rest = tags.length - shown.length;
   return (
-    <span className="flex flex-wrap gap-1">
+    <span className={`flex gap-1 ${nowrap ? "min-w-0 overflow-hidden" : "flex-wrap"}`}>
       {shown.map((tag) => (
-        <span key={tag} className={tagClass(tagColor(tag))}>
+        <span key={tag} className={`${tagClass(tagColor(tag))} ${nowrap ? "min-w-0 shrink overflow-hidden text-ellipsis" : ""}`} title={tag}>
           {tag}
         </span>
       ))}
-      {rest > 0 && <span className="tag" title={tags.slice(shown.length).join(", ")}>+{rest}</span>}
+      {rest > 0 && <span className="tag shrink-0" title={tags.slice(shown.length).join(", ")}>+{rest}</span>}
     </span>
   );
 }
@@ -183,7 +183,7 @@ export function MeetingTable({
   const allSelected = meetings.length > 0 && selectedCount === meetings.length;
   return (
     <div className="-mx-2 overflow-x-auto px-2">
-      <table className="w-full min-w-[640px] border-collapse text-sm">
+      <table className="w-full min-w-[640px] table-fixed border-collapse text-sm">
         <thead>
           <tr className="border-b border-divider text-left text-base-content/60">
             <th className="w-10 px-1 py-1.5 font-normal">
@@ -201,11 +201,11 @@ export function MeetingTable({
               </label>
             </th>
             <th className="px-2 py-1.5 font-normal">Title</th>
-            <th className="w-36 px-2 py-1.5 font-normal">Date</th>
-            <th className="hidden w-24 px-2 py-1.5 font-normal md:table-cell">Length</th>
+            <th className="w-40 px-2 py-1.5 font-normal">Date</th>
+            <th className="hidden w-20 px-2 py-1.5 font-normal md:table-cell">Length</th>
             <th className="hidden w-44 px-2 py-1.5 font-normal lg:table-cell">Tags</th>
-            <th className="w-48 px-2 py-1.5 font-normal">Status</th>
-            <th className="w-10 px-1 py-1.5 font-normal">
+            <th className="w-52 px-2 py-1.5 font-normal">Status</th>
+            <th className="w-11 px-1 py-1.5 font-normal">
               <span className="sr-only">Actions</span>
             </th>
           </tr>
@@ -256,7 +256,7 @@ export function MeetingTable({
                   {formatLength(meeting.endTime - meeting.startTime)}
                 </td>
                 <td className="hidden px-2 py-2 lg:table-cell">
-                  <TagList tags={meeting.tags} max={3} />
+                  <TagList tags={meeting.tags} max={2} nowrap />
                 </td>
                 <td className="px-2 py-2">
                   <StatusPill meeting={meeting} progress={progress} showBar onRetry={() => onRetranscribe(meeting.id)} />
