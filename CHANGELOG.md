@@ -17,6 +17,7 @@ every section newer than the previous tag into the GitHub release notes.
 - **Running jobs at a glance** — the sidebar shows what Olive is working on in the background, with a popover that links to each meeting.
 - **Activity** — the queue view that used to hide at `/debug` and the logs now live together under Activity, with plain-language job names, a step-by-step view of local transcriptions, and Cancel for running transcriptions. The technical details are still there behind a disclosure.
 - **Template preview** — try a template against one of your transcribed meetings before saving it. On wide screens the preview sits next to the editor.
+- **What Modal actually billed** — the Usage page now shows Modal's billed cost next to the GPU-time estimate, including CPU, memory and idle time. Olive fetches it from Modal every hour (or on Refresh) and splits each hour's bill across that hour's transcriptions. Existing totals still add up the estimates, as before.
 
 ### Changed
 
