@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from olive.app import create_app
 from olive.db import create_db
-from olive.services.llm import LlmService, normalize_provider_base_url
+from olive.services.llm import PROVIDER_ENV_KEY_MAP, LlmService, normalize_provider_base_url
 
 
 async def test_lists_models_across_multiple_providers_with_metadata(tmp_path: Path) -> None:
@@ -200,4 +200,39 @@ def test_llm_api_endpoints(tmp_path: Path) -> None:
         )
         assert test_res.status_code == 400
 
+    handle.engine.dispose()
+
+
+async def test_lists_only_models_with_a_usable_provider(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for keys in PROVIDER_ENV_KEY_MAP.values():
+        for key in keys:
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    handle = create_db(":memory:")
+    service = LlmService(db=handle.engine, config_dir=str(tmp_path))
+    await service.update_settings(
+        {
+            "providers": {"openai": {"apiKey": "sk-openai-test"}},
+            "customModels": [{"id": "llama3", "name": "Llama 3", "provider": "ollama"}],
+        }
+    )
+
+    providers = {m.provider for m in await service.list_models({"configured": True})}
+    assert providers == {"anthropic", "openai", "ollama"}
+    all_providers = {m.provider for m in await service.list_models()}
+    assert "google" in all_providers
+    handle.engine.dispose()
+
+
+def test_llm_models_endpoint_configured_filter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for keys in PROVIDER_ENV_KEY_MAP.values():
+        for key in keys:
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test")
+    handle = create_db(":memory:")
+    client = TestClient(create_app({"db": handle.engine, "configDir": str(tmp_path)}))
+
+    res = client.get("/api/llm/models?configured=1")
+    assert res.status_code == 200
+    assert {m["provider"] for m in res.json()["models"]} == {"google"}
     handle.engine.dispose()
