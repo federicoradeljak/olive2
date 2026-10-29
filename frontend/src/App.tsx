@@ -363,7 +363,11 @@ export function App(): ReactElement {
       <main className="min-w-0 lg:pl-60">
         <div
           className={`mx-auto w-full min-w-0 px-4 pt-5 pb-[calc(6rem+env(safe-area-inset-bottom))] sm:px-8 lg:pb-16 ${
-            selectedMeetingId ? "max-w-none lg:px-0 lg:pt-0" : "max-w-6xl lg:px-14 lg:pt-10"
+            selectedMeetingId
+              ? "max-w-none lg:px-0 lg:pt-0"
+              : activeTab === "templates"
+                ? "max-w-[90rem] lg:px-14 lg:pt-10"
+                : "max-w-6xl lg:px-14 lg:pt-10"
           }`}
         >
           {pageTitle && <h1 className="mb-6 text-3xl font-bold tracking-tight sm:text-4xl">{pageTitle}</h1>}

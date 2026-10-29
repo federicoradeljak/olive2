@@ -158,7 +158,7 @@ export function TemplateEditor({
   ].filter(Boolean) as Parameters<typeof ActionMenu>[0]["items"];
 
   return (
-    <div className="flex min-w-0 flex-col gap-6">
+    <div className={`grid min-w-0 gap-6 ${showPreview ? "2xl:grid-cols-[minmax(0,1fr)_24rem]" : ""}`}>
       <form onSubmit={handleSubmit} className="flex min-w-0 flex-col gap-5" aria-label="Template editor">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="flex items-center gap-2 text-sm text-base-content/60">
@@ -303,7 +303,9 @@ export function TemplateEditor({
       </form>
 
       {showPreview && (
-        <TemplatePreview systemPrompt={draft.systemPrompt} userPrompt={draft.userPrompt} />
+        <div className="min-w-0 2xl:sticky 2xl:top-6 2xl:self-start">
+          <TemplatePreview systemPrompt={draft.systemPrompt} userPrompt={draft.userPrompt} />
+        </div>
       )}
     </div>
   );
