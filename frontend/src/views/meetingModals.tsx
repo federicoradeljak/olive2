@@ -1,13 +1,25 @@
-import React, { Fragment, useEffect, useMemo, useState } from "react";
+import React, { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
-import { Check, Pause, Play, Save, Scissors, Zap } from "lucide-react";
+import { AudioLines, Check, CircleAlert, Clock, Pause, Play, Scissors, Search, Upload } from "lucide-react";
 import { Combobox } from "../components/Combobox";
 import { notify } from "../components/ui";
 import { SpeakerCombobox } from "../components/SpeakerCombobox";
-import { ENGINE_OPTIONS, SUMMARY_AUTO_LABEL, TRANSCRIPTION_AUTO_LABEL, ThinkingLabel, languageOptions, modelOptions, templateOptions, thinkingLevelOptions } from "../components/OptionComboboxes";
-import type { LlmModelCatalogItem, Recording, Speaker, SummaryGenerationStatus, RapidEnrollAssignResponse, RapidEnrollCandidateGroup, Template } from "../api/types.ts";
-import { SpeakerWithStats, formatDuration, formatTimeOffset } from "../lib/common";
+import { ENGINE_OPTIONS, MODAL_ASR_MODEL_OPTIONS, type ModalAsrModel, SUMMARY_AUTO_LABEL, TRANSCRIPTION_AUTO_LABEL, languageOptions } from "../components/OptionComboboxes";
+import type { LlmModelCatalogItem, SummaryGenerationStatus, RapidEnrollAssignResponse, RapidEnrollCandidateGroup, Template } from "../api/types.ts";
+import { MeetingsResponse, SpeakerWithStats, formatDate, formatDuration, formatTimeOffset, isGenericSpeakerLabel } from "../lib/common";
 import { Modal } from "./AppModals";
+import { FieldLabel, ModalFooter, Segmented, Spinner } from "./meeting/kit";
+import { VoiceMatchingControls } from "./meeting/VoiceMatching";
+
+const THINKING_LABELS: Record<string, string> = {
+  off: "Off",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra high",
+  max: "Max"
+};
 
 export function GenerateSummaryModal({
   meetingId,
@@ -69,23 +81,20 @@ export function GenerateSummaryModal({
     void load();
   }, []);
 
-  const handleProviderChange = (pId: string) => {
-    setSelectedProvider(pId);
-    const pModels = models.filter((m) => m.provider === pId);
-    if (pModels.length > 0) {
-      setSelectedModel(pModels[0].id);
-      const supported = pModels[0].supportedThinkingLevels || ["low", "medium", "high"];
-      setThinkingLevel(supported.includes("off") ? "off" : supported[0] || "low");
-    }
-  };
+  const selectedModelObj = models.find((m) => m.provider === selectedProvider && m.id === selectedModel);
+  const thinkingLevels: string[] = selectedModelObj?.supportedThinkingLevels || ["low", "medium", "high"];
 
-  const handleModelChange = (mId: string) => {
-    setSelectedModel(mId);
-    const m = models.find((mod) => mod.provider === selectedProvider && mod.id === mId);
-    if (m?.supportedThinkingLevels) {
-      if (!m.supportedThinkingLevels.includes(thinkingLevel as any)) {
-        setThinkingLevel(m.supportedThinkingLevels[0] || "low");
-      }
+  const handleModelChange = (value: string) => {
+    const sep = value.indexOf("::");
+    if (sep < 0) return;
+    const provider = value.slice(0, sep);
+    const id = value.slice(sep + 2);
+    setSelectedProvider(provider);
+    setSelectedModel(id);
+    const m = models.find((mod) => mod.provider === provider && mod.id === id);
+    const supported: string[] = m?.supportedThinkingLevels || ["low", "medium", "high"];
+    if (!supported.includes(thinkingLevel)) {
+      setThinkingLevel(supported.includes("off") ? "off" : supported[0] || "low");
     }
   };
 
@@ -120,128 +129,128 @@ export function GenerateSummaryModal({
     }
   };
 
-  const providers = Array.from(new Set(models.map((m) => m.provider)));
-  const providerModels = models.filter((m) => m.provider === selectedProvider);
-  const selectedModelObj = models.find((m) => m.provider === selectedProvider && m.id === selectedModel);
+  const modelChoices = useMemo(() => {
+    const multipleProviders = new Set(models.map((m) => m.provider)).size > 1;
+    const list = models.map((m) => ({
+      value: `${m.provider}::${m.id}`,
+      label: m.name,
+      description: [multipleProviders ? m.provider.charAt(0).toUpperCase() + m.provider.slice(1) : null, m.reasoning ? "Reasoning" : null]
+        .filter(Boolean)
+        .join(" · ") || undefined,
+      keywords: `${m.provider} ${m.id}`
+    }));
+    // Keep the configured default selectable even if the catalog lacks it.
+    const current = `${selectedProvider}::${selectedModel}`;
+    if (!list.some((o) => o.value === current)) list.unshift({ value: current, label: selectedModel, description: selectedProvider, keywords: "" });
+    return list;
+  }, [models, selectedProvider, selectedModel]);
 
   return (
-    <Modal onClose={onClose} title={"Generate AI Summary"} ariaLabel="Generate AI summary" maxWidth="max-w-lg">
-      {error && (
-        <div className="alert alert-soft alert-error p-3 text-xs text-error">
-          {error}
-        </div>
-      )}
+    <Modal onClose={onClose} title="New summary" ariaLabel="New summary" maxWidth="max-w-lg">
+      {error && <div className="mb-4 rounded-lg bg-error/10 p-3 text-sm text-error">{error}</div>}
 
       {loading ? (
-        <div className="p-8 text-center text-sm text-base-content/70">Loading templates & models…</div>
+        <div className="flex items-center justify-center gap-2 p-8 text-sm text-base-content/60">
+          <Spinner /> Loading templates and models…
+        </div>
       ) : (
-        <form onSubmit={handleGenerate} className="space-y-4">
-          <div className="space-y-1">
-            <label className="text-xs font-medium uppercase tracking-wider text-base-content/70">
-              Summary Template
-            </label>
-            <Combobox
-              value={selectedTemplateId}
-              onChange={setSelectedTemplateId}
-              placeholder="Select template…"
-              ariaLabel="Summary template"
-              searchPlaceholder="Search templates…"
-              emptyText="No templates match your search."
-              options={templateOptions(templates)}
-            />
-          </div>
+        <form onSubmit={handleGenerate} className="space-y-5">
+          <fieldset>
+            <legend className="mb-1.5 text-[13px] font-medium text-base-content/60">Template</legend>
+            {templates.length === 0 ? (
+              <p className="text-sm text-base-content/60">No templates yet — the default prompt will be used.</p>
+            ) : (
+              <div className="max-h-72 space-y-1.5 overflow-y-auto pr-0.5">
+                {templates.map((t) => {
+                  const on = t.id === selectedTemplateId;
+                  return (
+                    <label
+                      key={t.id}
+                      className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2.5 transition ${
+                        on ? "border-primary bg-primary/10" : "border-base-300 hover:bg-hover"
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="summary-template"
+                        checked={on}
+                        onChange={() => setSelectedTemplateId(t.id)}
+                        className="radio radio-primary radio-sm mt-0.5"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-medium">
+                          {t.name}{" "}
+                          <span className="text-xs font-normal text-base-content/50">{t.isDefault ? "Default" : t.isBuiltin ? "Built-in" : "Custom"}</span>
+                        </span>
+                        {t.description && <span className="block text-xs text-base-content/60">{t.description}</span>}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </fieldset>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div className="space-y-1">
-              <label className="text-xs font-medium uppercase tracking-wider text-base-content/70">
-                AI Provider
-              </label>
+            <div>
+              <FieldLabel>Model</FieldLabel>
               <Combobox
-                value={selectedProvider}
-                onChange={handleProviderChange}
-                placeholder="Select provider…"
-                ariaLabel="AI provider"
-                searchPlaceholder="Search providers…"
-                options={providers.map((p) => ({
-                  value: p,
-                  label: p.charAt(0).toUpperCase() + p.slice(1),
-                }))}
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-xs font-medium uppercase tracking-wider text-base-content/70">
-                Model
-              </label>
-              <Combobox
-                value={selectedModel}
+                value={`${selectedProvider}::${selectedModel}`}
                 onChange={handleModelChange}
                 placeholder="Select model…"
                 ariaLabel="Model"
                 searchPlaceholder="Search models…"
                 emptyText="No models match your search."
-                options={modelOptions(providerModels)}
+                options={modelChoices}
+              />
+            </div>
+            <div>
+              <FieldLabel>Write it in</FieldLabel>
+              <Combobox
+                value={language}
+                onChange={setLanguage}
+                placeholder="Select language…"
+                ariaLabel="Summary language"
+                searchPlaceholder="Search languages…"
+                options={languageOptions("Default from settings", SUMMARY_AUTO_LABEL)}
               />
             </div>
           </div>
 
-          {selectedModelObj && selectedModelObj.reasoning && (
-            <div className="space-y-1">
-              <label className="text-xs font-medium uppercase tracking-wider text-base-content/70 flex items-center gap-1.5">
-                <ThinkingLabel />
-              </label>
-              <Combobox
-                value={thinkingLevel}
-                onChange={setThinkingLevel}
-                placeholder="Select thinking level…"
-                ariaLabel="Thinking reasoning level"
-                options={thinkingLevelOptions(selectedModelObj.supportedThinkingLevels || ["low", "medium", "high"])}
-              />
+          {selectedModelObj?.reasoning && (
+            <div>
+              <FieldLabel>Thinking</FieldLabel>
+              {thinkingLevels.length <= 5 ? (
+                <Segmented
+                  ariaLabel="Thinking"
+                  value={thinkingLevel}
+                  onChange={setThinkingLevel}
+                  options={thinkingLevels.map((lvl) => ({ value: lvl, label: THINKING_LABELS[lvl] ?? lvl }))}
+                />
+              ) : (
+                <Combobox
+                  value={thinkingLevel}
+                  onChange={setThinkingLevel}
+                  ariaLabel="Thinking"
+                  options={thinkingLevels.map((lvl) => ({ value: lvl, label: THINKING_LABELS[lvl] ?? lvl }))}
+                />
+              )}
             </div>
           )}
 
-          <div className="space-y-1">
-            <label className="text-xs font-medium uppercase tracking-wider text-base-content/70">Language</label>
-            <Combobox
-              value={language}
-              onChange={setLanguage}
-              placeholder="Select language…"
-              ariaLabel="Summary language"
-              searchPlaceholder="Search languages…"
-              options={languageOptions("Default from settings", SUMMARY_AUTO_LABEL)}
-            />
-          </div>
+          <label className="flex cursor-pointer items-center gap-2.5 text-sm">
+            <input type="checkbox" checked={setPrimary} onChange={(e) => setSetPrimary(e.target.checked)} className="checkbox checkbox-primary checkbox-sm" />
+            Make it the primary summary
+          </label>
 
-          <div className="flex items-center gap-2 pt-1">
-            <input
-              type="checkbox"
-              id="setPrimarySummary"
-              checked={setPrimary}
-              onChange={(e) => setSetPrimary(e.target.checked)}
-              className="checkbox checkbox-primary"
-            />
-            <label htmlFor="setPrimarySummary" className="text-xs text-base-content cursor-pointer">
-              Set as primary summary for this meeting
-            </label>
-          </div>
-
-          <div className="flex justify-end gap-3 border-t border-base-300 pt-4">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={starting}
-              className="btn btn-sm min-h-11"
-            >
+          <ModalFooter>
+            <button type="button" onClick={onClose} disabled={starting} className="btn min-h-11 lg:min-h-0">
               Cancel
             </button>
-            <button
-              type="submit"
-              disabled={starting}
-              className="btn btn-primary btn-sm inline-flex items-center gap-2 min-h-11"
-            >
-              {starting ? "Starting…" : "Generate Summary"}
+            <button type="submit" disabled={starting} className="btn btn-primary min-h-11 lg:min-h-0">
+              {starting ? "Starting…" : "Generate"}
             </button>
-          </div>
+          </ModalFooter>
         </form>
       )}
     </Modal>
@@ -296,11 +305,7 @@ export function RapidEnrollModal({
         setSelectedSamples((prev) => {
           const next = { ...prev };
           for (const g of loaded) {
-            if (!(g.label in next)) {
-              const eligible = (g.samples ?? []).filter((s) => s.enrollEligible);
-              const chosen = (eligible.length > 0 ? eligible : (g.samples ?? []).slice(0, 1)).slice(0, 3);
-              next[g.label] = chosen.map((s) => s.segmentIndex);
-            }
+            if (!(g.label in next)) next[g.label] = defaultSampleSelection(g);
           }
           return next;
         });
@@ -356,14 +361,8 @@ export function RapidEnrollModal({
       return next;
     });
 
-    void fetch(`/api/meetings/${meetingId}/speakers/rapid-enroll`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ fromLabel: group.label, toSpeakerId, toSpeakerName, segmentIndices })
-    })
-      .then(async (res) => {
-        const data = (await res.json().catch(() => ({}))) as RapidEnrollAssignResponse & { error?: string };
-        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    void assignRapidEnroll(meetingId, { fromLabel: group.label, toSpeakerId, toSpeakerName, segmentIndices })
+      .then((data) => {
         setCompletions((prev) => [
           {
             label: group.label,
@@ -398,141 +397,197 @@ export function RapidEnrollModal({
   };
 
   return (
-    <Modal onClose={onClose} title={<><Zap className="h-4 w-4 shrink-0" aria-hidden="true" /> Rapid enroll</>} ariaLabel="Rapid enroll speakers" maxWidth="max-w-3xl">
-      <p className="text-sm text-base-content/70">
-        Speakers in this meeting that are unmatched or auto-matched but unverified, with their best voiceprint samples.
-        Listen, check the good ones, then say who it is — every turn for that voice gets renamed and the checked samples
-        train their voiceprint.
+    <Modal onClose={onClose} title="Identify voices" ariaLabel="Identify voices in this meeting" maxWidth="max-w-3xl">
+      <p className="text-sm text-base-content/60">
+        Voices in this meeting that are unknown or matched but not confirmed yet, with their clearest clips. Listen, keep
+        the good clips checked, then say who it is — every turn for that voice is renamed and the checked clips teach Olive
+        their voice.
       </p>
 
-      {error && <div className="rounded-xl border border-error bg-error/10 p-4 text-sm text-error">{error}</div>}
-      {groups === null && !error && <p className="text-sm text-base-content/70">Finding candidate speakers…</p>}
-      {groups !== null && groups.length === 0 && completions.length === 0 && Object.keys(pendingLabels).length === 0 && (
-        <p className="rounded-xl border border-base-300 bg-base-100/50 p-4 text-sm text-base-content">
-          🎉 Nothing to enroll — every speaker in this meeting is matched and verified.
-        </p>
-      )}
-
-      {Object.entries(pendingLabels).map(([label, targetName]) => (
-        <div key={`pending-${label}`} className="rounded-xl border border-warning/40 bg-warning/10 p-4 text-sm text-warning">
-          <p className="font-semibold">
-            ⏳ “{label}” is {targetName} — renaming now, enrolling voiceprint in the background…
+      <div className="mt-4 space-y-3">
+        {error && <div className="rounded-lg bg-error/10 p-3 text-sm text-error">{error}</div>}
+        {groups === null && !error && (
+          <p className="flex items-center gap-2 text-sm text-base-content/60">
+            <Spinner /> Finding voices to identify…
           </p>
-        </div>
-      ))}
-
-      {Object.entries(failedLabels).map(([label, message]) => (
-        <div key={`failed-${label}`} className="rounded-xl border border-error bg-error/10 p-4 text-sm text-error">
-          <p className="font-semibold">Failed to assign “{label}”: {message}</p>
-          <p className="mt-1 text-xs">The voice has been restored to the list so you can retry.</p>
-        </div>
-      ))}
-
-      {completions.map((c) => (
-        <div key={`${c.label}-${c.targetName}`} className="rounded-xl border border-primary/40 bg-primary/10 p-4 text-sm text-primary">
-          <p className="font-semibold">
-            <Check className="h-4 w-4 shrink-0" aria-hidden="true" /> “{c.label}” is {c.targetName} — renamed {c.updatedSegmentsCount} turn{c.updatedSegmentsCount === 1 ? "" : "s"},
-            enrolled {c.enrolledSamplesCount}/{c.sampleCount} sample{c.sampleCount === 1 ? "" : "s"}
+        )}
+        {groups !== null && groups.length === 0 && completions.length === 0 && Object.keys(pendingLabels).length === 0 && (
+          <p className="flex items-center gap-2 rounded-lg bg-hover p-3 text-sm">
+            <Check className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+            Nothing left to identify — every voice in this meeting is named and confirmed.
           </p>
-          {c.notes.map((note, i) => (
-            <p key={i} className="mt-1 text-xs text-primary/80">{note}</p>
-          ))}
-        </div>
-      ))}
+        )}
 
-      {(groups ?? []).map((group) => {
-        const target = targets[group.label] ?? { speakerId: "", customName: "" };
-        const targetName =
-          target.speakerId && target.speakerId !== "new"
-            ? knownSpeakers.find((s) => s.id === target.speakerId)?.name
-            : target.customName.trim();
-        return (
-          <section key={group.label} className="space-y-3 rounded-xl border border-base-300 bg-base-100/50 p-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-base font-semibold text-base-content">“{group.label}”</h3>
-              <span
-                className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${
-                  group.status === "unmatched"
-                    ? "border-warning/40 bg-warning/10 text-warning"
-                    : "border-accent/40 bg-accent/10 text-accent"
-                }`}
-              >
-                {group.status === "unmatched" ? "Unmatched" : "Unverified match"}
-              </span>
-              <span className="text-xs text-base-content/50">
-                {group.segmentCount} turn{group.segmentCount === 1 ? "" : "s"} • {formatDuration(group.totalDurationMs ?? 0)} of speech
-              </span>
-            </div>
-            <p className="text-xs text-base-content/50">{group.reason}</p>
+        {Object.entries(pendingLabels).map(([label, targetName]) => (
+          <div key={`pending-${label}`} className="flex items-center gap-2 rounded-lg bg-warning/10 p-3 text-sm text-warning">
+            <Clock className="h-4 w-4 shrink-0" aria-hidden="true" />
+            “{label}” is {targetName} — renaming now, learning the voice in the background…
+          </div>
+        ))}
 
-            <div className="space-y-2">
-              {(group.samples ?? []).map((sample) => (
-                <div key={sample.segmentIndex} className="flex items-start gap-2.5 rounded-lg border border-base-300 bg-base-200/70 p-2.5">
-                  <input
-                    type="checkbox"
+        {Object.entries(failedLabels).map(([label, message]) => (
+          <div key={`failed-${label}`} className="rounded-lg bg-error/10 p-3 text-sm text-error">
+            <p className="font-medium">Couldn't assign “{label}”: {message}</p>
+            <p className="mt-0.5 text-xs">The voice is back in the list so you can try again.</p>
+          </div>
+        ))}
+
+        {completions.map((c) => (
+          <div key={`${c.label}-${c.targetName}`} className="rounded-lg bg-primary/10 p-3 text-sm text-primary">
+            <p className="flex items-center gap-2 font-medium">
+              <Check className="h-4 w-4 shrink-0" aria-hidden="true" />
+              “{c.label}” is {c.targetName} — renamed {c.updatedSegmentsCount} turn{c.updatedSegmentsCount === 1 ? "" : "s"}, learned from{" "}
+              {c.enrolledSamplesCount}/{c.sampleCount} clip{c.sampleCount === 1 ? "" : "s"}
+            </p>
+            {c.notes.map((note, i) => (
+              <p key={i} className="mt-1 text-xs text-primary/80">{note}</p>
+            ))}
+          </div>
+        ))}
+
+        {(groups ?? []).map((group) => {
+          const target = targets[group.label] ?? { speakerId: "", customName: "" };
+          const targetName =
+            target.speakerId && target.speakerId !== "new"
+              ? knownSpeakers.find((s) => s.id === target.speakerId)?.name
+              : target.customName.trim();
+          return (
+            <section key={group.label} className="space-y-3 rounded-box border border-base-300 p-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="font-semibold">{group.label}</h3>
+                <span className={`tag ${group.status === "unmatched" ? "" : "tag-yellow"}`}>
+                  {group.status === "unmatched" ? "Unknown voice" : "Likely match"}
+                </span>
+                <span className="text-xs text-base-content/50">
+                  {group.segmentCount} turn{group.segmentCount === 1 ? "" : "s"} · {formatDuration(group.totalDurationMs ?? 0)} of speech
+                </span>
+              </div>
+              <p className="text-xs text-base-content/50">{group.reason}</p>
+
+              <div className="space-y-1">
+                {(group.samples ?? []).map((sample) => (
+                  <ClipRow
+                    key={sample.segmentIndex}
+                    startMs={sample.startMs}
+                    durationMs={sample.durationMs}
+                    text={sample.text}
+                    playing={playingSegmentIndex === sample.segmentIndex}
+                    onPlay={() => onPlaySample(sample)}
                     checked={(selectedSamples[group.label] ?? []).includes(sample.segmentIndex)}
-                    onChange={() => toggleSample(group.label, sample.segmentIndex)}
-                    className="checkbox mt-1.5 shrink-0"
-                    aria-label={`Enroll sample at ${formatTimeOffset(sample.startMs)}`}
+                    onToggle={() => toggleSample(group.label, sample.segmentIndex)}
+                    note={!sample.enrollEligible ? "under 3s — too short to learn from (rename only)" : undefined}
                   />
-                  <button
-                    type="button"
-                    onClick={() => onPlaySample(sample)}
-                    title={playingSegmentIndex === sample.segmentIndex ? "Pause playback" : "Play this sample"}
-                    className={`inline-flex min-h-[36px] shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-mono transition ${
-                      playingSegmentIndex === sample.segmentIndex
-                        ? "border border-primary/40 bg-primary/20 font-bold text-primary"
-                        : "border border-base-300/70 bg-base-300/90 text-base-content/70 hover:text-primary"
-                    }`}
-                  >
-                    <span className="text-[10px] inline-flex">{playingSegmentIndex === sample.segmentIndex ? <Pause className="h-3 w-3 shrink-0" aria-hidden="true" /> : <Play className="h-3 w-3 shrink-0" aria-hidden="true" />}</span>
-                    <span>{formatTimeOffset(sample.startMs)}</span>
-                  </button>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs leading-relaxed text-base-content line-clamp-2">{sample.text}</p>
-                    <p className="mt-0.5 text-[10px] text-base-content/50">
-                      {(sample.durationMs / 1000).toFixed(1)}s
-                      {!sample.enrollEligible && <span className="text-warning"> • under 3s — too short to enroll (rename only)</span>}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
 
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-              <SpeakerCombobox
-                value={target.speakerId}
-                onChange={(next) =>
-                  setTargets((prev) => ({ ...prev, [group.label]: { ...target, speakerId: next } }))
-                }
-                knownSpeakers={knownSpeakers}
-                emptyLabel="-- Who is this? --"
-                ariaLabel={`Who is ${group.label}?`}
-              />
-              {(target.speakerId === "new" || !target.speakerId) && (
-                <input
-                  type="text"
-                  placeholder="e.g. Asad"
-                  value={target.customName}
-                  onChange={(e) =>
-                    setTargets((prev) => ({ ...prev, [group.label]: { ...target, customName: e.target.value } }))
-                  }
-                  className="input input-md w-full"
-                  aria-label="New person name"
-                />
-              )}
-              <button
-                type="button"
-                onClick={() => handleAssign(group)}
-                className="btn btn-primary inline-flex min-h-[44px] shrink-0 items-center justify-center disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {targetName ? `This is ${targetName}` : "Assign & enroll"}
-              </button>
-            </div>
-          </section>
-        );
-      })}
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <div className="min-w-0 flex-1">
+                  <SpeakerCombobox
+                    value={target.speakerId}
+                    onChange={(next) => setTargets((prev) => ({ ...prev, [group.label]: { ...target, speakerId: next } }))}
+                    knownSpeakers={knownSpeakers}
+                    emptyLabel="Choose or create a person…"
+                    ariaLabel={`Who is ${group.label}?`}
+                  />
+                </div>
+                {(target.speakerId === "new" || !target.speakerId) && (
+                  <input
+                    type="text"
+                    placeholder="New person's name"
+                    value={target.customName}
+                    onChange={(e) => setTargets((prev) => ({ ...prev, [group.label]: { ...target, customName: e.target.value } }))}
+                    className="input min-h-11 sm:w-48 lg:min-h-0"
+                    aria-label="New person name"
+                  />
+                )}
+                <button type="button" onClick={() => handleAssign(group)} className="btn btn-primary min-h-11 shrink-0 lg:min-h-0">
+                  {targetName ? `This is ${targetName}` : "Assign"}
+                </button>
+              </div>
+            </section>
+          );
+        })}
+      </div>
+
+      <ModalFooter>
+        <button type="button" onClick={onClose} className="btn min-h-11 lg:min-h-0">
+          Done
+        </button>
+      </ModalFooter>
     </Modal>
+  );
+}
+
+/** Top 3 enrollment-eligible clips of a rapid-enroll group (falls back to the first clip). */
+export function defaultSampleSelection(group: RapidEnrollCandidateGroup): number[] {
+  const eligible = (group.samples ?? []).filter((s) => s.enrollEligible);
+  const chosen = (eligible.length > 0 ? eligible : (group.samples ?? []).slice(0, 1)).slice(0, 3);
+  return chosen.map((s) => s.segmentIndex);
+}
+
+export async function assignRapidEnroll(
+  meetingId: string,
+  body: { fromLabel: string; toSpeakerId?: string; toSpeakerName?: string; segmentIndices: number[] }
+): Promise<RapidEnrollAssignResponse> {
+  const res = await fetch(`/api/meetings/${meetingId}/speakers/rapid-enroll`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  const data = (await res.json().catch(() => ({}))) as RapidEnrollAssignResponse & { error?: string };
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+/** One playable clip: play button, quote, length; optional checkbox. */
+export function ClipRow({
+  startMs,
+  durationMs,
+  text,
+  playing,
+  onPlay,
+  checked,
+  onToggle,
+  note
+}: {
+  startMs: number;
+  durationMs: number;
+  text: string;
+  playing: boolean;
+  onPlay: () => void;
+  checked?: boolean;
+  onToggle?: () => void;
+  note?: string;
+}): ReactElement {
+  return (
+    <div className="flex items-center gap-2.5 rounded-lg px-1.5 py-1.5 hover:bg-hover">
+      {onToggle && (
+        <input
+          type="checkbox"
+          checked={!!checked}
+          onChange={onToggle}
+          className="checkbox checkbox-sm shrink-0"
+          aria-label={`Learn from clip at ${formatTimeOffset(startMs)}`}
+        />
+      )}
+      <button
+        type="button"
+        onClick={onPlay}
+        aria-label={playing ? "Pause clip" : `Play clip at ${formatTimeOffset(startMs)}`}
+        className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition lg:h-7 lg:w-7 ${
+          playing ? "border-transparent bg-base-content text-base-100" : "border-base-300 bg-base-100 hover:bg-hover"
+        }`}
+      >
+        {playing ? <Pause className="h-3 w-3" aria-hidden="true" /> : <Play className="h-3 w-3" aria-hidden="true" />}
+      </button>
+      <span className="min-w-0 flex-1">
+        <span className="line-clamp-2 text-[13px] leading-snug">“{text}”</span>
+        {note && <span className="block text-xs text-warning">{note}</span>}
+      </span>
+      <span className="shrink-0 font-mono text-xs text-base-content/50">
+        {formatTimeOffset(startMs)} · {(durationMs / 1000).toFixed(0)}s
+      </span>
+    </div>
   );
 }
 
@@ -541,6 +596,10 @@ export function ReassignSpeakerModal({
   fromLabel,
   segmentIndex,
   knownSpeakers,
+  turnCount,
+  sample,
+  samplePlaying = false,
+  onPlaySample,
   onClose,
   onSuccess,
   onSettled
@@ -549,26 +608,35 @@ export function ReassignSpeakerModal({
   fromLabel: string;
   segmentIndex?: number;
   knownSpeakers: SpeakerWithStats[];
+  /** How many turns carry `fromLabel` (for the "All N turns" choice). */
+  turnCount?: number;
+  /** A clip of this voice to listen to before deciding. */
+  sample?: { startMs: number; endMs: number; text: string };
+  samplePlaying?: boolean;
+  onPlaySample?: () => void;
   onClose: () => void;
   onSuccess: (optimistic?: { targetName: string; scope: "single" | "all"; segmentIndex?: number }) => void;
   onSettled?: () => void;
 }): ReactElement {
   const [selectedSpeakerId, setSelectedSpeakerId] = useState<string>("");
   const [customName, setCustomName] = useState<string>("");
-  const [scope, setScope] = useState<"single" | "all">(segmentIndex !== undefined ? "single" : "all");
+  const [scope, setScope] = useState<"single" | "all">(segmentIndex !== undefined && !isGenericSpeakerLabel(fromLabel) ? "single" : "all");
   const [adoptVoiceprint, setAdoptVoiceprint] = useState(true);
   const [saveToPeople, setSaveToPeople] = useState(true);
+
+  const localOnly = !saveToPeople;
+  const needsName = localOnly || selectedSpeakerId === "new" || !selectedSpeakerId;
+  const targetName = needsName ? customName.trim() : knownSpeakers.find((s) => s.id === selectedSpeakerId)?.name ?? "";
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
     let resolvedTargetName = "";
     let targetId: string | undefined = undefined;
-    const localOnly = !saveToPeople;
 
-    if (localOnly || selectedSpeakerId === "new" || !selectedSpeakerId) {
+    if (needsName) {
       if (!customName.trim()) {
-        notify("warning", localOnly ? "Please enter a name to show in this transcript" : "Please enter a name for the new speaker");
+        notify("warning", localOnly ? "Enter the name to show in this meeting" : "Enter a name for the new person");
         return;
       }
       resolvedTargetName = customName.trim();
@@ -605,6 +673,7 @@ export function ReassignSpeakerModal({
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
           console.error("Async speaker reassignment error:", data.error || `HTTP ${res.status}`);
+          notify("error", `Couldn't assign speaker: ${data.error || `HTTP ${res.status}`}`);
         }
       })
       .catch((err) => {
@@ -615,154 +684,102 @@ export function ReassignSpeakerModal({
       });
   };
 
-  return (
-    <Modal onClose={onClose} title={<>Assign Speaker: "{fromLabel}"</>} ariaLabel="Assign speaker" maxWidth="max-w-md">
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label className="block text-xs font-semibold uppercase tracking-wider text-base-content/70 mb-1.5">
-            Name scope
-          </label>
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() => setSaveToPeople(true)}
-              className={`rounded-lg border px-3 py-2 text-xs font-semibold transition text-left ${
-                saveToPeople
-                  ? "border-primary bg-primary/20 text-primary"
-                  : "border-base-300 bg-base-100 text-base-content/70 hover:text-base-content"
-              }`}
-            >
-              <div className="font-bold">Save to People</div>
-              <div className="text-[10px] text-base-content/70 font-normal mt-0.5">Recognize in future meetings</div>
-            </button>
-            <button
-              type="button"
-              onClick={() => setSaveToPeople(false)}
-              className={`rounded-lg border px-3 py-2 text-xs font-semibold transition text-left ${
-                !saveToPeople
-                  ? "border-primary bg-primary/20 text-primary"
-                  : "border-base-300 bg-base-100 text-base-content/70 hover:text-base-content"
-              }`}
-            >
-              <div className="font-bold">This transcript only</div>
-              <div className="text-[10px] text-base-content/70 font-normal mt-0.5">One-off name, not saved</div>
-            </button>
-          </div>
-        </div>
+  const generic = isGenericSpeakerLabel(fromLabel);
 
-        {segmentIndex !== undefined && (
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-base-content/70 mb-1.5">
-              Apply Scope
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setScope("single")}
-                className={`rounded-lg border px-3 py-2 text-xs font-semibold transition text-left ${
-                  scope === "single"
-                    ? "border-primary bg-primary/20 text-primary"
-                    : "border-base-300 bg-base-100 text-base-content/70 hover:text-base-content"
-                }`}
-              >
-                <div className="font-bold">This turn only</div>
-                <div className="text-[10px] text-base-content/70 font-normal mt-0.5">Correct single turn</div>
-              </button>
-              <button
-                type="button"
-                onClick={() => setScope("all")}
-                className={`rounded-lg border px-3 py-2 text-xs font-semibold transition text-left ${
-                  scope === "all"
-                    ? "border-primary bg-primary/20 text-primary"
-                    : "border-base-300 bg-base-100 text-base-content/70 hover:text-base-content"
-                }`}
-              >
-                <div className="font-bold">All "{fromLabel}" turns</div>
-                <div className="text-[10px] text-base-content/70 font-normal mt-0.5">Batch rename all</div>
-              </button>
-            </div>
+  return (
+    <Modal onClose={onClose} title={generic ? `Who is ${fromLabel}?` : `Change speaker: ${fromLabel}`} ariaLabel="Assign speaker" maxWidth="max-w-md">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {sample && onPlaySample && (
+          <div className="flex items-center gap-2.5 rounded-lg bg-hover px-3 py-2.5">
+            <button
+              type="button"
+              onClick={onPlaySample}
+              aria-label={samplePlaying ? "Pause clip" : "Play clip"}
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-base-content text-base-100 lg:h-8 lg:w-8"
+            >
+              {samplePlaying ? <Pause className="h-3.5 w-3.5" aria-hidden="true" /> : <Play className="h-3.5 w-3.5" aria-hidden="true" />}
+            </button>
+            <span className="line-clamp-2 min-w-0 flex-1 text-[13px]">“{sample.text}”</span>
+            <span className="shrink-0 font-mono text-xs text-base-content/50">{formatTimeOffset(sample.startMs)}</span>
           </div>
         )}
 
-        {!saveToPeople ? (
+        <Segmented
+          ariaLabel="Where to save the name"
+          value={saveToPeople ? "people" : "local"}
+          onChange={(v) => setSaveToPeople(v === "people")}
+          options={[
+            { value: "people", label: "Save to People" },
+            { value: "local", label: "This meeting only" }
+          ]}
+        />
+
+        {saveToPeople ? (
+          <div className="space-y-2">
+            <FieldLabel>Person</FieldLabel>
+            <SpeakerCombobox
+              value={selectedSpeakerId}
+              onChange={setSelectedSpeakerId}
+              knownSpeakers={knownSpeakers}
+              emptyLabel="Choose or create a person…"
+              createLabel="Create person"
+              ariaLabel="Person"
+            />
+            {(selectedSpeakerId === "new" || !selectedSpeakerId) && (
+              <input
+                type="text"
+                placeholder="New person's name"
+                aria-label="New person's name"
+                value={customName}
+                onChange={(e) => setCustomName(e.target.value)}
+                className="input w-full"
+              />
+            )}
+          </div>
+        ) : (
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-base-content/70 mb-1">
-              Display Name
-            </label>
+            <FieldLabel htmlFor="reassign-display-name">Name in this meeting</FieldLabel>
             <input
+              id="reassign-display-name"
               type="text"
               placeholder="e.g. Fred"
               value={customName}
               onChange={(e) => setCustomName(e.target.value)}
-              className="input input-md w-full"
+              className="input w-full"
             />
-            <p className="mt-1.5 text-[11px] leading-snug text-base-content/50">
-              Just relabels this transcript — nothing is added to People and no voiceprint is learned.
-            </p>
+            <p className="mt-1.5 text-xs text-base-content/50">Only relabels this transcript — nothing is added to People and no voice is learned.</p>
           </div>
-        ) : (
-          <>
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-base-content/70 mb-1">
-                Select Person
-              </label>
-              <SpeakerCombobox
-                value={selectedSpeakerId}
-                onChange={setSelectedSpeakerId}
-                knownSpeakers={knownSpeakers}
-                emptyLabel="-- Create new or choose person --"
-                createLabel="+ Create New Person"
-                ariaLabel="Select person"
-              />
-            </div>
-
-            {(selectedSpeakerId === "new" || !selectedSpeakerId) && (
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-base-content/70 mb-1">
-                  Person Name
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. Matt Cowger"
-                  value={customName}
-                  onChange={(e) => setCustomName(e.target.value)}
-                  className="input input-md w-full"
-                />
-              </div>
-            )}
-
-            <div className="flex items-center gap-3 rounded-lg border border-base-300 bg-base-100/50 p-3">
-              <input
-                type="checkbox"
-                id="voiceprint-toggle"
-                checked={adoptVoiceprint}
-                onChange={(e) => setAdoptVoiceprint(e.target.checked)}
-                className="checkbox"
-              />
-              <label htmlFor="voiceprint-toggle" className="text-xs text-base-content leading-snug cursor-pointer">
-                <span className="font-semibold text-base-content">Learn voiceprint from this audio</span>
-                <br />
-                Olive will automatically recognize and attribute this person in future meetings.
-              </label>
-            </div>
-          </>
         )}
 
-        <div className="flex justify-end gap-3 pt-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg px-4 py-2 text-sm font-medium text-base-content/70 hover:text-base-content"
-          >
+        <div className="space-y-2 text-sm">
+          {segmentIndex !== undefined && (
+            <>
+              <label className="flex cursor-pointer items-center gap-2.5">
+                <input type="radio" name="reassign-scope" checked={scope === "all"} onChange={() => setScope("all")} className="radio radio-primary radio-sm" />
+                <span>{turnCount ? `All ${turnCount} turns of ${fromLabel}` : `All turns of ${fromLabel}`}</span>
+              </label>
+              <label className="flex cursor-pointer items-center gap-2.5">
+                <input type="radio" name="reassign-scope" checked={scope === "single"} onChange={() => setScope("single")} className="radio radio-primary radio-sm" />
+                <span>Only this turn</span>
+              </label>
+            </>
+          )}
+          {saveToPeople && (
+            <label className="flex cursor-pointer items-center gap-2.5">
+              <input type="checkbox" checked={adoptVoiceprint} onChange={(e) => setAdoptVoiceprint(e.target.checked)} className="checkbox checkbox-primary checkbox-sm" />
+              <span>Learn this voice so Olive recognizes them next time</span>
+            </label>
+          )}
+        </div>
+
+        <ModalFooter>
+          <button type="button" onClick={onClose} className="btn min-h-11 lg:min-h-0">
             Cancel
           </button>
-          <button
-            type="submit"
-            className="btn btn-primary min-h-11"
-          >
-            Apply & Save
+          <button type="submit" className="btn btn-primary min-h-11 lg:min-h-0">
+            {targetName ? `Assign to ${targetName}` : "Assign"}
           </button>
-        </div>
+        </ModalFooter>
       </form>
     </Modal>
   );
@@ -802,7 +819,7 @@ export function SplitSegmentModal({
 
   const part2SpeakerName =
     selectedSpeakerId === "new"
-      ? customName || "New Speaker"
+      ? customName || "New person"
       : selectedSpeakerId
       ? knownSpeakers.find((s) => s.id === selectedSpeakerId)?.name || segment.speaker
       : segment.speaker;
@@ -819,7 +836,7 @@ export function SplitSegmentModal({
 
       if (selectedSpeakerId === "new") {
         if (!customName.trim()) {
-          notify("warning", "Please enter a name for the new speaker");
+          notify("warning", "Enter a name for the new person");
           setSubmitting(false);
           return;
         }
@@ -845,41 +862,33 @@ export function SplitSegmentModal({
 
       onSuccess();
     } catch (err) {
-      notify("error", `Failed to split segment: ${err instanceof Error ? err.message : String(err)}`);
+      notify("error", `Failed to split turn: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setSubmitting(false);
     }
   };
 
   return (
-    <Modal onClose={onClose} title={<><span className="inline-flex items-center gap-1.5"><Scissors className="h-4 w-4 shrink-0" aria-hidden="true" /> Split Turn:</span> <span className="text-primary">{segment.speaker}</span></>} ariaLabel="Split turn" maxWidth="max-w-2xl">
-      <p className="text-xs text-base-content/70">Click any word to choose where to split this turn into two separate segments.</p>
+    <Modal onClose={onClose} title={`Split turn: ${segment.speaker}`} ariaLabel="Split turn" maxWidth="max-w-2xl">
       <form onSubmit={handleSubmit} className="space-y-4">
-        {/* Interactive Word Picker */}
         <div>
-          <label className="block text-xs font-semibold uppercase tracking-wider text-base-content/70 mb-2">
-            Select Split Point (Click any word)
-          </label>
-          <div className="rounded-xl border border-base-300 bg-base-100 p-4 leading-loose flex flex-wrap gap-1.5 items-center max-h-56 overflow-y-auto">
+          <FieldLabel>Click the word where the second part starts</FieldLabel>
+          <div className="flex max-h-56 flex-wrap items-center gap-1 overflow-y-auto rounded-lg border border-base-300 p-3 leading-loose">
             {words.map((word, idx) => {
               const isPart1 = idx < splitWordIndex;
               const isSplitTarget = idx === splitWordIndex;
               return (
                 <Fragment key={idx}>
                   {isSplitTarget && (
-                    <span className="badge badge-sm badge-warning gap-1 font-bold shadow-md animate-pulse">
-                      <Scissors className="h-4 w-4 shrink-0" aria-hidden="true" /> Split Point
+                    <span className="inline-flex items-center gap-1 rounded bg-warning/15 px-1.5 text-xs font-medium text-warning">
+                      <Scissors className="h-3.5 w-3.5 shrink-0" aria-hidden="true" /> Split
                     </span>
                   )}
                   <button
                     type="button"
                     onClick={() => setSplitWordIndex(idx === 0 ? 1 : idx)}
-                    className={`rounded px-1.5 py-0.5 text-xs font-medium transition cursor-pointer ${
-                      isPart1
-                        ? "bg-primary/20 text-primary border border-primary/40 hover:bg-primary/30"
-                        : "bg-accent/20 text-accent border border-accent/40 hover:bg-accent/30"
-                    }`}
-                    title={`Click to split before "${word}"`}
+                    className={`rounded px-1 text-sm transition hover:bg-hover ${isPart1 ? "text-base-content" : "text-base-content/55"}`}
+                    title={`Split before "${word}"`}
                   >
                     {word}
                   </button>
@@ -889,88 +898,376 @@ export function SplitSegmentModal({
           </div>
         </div>
 
-        {/* Split Comparison Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {/* Part 1 */}
-          <div className="rounded-xl border border-primary/30 bg-primary/10 p-3.5 space-y-2">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-semibold text-primary uppercase tracking-wide">
-                Part 1 ({segment.speaker})
-              </span>
-              <span className="font-mono text-base-content/70 text-[11px]">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div className="space-y-1 rounded-lg bg-hover p-3">
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <span className="font-medium">Part 1 · {segment.speaker}</span>
+              <span className="font-mono text-base-content/50">
                 {formatTimeOffset(segment.startMs)} → {formatTimeOffset(splitTimestamp)}
               </span>
             </div>
-            <p className="text-xs text-base-content line-clamp-4 italic">
-              "{part1Text || "(empty)"}"
-            </p>
+            <p className="line-clamp-4 text-xs text-base-content/70">“{part1Text || "(empty)"}”</p>
           </div>
-
-          {/* Part 2 */}
-          <div className="rounded-xl border border-accent/30 bg-accent/10 p-3.5 space-y-2">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-semibold text-accent uppercase tracking-wide">
-                Part 2 ({part2SpeakerName})
-              </span>
-              <span className="font-mono text-base-content/70 text-[11px]">
+          <div className="space-y-1 rounded-lg bg-hover p-3">
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <span className="font-medium">Part 2 · {part2SpeakerName}</span>
+              <span className="font-mono text-base-content/50">
                 {formatTimeOffset(splitTimestamp)} → {formatTimeOffset(segment.endMs)}
               </span>
             </div>
-            <p className="text-xs text-base-content line-clamp-4 italic">
-              "{part2Text || "(empty)"}"
-            </p>
+            <p className="line-clamp-4 text-xs text-base-content/70">“{part2Text || "(empty)"}”</p>
           </div>
         </div>
 
-        {/* Reassign Part 2 Speaker */}
-        <div className="space-y-3 pt-1 border-t border-base-300">
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-base-content/70 mb-1">
-              Speaker for Part 2
-            </label>
-            <SpeakerCombobox
-              value={selectedSpeakerId}
-              onChange={setSelectedSpeakerId}
-              knownSpeakers={knownSpeakers}
-              emptyLabel={`Keep as "${segment.speaker}"`}
-              createLabel="+ Create New Person"
-              ariaLabel="Speaker for Part 2"
-            />
-          </div>
-
+        <div className="space-y-2">
+          <FieldLabel>Speaker for part 2</FieldLabel>
+          <SpeakerCombobox
+            value={selectedSpeakerId}
+            onChange={setSelectedSpeakerId}
+            knownSpeakers={knownSpeakers}
+            emptyLabel={`Keep as ${segment.speaker}`}
+            createLabel="Create person"
+            ariaLabel="Speaker for part 2"
+          />
           {selectedSpeakerId === "new" && (
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-base-content/70 mb-1">
-                New Person Name
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. Harrison"
-                value={customName}
-                onChange={(e) => setCustomName(e.target.value)}
-                className="input input-md w-full focus:border-accent"
-              />
-            </div>
+            <input
+              type="text"
+              placeholder="New person's name"
+              aria-label="New person's name"
+              value={customName}
+              onChange={(e) => setCustomName(e.target.value)}
+              className="input w-full"
+            />
           )}
         </div>
 
-        <div className="flex justify-end gap-3 pt-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg px-4 py-2 text-sm font-medium text-base-content/70 hover:text-base-content"
-          >
+        <ModalFooter>
+          <button type="button" onClick={onClose} className="btn min-h-11 lg:min-h-0">
             Cancel
           </button>
-          <button
-            type="submit"
-            disabled={submitting || !part1Text || !part2Text}
-            className="btn btn-warning min-h-11"
-          >
-            {submitting ? "Splitting…" : "Confirm & Split Turn"}
+          <button type="submit" disabled={submitting || !part1Text || !part2Text} className="btn btn-primary min-h-11 lg:min-h-0">
+            {submitting ? "Splitting…" : "Split turn"}
           </button>
-        </div>
+        </ModalFooter>
       </form>
+    </Modal>
+  );
+}
+
+export const SPLIT_EDGE_MS = 5000;
+
+export function SplitMeetingModal({
+  totalMs,
+  initialMs,
+  getPlayheadMs,
+  busy,
+  onClose,
+  onConfirm
+}: {
+  totalMs: number;
+  initialMs: number | null;
+  getPlayheadMs: () => number | null;
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: (splitMs: number) => void;
+}): ReactElement {
+  const clamp = (ms: number) => Math.min(Math.max(ms, SPLIT_EDGE_MS), totalMs - SPLIT_EDGE_MS);
+  const [splitMs, setSplitMs] = useState<number>(() => clamp(initialMs ?? Math.round(totalMs / 2)));
+  const valid = splitMs >= SPLIT_EDGE_MS && splitMs <= totalMs - SPLIT_EDGE_MS;
+
+  return (
+    <Modal onClose={onClose} title="Split meeting in two" ariaLabel="Split meeting" maxWidth="max-w-md">
+      <div className="space-y-4 text-sm">
+        <p className="text-base-content/70">
+          The audio and transcript are cut at the same point — nothing is re-transcribed. Part 2 becomes a new meeting.
+        </p>
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <label htmlFor="split-meeting-at" className="font-medium">
+              Split at <span className="font-mono">{formatTimeOffset(splitMs)}</span>
+            </label>
+            <button
+              type="button"
+              onClick={() => {
+                const ms = getPlayheadMs();
+                if (ms !== null) setSplitMs(clamp(ms));
+              }}
+              className="btn btn-ghost btn-sm min-h-11 lg:min-h-0"
+            >
+              Use playhead
+            </button>
+          </div>
+          <input
+            id="split-meeting-at"
+            type="range"
+            min={Math.floor(SPLIT_EDGE_MS / 1000)}
+            max={Math.floor((totalMs - SPLIT_EDGE_MS) / 1000)}
+            step={1}
+            value={Math.floor(splitMs / 1000)}
+            onChange={(e) => setSplitMs(clamp(Number(e.target.value) * 1000))}
+            className="range range-xs range-primary w-full"
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-2 text-xs">
+          <div className="rounded-lg bg-hover p-3">
+            <p className="font-medium">Part 1 (this meeting)</p>
+            <p className="mt-1 font-mono text-base-content/60">00:00 → {formatTimeOffset(splitMs)}</p>
+          </div>
+          <div className="rounded-lg bg-hover p-3">
+            <p className="font-medium">Part 2 (new meeting)</p>
+            <p className="mt-1 font-mono text-base-content/60">
+              {formatTimeOffset(splitMs)} → {formatTimeOffset(totalMs)}
+            </p>
+          </div>
+        </div>
+        <p className="text-xs text-warning">
+          Summaries on both parts are deleted because they described the whole recording. Delete the half you don't need afterwards if you only want one.
+        </p>
+      </div>
+      <ModalFooter>
+        <button type="button" onClick={onClose} disabled={busy} className="btn min-h-11 lg:min-h-0">
+          Cancel
+        </button>
+        <button type="button" onClick={() => onConfirm(splitMs)} disabled={busy || !valid} className="btn btn-primary min-h-11 lg:min-h-0">
+          {busy ? "Splitting…" : "Split meeting"}
+        </button>
+      </ModalFooter>
+    </Modal>
+  );
+}
+
+export function MergeMeetingModal({
+  meetingId,
+  meetingTitle,
+  meetingStartTime,
+  onClose,
+  onMerged
+}: {
+  meetingId: string;
+  meetingTitle: string;
+  meetingStartTime: number;
+  onClose: () => void;
+  onMerged: (mergedMeetingId: string | null) => void;
+}): ReactElement {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<MeetingsResponse["meetings"]>([]);
+  const [loading, setLoading] = useState(false);
+  const [selected, setSelected] = useState<MeetingsResponse["meetings"][number] | null>(null);
+  const [merging, setMerging] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setLoading(true);
+      try {
+        const params = new URLSearchParams({ limit: "8", offset: "0" });
+        if (query.trim()) params.set("search", query.trim());
+        const res = await fetch(`/api/meetings?${params.toString()}`, { signal: controller.signal });
+        if (res.ok) {
+          const data = (await res.json()) as MeetingsResponse;
+          setResults(data.meetings.filter((m) => m.id !== meetingId));
+        }
+      } catch {
+        // aborted or offline: keep the previous results
+      } finally {
+        setLoading(false);
+      }
+    }, 150);
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [query, meetingId]);
+
+  const ordered = selected
+    ? [
+        { id: meetingId, title: meetingTitle, startTime: meetingStartTime },
+        { id: selected.id, title: selected.title, startTime: selected.startTime }
+      ].sort((a, b) => a.startTime - b.startTime)
+    : [];
+
+  const handleMerge = async () => {
+    if (!selected || merging) return;
+    setMerging(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/meetings/merge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ meetingIds: ordered.map((m) => m.id) })
+      });
+      const data = (await res.json().catch(() => ({}))) as { meeting?: { id?: string }; error?: string };
+      if (!res.ok) throw new Error(data.error || `Failed to merge meetings (HTTP ${res.status})`);
+      onMerged(data.meeting?.id ?? null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to merge meetings");
+      setMerging(false);
+    }
+  };
+
+  return (
+    <Modal onClose={onClose} title="Merge with another meeting" ariaLabel="Merge with another meeting" maxWidth="max-w-lg">
+      <div className="space-y-4 text-sm">
+        {error && <div className="rounded-lg bg-error/10 p-3 text-error">{error}</div>}
+        <label className="flex h-10 items-center gap-2 rounded-lg bg-hover px-3 text-base-content/60">
+          <Search className="h-4 w-4 shrink-0" aria-hidden="true" />
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search meetings"
+            aria-label="Search meetings"
+            className="w-full bg-transparent text-base-content outline-none"
+            autoFocus
+          />
+          {loading && <Spinner className="h-3.5 w-3.5" />}
+        </label>
+        <div role="listbox" aria-label="Meetings" className="max-h-64 space-y-0.5 overflow-y-auto">
+          {results.length === 0 && !loading && <p className="px-2 py-3 text-base-content/50">No meetings found.</p>}
+          {results.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              role="option"
+              aria-selected={selected?.id === m.id}
+              onClick={() => setSelected(m)}
+              className={`flex min-h-11 w-full items-center gap-3 rounded-md px-2.5 text-left transition ${selected?.id === m.id ? "bg-active" : "hover:bg-hover"}`}
+            >
+              <AudioLines className="h-4 w-4 shrink-0 text-base-content/50" aria-hidden="true" />
+              <span className="min-w-0 flex-1 truncate">{m.title}</span>
+              <span className="shrink-0 text-xs text-base-content/50">{formatDate(m.startTime)}</span>
+            </button>
+          ))}
+        </div>
+        {selected && (
+          <p className="rounded-lg bg-warning/10 p-3 text-xs text-warning">
+            Joins “{ordered[0].title}” and “{ordered[1].title}” in chronological order into “{ordered[0].title}”. Audio and transcripts are
+            joined without re-transcription, the later meeting is deleted, and summaries are dropped.
+          </p>
+        )}
+      </div>
+      <ModalFooter>
+        <button type="button" onClick={onClose} disabled={merging} className="btn min-h-11 lg:min-h-0">
+          Cancel
+        </button>
+        <button type="button" onClick={() => void handleMerge()} disabled={!selected || merging} className="btn btn-primary min-h-11 lg:min-h-0">
+          {merging ? "Merging…" : "Merge meetings"}
+        </button>
+      </ModalFooter>
+    </Modal>
+  );
+}
+
+export interface TranscribeOptions {
+  engine: string;
+  language: string;
+  modalAsrModel: ModalAsrModel;
+  clusteringThreshold: number;
+  similarityThreshold: number;
+}
+
+export function TranscribeModal({
+  hasTranscript,
+  turnCount,
+  summaryCount,
+  options,
+  onOptionsChange,
+  onClose,
+  onConfirm
+}: {
+  hasTranscript: boolean;
+  turnCount: number;
+  summaryCount: number;
+  options: TranscribeOptions;
+  onOptionsChange: (next: TranscribeOptions) => void;
+  onClose: () => void;
+  onConfirm: () => void;
+}): ReactElement {
+  const set = (patch: Partial<TranscribeOptions>) => onOptionsChange({ ...options, ...patch });
+  const isLocal = options.engine.startsWith("local");
+
+  return (
+    <Modal onClose={onClose} title={hasTranscript ? "Re-transcribe this meeting?" : "Transcribe this meeting"} ariaLabel="Transcribe meeting" maxWidth="max-w-md">
+      <div className="space-y-4 text-sm">
+        {hasTranscript && (
+          <div className="flex gap-2.5 rounded-lg bg-warning/10 p-3 text-warning">
+            <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            <div className="space-y-1">
+              <p>
+                The current transcript{turnCount > 0 ? ` (${turnCount} turns)` : ""} is replaced, including the speaker names you assigned or confirmed in
+                this meeting.
+              </p>
+              <p className="text-warning/80">
+                {summaryCount > 0
+                  ? `Your ${summaryCount} summar${summaryCount === 1 ? "y is" : "ies are"} kept but won't update on their own. `
+                  : ""}
+                People and their learned voices are not affected.
+              </p>
+            </div>
+          </div>
+        )}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <FieldLabel>Engine</FieldLabel>
+            <Combobox
+              value={options.engine}
+              onChange={(v) => set({ engine: v })}
+              placeholder="Select engine…"
+              ariaLabel="Transcription engine"
+              searchPlaceholder="Search engines…"
+              options={ENGINE_OPTIONS}
+            />
+          </div>
+          <div>
+            <FieldLabel>Language</FieldLabel>
+            <Combobox
+              value={options.language}
+              onChange={(v) => set({ language: v })}
+              placeholder="Select language…"
+              ariaLabel="Transcription language"
+              searchPlaceholder="Search languages…"
+              options={languageOptions("Default language", TRANSCRIPTION_AUTO_LABEL)}
+            />
+          </div>
+        </div>
+        {options.engine === "modal" && (
+          <div>
+            <FieldLabel>Speech-to-text model</FieldLabel>
+            <Combobox
+              value={options.modalAsrModel}
+              onChange={(v) => set({ modalAsrModel: v as ModalAsrModel })}
+              placeholder="Select model…"
+              ariaLabel="Modal speech-to-text model"
+              searchPlaceholder="Search models…"
+              options={MODAL_ASR_MODEL_OPTIONS}
+            />
+          </div>
+        )}
+        {isLocal && (
+          <details className="rounded-lg border border-base-300 px-3 py-2">
+            <summary className="cursor-pointer text-[13px] text-base-content/60">Advanced: voice matching</summary>
+            <div className="pt-3">
+              <VoiceMatchingControls
+                idPrefix="transcribe"
+                similarity={options.similarityThreshold}
+                onSimilarityChange={(v) => set({ similarityThreshold: v })}
+                clustering={options.clusteringThreshold}
+                onClusteringChange={(v) => set({ clusteringThreshold: v })}
+              />
+            </div>
+          </details>
+        )}
+        <p className="text-xs text-base-content/50">Runs in the background — you can keep working. Defaults come from Settings.</p>
+      </div>
+      <ModalFooter>
+        <button type="button" onClick={onClose} className="btn min-h-11 lg:min-h-0">
+          Cancel
+        </button>
+        <button type="button" onClick={onConfirm} className="btn btn-primary min-h-11 lg:min-h-0">
+          {hasTranscript ? "Re-transcribe" : "Transcribe"}
+        </button>
+      </ModalFooter>
     </Modal>
   );
 }
@@ -989,6 +1286,8 @@ export function UploadAudioModal({
   const [transcriptionLanguage, setTranscriptionLanguage] = useState("");
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     void fetch("/api/config")
@@ -1003,20 +1302,17 @@ export function UploadAudioModal({
       .catch(() => {});
   }, []);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const selected = e.target.files[0];
-      setFile(selected);
-      if (!title.trim()) {
-        setTitle(selected.name.replace(/\.[^/.]+$/, "").replace(/[_-]/g, " "));
-      }
+  const pickFile = (selected: File) => {
+    setFile(selected);
+    if (!title.trim()) {
+      setTitle(selected.name.replace(/\.[^/.]+$/, "").replace(/[_-]/g, " "));
     }
   };
 
   const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!file) {
-      notify("warning", "Please select an audio file to upload");
+      notify("warning", "Choose an audio file to upload");
       return;
     }
 
@@ -1059,95 +1355,118 @@ export function UploadAudioModal({
   };
 
   return (
-    <Modal onClose={onClose} title={"Upload Audio Recording"} ariaLabel="Upload audio recording" maxWidth="max-w-md">
-      {error && <div className="rounded-xl border border-error bg-error/10 p-3 text-xs text-error">{error}</div>}
-
+    <Modal onClose={onClose} title="Upload audio" ariaLabel="Upload audio" maxWidth="max-w-md">
       <form onSubmit={handleUpload} className="space-y-4 text-sm">
-        <div>
-          <label className="block text-xs font-semibold uppercase tracking-wider text-base-content/70 mb-1">
-            Audio File (.m4a, .mp3, .wav, .aac, .ogg, .flac)
-          </label>
-          <input
-            type="file"
-            required
-            accept="audio/*,.m4a,.mp3,.wav,.aac,.ogg,.flac,.webm"
-            onChange={handleFileChange}
-            className="file-input w-full p-2.5 text-base-content hover:file:bg-base-300"
-          />
-          {file && (
-            <p className="mt-1 text-xs text-base-content/70">
-              Selected: {file.name} ({(file.size / 1024 / 1024).toFixed(2)} MB)
-            </p>
-          )}
-        </div>
+        {error && <div className="rounded-lg bg-error/10 p-3 text-error">{error}</div>}
 
-        <div>
-          <label className="block text-xs font-semibold uppercase tracking-wider text-base-content/70 mb-1">
-            Meeting / Recording Title
-          </label>
-          <input
-            type="text"
-            placeholder="e.g. Planning Session with Team"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            className="input input-md w-full"
-          />
-        </div>
+        <input
+          ref={inputRef}
+          type="file"
+          accept="audio/*,.m4a,.mp3,.wav,.aac,.ogg,.flac,.webm"
+          onChange={(e) => {
+            if (e.target.files && e.target.files[0]) pickFile(e.target.files[0]);
+          }}
+          className="sr-only"
+          tabIndex={-1}
+          aria-hidden="true"
+        />
 
-        <div className="space-y-2 rounded-lg border border-base-300 bg-base-100/50 p-3">
-          <div className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              id="auto-transcribe"
-              checked={autoTranscribe}
-              onChange={(e) => setAutoTranscribe(e.target.checked)}
-              className="checkbox"
-            />
-            <label htmlFor="auto-transcribe" className="text-xs font-semibold text-base-content cursor-pointer">
-              Automatically transcribe after upload
-            </label>
+        {file ? (
+          <div className="flex items-center gap-3 rounded-lg bg-hover px-3 py-2.5">
+            <AudioLines className="h-5 w-5 shrink-0 text-base-content/60" aria-hidden="true" />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-medium">{file.name}</span>
+              <span className="block text-xs text-base-content/50">{(file.size / 1024 / 1024).toFixed(1)} MB</span>
+            </span>
+            <button type="button" onClick={() => inputRef.current?.click()} className="btn btn-ghost btn-sm min-h-11 lg:min-h-0">
+              Replace
+            </button>
           </div>
-
-          {autoTranscribe && (
-            <div className="pt-2 pl-6">
-              <label className="block text-xs text-base-content/70 mb-1">Transcription Engine:</label>
-              <Combobox
-                value={selectedEngine}
-                onChange={setSelectedEngine}
-                placeholder="Select engine…"
-                ariaLabel="Transcription engine"
-                searchPlaceholder="Search engines…"
-                options={ENGINE_OPTIONS}
-              />
-              <label className="block text-xs text-base-content/70 mb-1 mt-2">Language:</label>
-              <Combobox
-                value={transcriptionLanguage}
-                onChange={setTranscriptionLanguage}
-                placeholder="Select language…"
-                ariaLabel="Transcription language"
-                searchPlaceholder="Search languages…"
-                options={languageOptions("Default from settings", TRANSCRIPTION_AUTO_LABEL)}
-              />
-            </div>
-          )}
-        </div>
-
-        <div className="flex justify-end gap-3 pt-2">
+        ) : (
           <button
             type="button"
-            onClick={onClose}
-            className="rounded-lg px-4 py-2 text-sm text-base-content/70 hover:text-base-content"
+            onClick={() => inputRef.current?.click()}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOver(false);
+              const dropped = e.dataTransfer.files?.[0];
+              if (dropped) pickFile(dropped);
+            }}
+            className={`flex w-full flex-col items-center gap-1.5 rounded-box border-[1.5px] border-dashed px-4 py-6 text-center transition ${
+              dragOver ? "border-primary bg-primary/10" : "border-base-300 bg-base-200 hover:bg-hover"
+            }`}
           >
+            <Upload className="h-6 w-6 text-base-content/50" aria-hidden="true" />
+            <span className="font-medium">
+              Drop an audio file or <span className="text-primary underline">browse</span>
+            </span>
+            <span className="text-xs text-base-content/50">m4a, mp3, wav, aac, ogg, flac or webm</span>
+          </button>
+        )}
+
+        <div>
+          <FieldLabel htmlFor="upload-title">Title</FieldLabel>
+          <input
+            id="upload-title"
+            type="text"
+            placeholder="e.g. Planning session with the team"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            className="input w-full"
+          />
+        </div>
+
+        <label className="flex cursor-pointer items-center justify-between gap-3">
+          <span>
+            <span className="block font-medium">Transcribe after upload</span>
+            <span className="block text-xs text-base-content/50">Runs in the background, you can keep working</span>
+          </span>
+          <input type="checkbox" role="switch" checked={autoTranscribe} onChange={(e) => setAutoTranscribe(e.target.checked)} className="toggle toggle-primary toggle-sm" />
+        </label>
+
+        {autoTranscribe && (
+          <div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <FieldLabel>Engine</FieldLabel>
+                <Combobox
+                  value={selectedEngine}
+                  onChange={setSelectedEngine}
+                  placeholder="Select engine…"
+                  ariaLabel="Transcription engine"
+                  searchPlaceholder="Search engines…"
+                  options={ENGINE_OPTIONS}
+                />
+              </div>
+              <div>
+                <FieldLabel>Language</FieldLabel>
+                <Combobox
+                  value={transcriptionLanguage}
+                  onChange={setTranscriptionLanguage}
+                  placeholder="Select language…"
+                  ariaLabel="Transcription language"
+                  searchPlaceholder="Search languages…"
+                  options={languageOptions("Default from settings", TRANSCRIPTION_AUTO_LABEL)}
+                />
+              </div>
+            </div>
+            <p className="mt-2 text-xs text-base-content/50">Defaults come from Settings.</p>
+          </div>
+        )}
+
+        <ModalFooter>
+          <button type="button" onClick={onClose} className="btn min-h-11 lg:min-h-0">
             Cancel
           </button>
-          <button
-            type="submit"
-            disabled={uploading || !file}
-            className="btn btn-primary min-h-11"
-          >
-            {uploading ? "Ingesting…" : "Upload & Save"}
+          <button type="submit" disabled={uploading || !file} className="btn btn-primary min-h-11 lg:min-h-0">
+            {uploading ? "Uploading…" : "Upload"}
           </button>
-        </div>
+        </ModalFooter>
       </form>
     </Modal>
   );
