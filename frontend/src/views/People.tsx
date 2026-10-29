@@ -1,10 +1,14 @@
-import { useState } from "react";
-import type { ReactElement } from "react";
-import { Pencil, Save } from "lucide-react";
-import { Combobox } from "../components/Combobox";
-import { confirmAction, notify } from "../components/ui";
-import { SpeakerStatusBadges } from "../components/SpeakerCombobox";
-import { SpeakerWithStats, formatDate } from "../lib/common";
+import { useMemo, useState } from "react";
+import type { ReactElement, ReactNode } from "react";
+import { Download, RefreshCw, Search, Upload, Users } from "lucide-react";
+import { notify } from "../components/ui";
+import type { SpeakerWithStats } from "../lib/common";
+import { ActionMenu } from "./people/ActionMenu";
+import { ImportLibraryDialog } from "./people/ImportLibraryDialog";
+import { PersonDetail } from "./people/PersonDetail";
+import { Avatar, MAX_VOICE_SAMPLES, VoiceDots, hasVoice, postJson, voiceSampleCount } from "./people/peopleUtils";
+
+type PeopleFilter = "all" | "needsVoice";
 
 export function SpeakersListView({
   speakers,
@@ -15,222 +19,191 @@ export function SpeakersListView({
   onRefresh: () => void;
   onSelectMeeting: (meetingId: string) => void;
 }): ReactElement {
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editingName, setEditingName] = useState("");
-  const [mergingId, setMergingId] = useState<string | null>(null);
-  const [targetMergeId, setTargetMergeId] = useState("");
+  // null = no explicit pick: mobile shows the list, desktop shows the first person.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState<PeopleFilter>("all");
   const [syncing, setSyncing] = useState(false);
+  const [importing, setImporting] = useState(false);
 
-  const handleBackfill = async () => {
+  const needsVoiceCount = useMemo(() => speakers.filter((s) => !hasVoice(s)).length, [speakers]);
+
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return speakers.filter((s) => (filter === "all" || !hasVoice(s)) && (!q || s.name.toLowerCase().includes(q)));
+  }, [speakers, search, filter]);
+
+  const explicit = selectedId ? speakers.find((s) => s.id === selectedId) ?? null : null;
+  const shown = explicit ?? visible[0] ?? speakers[0] ?? null;
+
+  const handleSyncAll = async () => {
     setSyncing(true);
     try {
-      const res = await fetch("/api/speakers/backfill", { method: "POST" });
-      if (res.ok) {
-        onRefresh();
-      }
-    } catch {
-      notify("error", "Failed to backfill voiceprints");
+      const res = await postJson<{ updated?: number; processed?: number }>("/api/speakers/backfill");
+      notify("success", res.updated ? `Updated ${res.updated} voiceprint${res.updated === 1 ? "" : "s"}` : "All voiceprints are up to date");
+      onRefresh();
+    } catch (err) {
+      notify("error", err instanceof Error ? err.message : "Failed to sync voiceprints");
     } finally {
       setSyncing(false);
     }
   };
 
-  const handleRename = async (id: string) => {
-    if (!editingName.trim()) return;
-    try {
-      const res = await fetch(`/api/speakers/${id}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: editingName.trim() })
-      });
-      if (res.ok) {
-        setEditingId(null);
-        onRefresh();
-      }
-    } catch {
-      notify("error", "Failed to rename speaker");
-    }
-  };
+  const libraryMenu = (
+    <ActionMenu
+      label="Library options"
+      items={[
+        {
+          label: "Export voice library",
+          description: "Voiceprints only, as a JSON file for another Olive",
+          icon: <Download className="h-4 w-4" aria-hidden="true" />,
+          onSelect: () => {
+            const a = document.createElement("a");
+            a.href = "/api/speakers/export?download=1";
+            a.download = "olive-voiceprints.json";
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+          },
+        },
+        {
+          label: "Import voice library…",
+          description: "Preview before anything changes",
+          icon: <Upload className="h-4 w-4" aria-hidden="true" />,
+          onSelect: () => setImporting(true),
+        },
+        "divider",
+        {
+          label: syncing ? "Updating voiceprints…" : "Fill in missing voiceprints",
+          description: "Learns a voiceprint for anyone with samples but none yet",
+          icon: <RefreshCw className="h-4 w-4" aria-hidden="true" />,
+          disabled: syncing,
+          onSelect: () => void handleSyncAll(),
+        },
+      ]}
+    />
+  );
 
-  const handleMerge = async (sourceId: string) => {
-    if (!targetMergeId) return;
-    try {
-      const res = await fetch("/api/speakers/merge", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ sourceSpeakerId: sourceId, targetSpeakerId: targetMergeId })
-      });
-      if (res.ok) {
-        setMergingId(null);
-        setTargetMergeId("");
+  const importDialog = importing && (
+    <ImportLibraryDialog
+      onClose={() => setImporting(false)}
+      onImported={() => {
+        setImporting(false);
         onRefresh();
-      }
-    } catch {
-      notify("error", "Failed to merge speaker");
-    }
-  };
+      }}
+    />
+  );
 
-  const handleDelete = async (id: string, name: string) => {
-    if (!(await confirmAction({ title: "Delete speaker", message: `Are you sure you want to delete speaker "${name}"?`, confirmLabel: "Delete", danger: true }))) return;
-    try {
-      const res = await fetch(`/api/speakers/${id}`, { method: "DELETE" });
-      if (res.ok) {
-        onRefresh();
-      }
-    } catch {
-      notify("error", "Failed to delete speaker");
-    }
-  };
+  if (speakers.length === 0) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between gap-3">
+          <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">People</h1>
+          {libraryMenu}
+        </div>
+        <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-base-300 px-6 py-16 text-center">
+          <Users className="h-8 w-8 text-base-content/40" aria-hidden="true" />
+          <p className="max-w-md text-base-content/70">
+            No people yet. Open a meeting transcript and click a speaker label (for example S1) to name the person and teach Olive their voice.
+          </p>
+        </div>
+        {importDialog}
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">People & Voiceprints</h1>
-          <p className="mt-1 text-sm text-base-content/70">
-            Recognized speakers and their persistent voice identifiers learned from meetings.
-          </p>
+    <div className="grid min-w-0 gap-8 lg:grid-cols-[17rem_minmax(0,1fr)] lg:gap-10">
+      <section aria-label="People list" className={`min-w-0 flex-col gap-3 ${selectedId ? "hidden lg:flex" : "flex"}`}>
+        <div className="flex items-center justify-between gap-3">
+          <h1 className="text-3xl font-bold tracking-tight sm:text-4xl lg:text-[22px]">People</h1>
+          {libraryMenu}
         </div>
-        <div>
-          <button
-            type="button"
-            disabled={syncing}
-            onClick={() => void handleBackfill()}
-            className="rounded-lg border border-base-300 bg-base-200 px-3.5 py-1.5 text-xs font-semibold text-base-content hover:border-primary hover:text-primary transition disabled:opacity-50"
-          >
-            {syncing ? "Syncing Voiceprints…" : "Sync & Cross-fill Voiceprints"}
-          </button>
+        <label className="flex h-11 items-center gap-2 rounded-md bg-hover px-2.5 text-base-content/60 focus-within:ring-1 focus-within:ring-primary/40 lg:h-[34px]">
+          <Search className="h-4 w-4 shrink-0" aria-hidden="true" />
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={`Search ${speakers.length} ${speakers.length === 1 ? "person" : "people"}`}
+            aria-label="Search people"
+            className="w-full min-w-0 bg-transparent text-base-content outline-none placeholder:text-base-content/50"
+          />
+        </label>
+        <div className="flex flex-wrap gap-1.5 text-[13px]" role="group" aria-label="Filter people">
+          <FilterChip active={filter === "all"} onClick={() => setFilter("all")}>
+            All
+          </FilterChip>
+          <FilterChip active={filter === "needsVoice"} onClick={() => setFilter("needsVoice")}>
+            Needs a voice · {needsVoiceCount}
+          </FilterChip>
         </div>
-      </div>
 
-      {speakers.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-base-300 bg-base-200/40 py-16 text-center">
-          <p className="text-base-content/70">
-            No people enrolled yet. Open any meeting transcript and click a speaker label (e.g. S1) to assign a person and learn their voice.
-          </p>
-        </div>
-      ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {speakers.map((s) => {
+        <ul className="-mx-2 flex flex-col gap-0.5">
+          {visible.length === 0 && (
+            <li className="px-2 py-6 text-sm text-base-content/50">
+              {filter === "needsVoice" && !search ? "Everyone has a voiceprint." : "Nobody matches your search."}
+            </li>
+          )}
+          {visible.map((s) => {
+            const count = voiceSampleCount(s);
+            const isActive = shown?.id === s.id;
             return (
-              <div
-                key={s.id}
-                className="rounded-xl border border-base-300 bg-base-200/90 p-5 space-y-4 flex flex-col justify-between"
-              >
-                <div>
-                  <div className="flex items-start justify-between">
-                    {editingId === s.id ? (
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="text"
-                          value={editingName}
-                          onChange={(e) => setEditingName(e.target.value)}
-                          className="input input-md w-full min-w-0 rounded"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => void handleRename(s.id)}
-                          className="btn btn-primary min-h-[44px] shrink-0 rounded sm:min-h-0 sm:px-2 sm:py-1 sm:text-xs"
-                        >
-                          Save
-                        </button>
-                      </div>
-                    ) : (
-                      <h2 className="text-lg font-bold text-base-content flex items-center gap-2">
-                        {s.name}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingId(s.id);
-                            setEditingName(s.name);
-                          }}
-                          className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center text-xs text-base-content/50 hover:text-base-content sm:min-h-0 sm:min-w-0"
-                        >
-                          <Pencil className="h-4 w-4 shrink-0" aria-hidden="true" />
-                        </button>
-                      </h2>
-                    )}
-                    <div className="flex flex-col gap-1 items-end">
-                      <SpeakerStatusBadges speaker={s} />
-                    </div>
-                  </div>
-
-                  <div className="mt-3 space-y-1 text-xs text-base-content/70">
-                    <p>Participated in: <span className="font-semibold text-base-content">{s.meetingCount} meeting(s)</span></p>
-                    {s.enrollmentClipPaths?.length > 0 && (
-                      <p>
-                        Stored clips: <span className="font-semibold text-base-content">{s.enrollmentClipPaths.length}/8</span>
-                        {s.enrollmentClipPaths.length >= 8 && (
-                          <span className="text-base-content/50 ml-1">(Cap reached — auto-rolling)</span>
-                        )}
-                      </p>
-                    )}
-                    {s.enrolledAt && (
-                      <p>Last learned: {formatDate(s.enrolledAt)}</p>
-                    )}
-                  </div>
-                </div>
-
-                {mergingId === s.id ? (
-                  <div className="border-t border-base-300 pt-3 space-y-2">
-                    <label className="text-xs text-base-content/70">Merge {s.name} into:</label>
-                    <Combobox
-                      value={targetMergeId}
-                      onChange={setTargetMergeId}
-                      placeholder="Select target…"
-                      ariaLabel={`Merge ${s.name} into`}
-                      searchPlaceholder="Search people…"
-                      emptyText="No people match your search."
-                      options={[
-                        { value: "", label: "-- Choose target --" },
-                        ...speakers
-                          .filter((candidate) => candidate.id !== s.id)
-                          .map((candidate) => ({
-                            value: candidate.id,
-                            label: candidate.name,
-                          })),
-                      ]}
-                    />
-                    <div className="flex gap-2 justify-end">
-                      <button
-                        type="button"
-                        onClick={() => setMergingId(null)}
-                        className="min-h-[44px] px-3 text-sm text-base-content/70 sm:min-h-0 sm:px-2 sm:py-1 sm:text-xs"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void handleMerge(s.id)}
-                        className="btn btn-primary min-h-[44px] rounded sm:min-h-0 sm:px-2 sm:py-1 sm:text-xs"
-                      >
-                        Confirm Merge
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex items-stretch gap-2 border-t border-base-300/80 pt-3 text-xs text-base-content/70">
-                    <button
-                      type="button"
-                      onClick={() => setMergingId(s.id)}
-                      className="btn flex min-h-[44px] flex-1 items-center justify-center hover:border-primary hover:text-primary sm:min-h-0 sm:py-1.5 sm:text-xs"
-                    >
-                      Merge into…
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void handleDelete(s.id, s.name)}
-                      className="btn flex min-h-[44px] flex-1 items-center justify-center hover:border-error/50 hover:text-error sm:min-h-0 sm:py-1.5 sm:text-xs"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                )}
-              </div>
+              <li key={s.id}>
+                <button
+                  type="button"
+                  onClick={() => setSelectedId(s.id)}
+                  aria-current={isActive ? "true" : undefined}
+                  className={`flex min-h-[52px] w-full items-center gap-2.5 rounded-lg px-2.5 text-left transition hover:bg-hover ${
+                    isActive ? "lg:bg-active" : ""
+                  }`}
+                >
+                  <Avatar speaker={s} />
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate font-medium">{s.name}</span>
+                    <span className="truncate text-xs text-base-content/60">
+                      {s.meetingCount} meeting{s.meetingCount === 1 ? "" : "s"} ·{" "}
+                      {hasVoice(s) ? (count > 0 ? `voice ${count}/${MAX_VOICE_SAMPLES}` : "voiceprint") : "no voice yet"}
+                    </span>
+                  </span>
+                  <VoiceDots count={count} />
+                </button>
+              </li>
             );
           })}
-        </div>
-      )}
+        </ul>
+      </section>
+
+      <div className={`min-w-0 ${selectedId ? "block" : "hidden lg:block"}`}>
+        {shown && (
+          <PersonDetail
+            key={shown.id}
+            speaker={shown}
+            speakers={speakers}
+            onRefresh={onRefresh}
+            onSelectMeeting={onSelectMeeting}
+            onBack={() => setSelectedId(null)}
+            onRemoved={(nextId) => setSelectedId(nextId)}
+          />
+        )}
+      </div>
+
+      {importDialog}
     </div>
+  );
+}
+
+function FilterChip({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }): ReactElement {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`inline-flex min-h-11 items-center rounded-full px-3 transition lg:min-h-7 ${
+        active ? "bg-base-content text-base-100" : "border border-base-300 hover:bg-hover"
+      }`}
+    >
+      {children}
+    </button>
   );
 }
