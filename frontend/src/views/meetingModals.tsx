@@ -21,6 +21,34 @@ const THINKING_LABELS: Record<string, string> = {
   max: "Max"
 };
 
+const LAST_SUMMARY_MODEL_KEY = "olive.summary.lastModel";
+
+interface LastSummaryModel {
+  provider: string;
+  model: string;
+  thinkingLevel?: string;
+}
+
+function readLastSummaryModel(): LastSummaryModel | null {
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(LAST_SUMMARY_MODEL_KEY) ?? "null");
+    if (!parsed || typeof parsed !== "object") return null;
+    const { provider, model, thinkingLevel } = parsed as Record<string, unknown>;
+    if (typeof provider !== "string" || typeof model !== "string") return null;
+    return { provider, model, thinkingLevel: typeof thinkingLevel === "string" ? thinkingLevel : undefined };
+  } catch {
+    return null;
+  }
+}
+
+function storeLastSummaryModel(value: LastSummaryModel): void {
+  try {
+    window.localStorage.setItem(LAST_SUMMARY_MODEL_KEY, JSON.stringify(value));
+  } catch {
+    // Storage unavailable (private mode, blocked site data): the next summary starts from the default.
+  }
+}
+
 export function GenerateSummaryModal({
   meetingId,
   onClose,
@@ -47,7 +75,7 @@ export function GenerateSummaryModal({
       try {
         const [tplRes, llmRes, configRes] = await Promise.all([
           fetch("/api/templates"),
-          fetch("/api/llm/models"),
+          fetch("/api/llm/models?configured=1"),
           fetch("/api/llm/config")
         ]);
 
@@ -61,13 +89,22 @@ export function GenerateSummaryModal({
           }
         }
 
-        if (llmRes.ok) {
-          const mData = await llmRes.json();
-          setModels(mData.models || []);
-        }
+        const available: LlmModelCatalogItem[] = llmRes.ok ? ((await llmRes.json()).models ?? []) : [];
+        setModels(available);
+        const cData = configRes.ok ? await configRes.json() : {};
 
-        if (configRes.ok) {
-          const cData = await configRes.json();
+        // Last model used for a summary, else the Settings default, else the first model with a key.
+        const find = (provider?: string, id?: string) => available.find((m) => m.provider === provider && m.id === id);
+        const last = readLastSummaryModel();
+        const initial = (last && find(last.provider, last.model)) || find(cData.defaultProvider, cData.defaultModel) || available[0];
+        if (initial) {
+          setSelectedProvider(initial.provider);
+          setSelectedModel(initial.id);
+          const supported: string[] = initial.supportedThinkingLevels || ["low", "medium", "high"];
+          const preferred = last && initial === find(last.provider, last.model) ? last.thinkingLevel : cData.defaultThinkingLevel;
+          if (preferred && supported.includes(preferred)) setThinkingLevel(preferred);
+          else if (!supported.includes(thinkingLevel)) setThinkingLevel(supported.includes("off") ? "off" : supported[0] || "low");
+        } else {
           if (cData.defaultProvider) setSelectedProvider(cData.defaultProvider);
           if (cData.defaultModel) setSelectedModel(cData.defaultModel);
           if (cData.defaultThinkingLevel) setThinkingLevel(cData.defaultThinkingLevel);
@@ -122,6 +159,7 @@ export function GenerateSummaryModal({
         throw new Error(data.error || `HTTP ${res.status}`);
       }
 
+      storeLastSummaryModel({ provider: selectedProvider, model: selectedModel, thinkingLevel });
       onStarted(data.status);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -203,6 +241,9 @@ export function GenerateSummaryModal({
                 emptyText="No models match your search."
                 options={modelChoices}
               />
+              {models.length === 0 && (
+                <p className="mt-1.5 text-xs text-base-content/60">No models with an API key — add one in Settings → AI models.</p>
+              )}
             </div>
             <div>
               <FieldLabel>Write it in</FieldLabel>

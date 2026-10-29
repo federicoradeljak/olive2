@@ -26,6 +26,7 @@ every section newer than the previous tag into the GitHub release notes.
 - **People** — each person has a page with their voice samples, the meetings they appear in, and Merge, Rebuild and Delete actions, and you can filter for people who still need a voice.
 - **Templates** — templates open in a full-page editor with buttons to insert variables.
 - **Usage** — pick a period and see spending per month in a chart.
+- **New summary** — the dialog remembers the model and thinking level you used last, and only lists models from providers that have an API key (custom models and providers with a custom base URL, such as Ollama, are always listed).
 
 ## [2026-10-28]
 

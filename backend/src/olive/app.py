@@ -2252,6 +2252,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                 "provider": q.get("provider"),
                 "search": q.get("search"),
                 "limit": _numeric_query_param(q.get("limit")),
+                "configured": q.get("configured") in ("1", "true"),
             },
         )
         return JSONResponse(

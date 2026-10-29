@@ -970,6 +970,13 @@ class LlmService:
 
         items = list(catalog_map.values())
 
+        if f.get("configured"):
+            items = [
+                m
+                for m in items
+                if m.source == "custom" or self._is_provider_usable(m.provider, settings)
+            ]
+
         provider_filter = (f.get("provider") or "").strip().lower()
         if provider_filter:
             items = [m for m in items if m.provider.lower() == provider_filter]
@@ -1014,16 +1021,13 @@ class LlmService:
 
         summaries: list[LlmProviderSummary] = []
         for pid, (name, cnt) in provider_counts.items():
-            env_keys = PROVIDER_ENV_KEY_MAP.get(pid, [])
-            has_env_key = any(bool(os.environ.get(k)) for k in env_keys)
             cfg = settings.providers.get(pid)
-            has_stored_key = bool(cfg and cfg.apiKey)
             has_custom_base = bool(cfg and cfg.baseUrl)
             summaries.append(
                 LlmProviderSummary(
                     id=pid,
                     name=name,
-                    isConfigured=has_env_key or has_stored_key,
+                    isConfigured=self._is_provider_configured(pid, settings),
                     hasCustomBaseUrl=has_custom_base,
                     modelCount=cnt,
                 )
@@ -1033,6 +1037,15 @@ class LlmService:
         return summaries
 
     listProviders = list_providers
+
+    def _is_provider_configured(self, provider: str, settings: LlmSettings) -> bool:
+        """An API key is available for ``provider``, from Settings or the environment."""
+        return self.resolve_api_key(provider, None, settings) is not None
+
+    def _is_provider_usable(self, provider: str, settings: LlmSettings) -> bool:
+        """Configured, or pointed at a custom base URL (local servers such as Ollama need no key)."""
+        cfg = settings.providers.get(provider)
+        return self._is_provider_configured(provider, settings) or bool(cfg and cfg.baseUrl)
 
     def resolve_api_key(
         self,
