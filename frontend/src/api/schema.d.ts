@@ -905,6 +905,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/usage/modal/reconcile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post Modal Billing Reconcile Route */
+        post: operations["post_modal_billing_reconcile_route_api_usage_modal_reconcile_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/meetings/{meeting_id}/usage": {
         parameters: {
             query?: never;
@@ -1884,6 +1901,11 @@ export interface components {
             costUsd: number | null;
             /** Createdat */
             createdAt: number;
+            /**
+             * Billedcostusd
+             * @default null
+             */
+            billedCostUsd: number | null;
         };
         /** UsageProviderBreakdown */
         UsageProviderBreakdown: {
@@ -1976,6 +1998,11 @@ export interface components {
              * @default 0
              */
             eventCount: number;
+            /**
+             * Modalbilledusd
+             * @default null
+             */
+            modalBilledUsd: number | null;
         };
         /** UsageRates */
         UsageRates: {
@@ -1988,6 +2015,62 @@ export interface components {
              * @default Per-model input/output rates per 1M tokens from the LLM catalog.
              */
             llmUsdPerMTokensNote: string;
+        };
+        /**
+         * ModalBillingSummary
+         * @description Modal's billed cost for the range, next to the estimates it reconciles.
+         */
+        ModalBillingSummary: {
+            /**
+             * Billedusd
+             * @default 0
+             */
+            billedUsd: number;
+            /**
+             * Attributedusd
+             * @default 0
+             */
+            attributedUsd: number;
+            /**
+             * Unattributedusd
+             * @default 0
+             */
+            unattributedUsd: number;
+            /**
+             * Reconciledevents
+             * @default 0
+             */
+            reconciledEvents: number;
+            /**
+             * Pendingevents
+             * @default 0
+             */
+            pendingEvents: number;
+            /**
+             * Estimatedreconciledusd
+             * @default 0
+             */
+            estimatedReconciledUsd: number;
+            /**
+             * Lastsyncedat
+             * @default null
+             */
+            lastSyncedAt: number | null;
+            /**
+             * Lastattemptat
+             * @default null
+             */
+            lastAttemptAt: number | null;
+            /**
+             * Lasterror
+             * @default null
+             */
+            lastError: string | null;
+            /**
+             * Coveredfrom
+             * @default null
+             */
+            coveredFrom: number | null;
         };
         /** UsageSummary */
         UsageSummary: {
@@ -2047,6 +2130,8 @@ export interface components {
             byMeeting?: components["schemas"]["UsageMeetingBreakdown"][];
             /** @default null */
             rates: components["schemas"]["UsageRates"] | null;
+            /** @default null */
+            modalBilling: components["schemas"]["ModalBillingSummary"] | null;
         };
         /** MeetingUsageResponse */
         MeetingUsageResponse: {
@@ -4160,6 +4245,26 @@ export interface operations {
         };
     };
     get_usage_summary_route_api_usage_summary_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    post_modal_billing_reconcile_route_api_usage_modal_reconcile_post: {
         parameters: {
             query?: never;
             header?: never;

@@ -6,7 +6,9 @@ row every time Olive spends money (or free local compute) on a meeting and
 aggregates those rows into month / per-meeting spend summaries for the UI.
 
 Costs are *estimates* from public rate cards, shown alongside the rates used,
-so users can sanity-check them against provider dashboards.
+so users can sanity-check them against provider dashboards. For Modal, the
+cost Modal actually billed (``services/modal_billing.py``) is reported apart;
+the estimate stays the one every total adds up.
 """
 
 from __future__ import annotations
@@ -499,7 +501,7 @@ def backfill_usage_events(db: Engine | DbHandle | None = None) -> dict[str, int]
 
 
 def _row_to_event(row: Any) -> dict[str, Any]:
-    return {
+    event: dict[str, Any] = {
         "id": row["id"],
         "meetingId": row.get("meeting_id"),
         "meetingTitle": row.get("meeting_title"),
@@ -513,6 +515,9 @@ def _row_to_event(row: Any) -> dict[str, Any]:
         "costUsd": float(row["cost_usd"]) if row.get("cost_usd") is not None else None,
         "createdAt": int(row.get("created_at") or 0),
     }
+    if row.get("modal_billed_usd") is not None:
+        event["billedCostUsd"] = round(float(row["modal_billed_usd"]), 6)
+    return event
 
 
 def get_usage_summary(
@@ -523,7 +528,10 @@ def get_usage_summary(
     include_rates: bool = True,
 ) -> dict[str, Any]:
     """Aggregates usage events into totals plus by-provider/per-meeting splits."""
+    from .modal_billing import billed_usd_by_event_sql, ensure_modal_billing_tables, get_modal_billing_summary
+
     backfill_usage_events(db)
+    ensure_modal_billing_tables(db)
     engine = _engine_of(db)
     clauses = []
     params: dict[str, Any] = {}
@@ -539,9 +547,11 @@ def get_usage_summary(
             conn.execute(
                 text(
                     f"""
-                    SELECT u.*, m.title AS meeting_title, m.start_time AS meeting_start
+                    SELECT u.*, m.title AS meeting_title, m.start_time AS meeting_start,
+                      b.billed_usd AS modal_billed_usd
                     FROM usage_events u
                     LEFT JOIN meetings m ON m.id = u.meeting_id
+                    LEFT JOIN ({billed_usd_by_event_sql()}) b ON b.usage_event_id = u.id
                     {where}
                     ORDER BY u.created_at ASC
                     """
@@ -551,6 +561,7 @@ def get_usage_summary(
             .mappings()
             .all()
         )
+        modal_billing = get_modal_billing_summary(conn, start_ms, end_ms)
     audio_seconds = 0.0
     tx_cost = 0.0
     in_tok = 0
@@ -609,8 +620,11 @@ def get_usage_summary(
                 "llmCostUsd": 0.0,
                 "totalCostUsd": 0.0,
                 "eventCount": 0,
+                "modalBilledUsd": None,
             },
         )
+        if row.get("modal_billed_usd") is not None:
+            mb["modalBilledUsd"] = (mb["modalBilledUsd"] or 0.0) + float(row["modal_billed_usd"])
         if kind == "transcription":
             mb["audioSeconds"] += seconds
             mb["transcriptionCostUsd"] += cost
@@ -647,6 +661,7 @@ def get_usage_summary(
             "llmCostUsd": round(v["llmCostUsd"], 6),
             "totalCostUsd": round(v["totalCostUsd"], 6),
             "eventCount": v["eventCount"],
+            **({"modalBilledUsd": round(v["modalBilledUsd"], 6)} if v["modalBilledUsd"] is not None else {}),
         }
         for v in sorted(meetings.values(), key=lambda v: v["totalCostUsd"], reverse=True)
         if v["meetingId"] is not None
@@ -665,6 +680,8 @@ def get_usage_summary(
         "byProvider": by_provider,
         "byMeeting": by_meeting,
     }
+    if modal_billing is not None:
+        summary["modalBilling"] = modal_billing
     if include_rates:
         summary["rates"] = {
             "transcriptionUsdPerHour": dict(TRANSCRIPTION_USD_PER_HOUR),
@@ -680,16 +697,20 @@ def get_meeting_usage(
     limit: int = 100,
 ) -> dict[str, Any]:
     """Totals plus recent events for a single meeting."""
+    from .modal_billing import billed_usd_by_event_sql, ensure_modal_billing_tables
+
     backfill_usage_events(db)
+    ensure_modal_billing_tables(db)
     engine = _engine_of(db)
     with engine.connect() as conn:
         rows = (
             conn.execute(
                 text(
-                    """
-                    SELECT u.*, m.title AS meeting_title
+                    f"""
+                    SELECT u.*, m.title AS meeting_title, b.billed_usd AS modal_billed_usd
                     FROM usage_events u
                     LEFT JOIN meetings m ON m.id = u.meeting_id
+                    LEFT JOIN ({billed_usd_by_event_sql()}) b ON b.usage_event_id = u.id
                     WHERE u.meeting_id = :mid
                     ORDER BY u.created_at DESC
                     LIMIT :lim

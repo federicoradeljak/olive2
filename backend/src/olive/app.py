@@ -533,6 +533,43 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
 
                 _lifespan_logger.warn("Failed to start Plaud poller", {"error": str(exc)})
 
+        # Hourly Modal billing reconciliation. The tick only enqueues; the sync
+        # itself runs on the ``modal_billing`` DBOS queue.
+        modal_billing_scheduler: Any = None
+        if opts.get("startModalBillingSync") or opts.get("start_modal_billing_sync"):
+            try:
+                from datetime import UTC, datetime, timedelta
+
+                from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+                from .services.modal_billing import enqueue_modal_billing_sync
+
+                async def _modal_billing_tick() -> None:
+                    client = get_modal_client()
+                    if not getattr(client, "is_configured", False):
+                        return
+                    try:
+                        await enqueue_modal_billing_sync(db, client)
+                    except Exception as exc:
+                        from .logging_db import logger as _tick_logger
+
+                        _tick_logger.warn("Failed to enqueue Modal billing sync", {"error": str(exc)})
+
+                modal_billing_scheduler = AsyncIOScheduler()
+                modal_billing_scheduler.add_job(
+                    _modal_billing_tick,
+                    "interval",
+                    hours=1,
+                    next_run_time=datetime.now(UTC) + timedelta(minutes=1),
+                    id="modal_billing_sync",
+                    replace_existing=True,
+                )
+                modal_billing_scheduler.start()
+            except Exception as exc:
+                from .logging_db import logger as _lifespan_logger
+
+                _lifespan_logger.warn("Failed to start Modal billing sync", {"error": str(exc)})
+
         # Best-effort LLM web-catalog refresh so fresh installs see current
         # models without a manual "Sync Web Catalog". Skipped while the
         # on-disk cache is fresh; fire-and-forget so a slow/offline
@@ -565,6 +602,11 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         try:
             yield
         finally:
+            if modal_billing_scheduler is not None:
+                try:
+                    modal_billing_scheduler.shutdown(wait=False)
+                except Exception:
+                    pass
             if plaud_poller is not None and hasattr(plaud_poller, "stop"):
                 try:
                     plaud_poller.stop()
@@ -2280,6 +2322,16 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         return JSONResponse(summary)
+
+    @app.post("/api/usage/modal/reconcile")
+    async def post_modal_billing_reconcile_route() -> JSONResponse:
+        from .services.modal_billing import enqueue_modal_billing_sync
+
+        client = get_modal_client()
+        if not getattr(client, "is_configured", False):
+            return JSONResponse({"error": "Modal token is not configured"}, status_code=400)
+        queued = await enqueue_modal_billing_sync(db, client)
+        return JSONResponse({"status": "queued" if queued else "already_queued"}, status_code=202)
 
     @app.get("/api/meetings/{meeting_id}/usage")
     async def get_meeting_usage_route(meeting_id: str) -> JSONResponse:

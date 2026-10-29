@@ -46,6 +46,7 @@ def build_default_app(*, start_plaud_poller: bool = False):
             "defaultTranscriptionProvider": app_config.transcriptionProvider,
             "bindHost": runtime_config.bind_host,
             "startPlaudPoller": start_plaud_poller,
+            "startModalBillingSync": start_plaud_poller,
         }
     )
 
