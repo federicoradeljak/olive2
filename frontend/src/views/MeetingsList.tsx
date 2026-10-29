@@ -1,13 +1,66 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
-import { Link2, RotateCw } from "lucide-react";
+import { CheckSquare, LayoutGrid, Link2, MoreHorizontal, Plus, RotateCw, Search, Table2, Trash2, X } from "lucide-react";
 import { Combobox } from "../components/Combobox";
 import { confirmAction, notify } from "../components/ui";
 import { TRANSCRIBE_PROVIDER_OPTIONS, TRANSCRIPTION_AUTO_LABEL, TRANSCRIPT_PROVIDER_FILTER_OPTIONS, languageOptions } from "../components/OptionComboboxes";
 import type { MeetingListItem, TranscriptionProgressUpdate } from "../api/types.ts";
-import { MeetingsResponse, MEETINGS_PAGE_SIZE, formatDate, formatDuration } from "../lib/common";
+import { MeetingsResponse, MEETINGS_PAGE_SIZE } from "../lib/common";
 import { Modal } from "./AppModals";
 import { UploadAudioModal } from "./meetingModals";
+import {
+  ClearFiltersButton,
+  EMPTY_FILTERS,
+  FilterChips,
+  SortMenu,
+  dateFilterStart,
+  hasActiveFilters,
+  sortMeetings,
+} from "./meetings-list/Filters";
+import type { MeetingFilters, SortKey } from "./meetings-list/Filters";
+import { MeetingGallery, MeetingMobileList, MeetingTable, MeetingsSkeleton } from "./meetings-list/MeetingViews";
+import { MenuItem, Popover } from "./meetings-list/Popover";
+import { sourceLabel } from "./meetings-list/format";
+
+type ViewMode = "table" | "gallery";
+const VIEW_STORAGE_KEY = "olive.meetings.view";
+
+function readStoredView(): ViewMode {
+  try {
+    const v = window.localStorage.getItem(VIEW_STORAGE_KEY);
+    return v === "gallery" ? "gallery" : "table";
+  } catch {
+    return "table";
+  }
+}
+
+function storeView(view: ViewMode): void {
+  try {
+    window.localStorage.setItem(VIEW_STORAGE_KEY, view);
+  } catch {
+    // Storage unavailable (private mode, blocked site data): keep the in-memory choice.
+  }
+}
+
+function useIsMobile(): boolean {
+  const query = "(max-width: 639px)";
+  const [mobile, setMobile] = useState(() => typeof window !== "undefined" && window.matchMedia(query).matches);
+  useEffect(() => {
+    const mql = window.matchMedia(query);
+    const onChange = () => setMobile(mql.matches);
+    onChange();
+    mql.addEventListener("change", onChange);
+    return () => mql.removeEventListener("change", onChange);
+  }, []);
+  return mobile;
+}
+
+function joinWords(words: string[]): string {
+  if (words.length <= 1) return words.join("");
+  return `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+}
+
+const SOURCE_PHRASES: Record<string, string> = { plaud: "Plaud", upload: "uploads", "ios-shortcut": "the iOS Shortcut" };
 
 export function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: string) => void }): ReactElement {
   const [meetings, setMeetings] = useState<MeetingListItem[]>([]);
@@ -15,21 +68,32 @@ export function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: st
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [total, setTotal] = useState(0);
+  const [libraryTotal, setLibraryTotal] = useState<number | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [nextOffset, setNextOffset] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [filters, setFilters] = useState<MeetingFilters>(EMPTY_FILTERS);
+  const [sort, setSort] = useState<SortKey>("newest");
+  const [view, setView] = useState<ViewMode>(readStoredView);
+  const [availableTags, setAvailableTags] = useState<{ tag: string; meetingCount: number }[]>([]);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [showBulkModal, setShowBulkModal] = useState(false);
+  // `ids` = meetings to re-transcribe; `fromSelection` clears the selection once queued.
+  const [bulkModal, setBulkModal] = useState<{ ids: string[]; fromSelection: boolean } | null>(null);
   const [mergingMeetings, setMergingMeetings] = useState(false);
-  const [bulkNotice, setBulkNotice] = useState<string | null>(null);
+  const [deletingSelected, setDeletingSelected] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const isMobile = useIsMobile();
+  const moreButtonRef = useRef<HTMLButtonElement | null>(null);
   const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
   const meetingsRequestId = useRef(0);
   const meetingsRef = useRef<MeetingListItem[]>([]);
   const debouncedSearchRef = useRef("");
+  const filtersRef = useRef<MeetingFilters>(EMPTY_FILTERS);
   const paginationRef = useRef<{ hasMore: boolean; nextOffset: number | null }>({ hasMore: false, nextOffset: null });
 
   useEffect(() => {
@@ -39,8 +103,14 @@ export function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: st
     debouncedSearchRef.current = debouncedSearch;
   }, [debouncedSearch]);
   useEffect(() => {
+    filtersRef.current = filters;
+  }, [filters]);
+  useEffect(() => {
     paginationRef.current = { hasMore, nextOffset };
   }, [hasMore, nextOffset]);
+
+  const filtersKey = JSON.stringify(filters);
+  const filtering = hasActiveFilters(filters) || debouncedSearch.trim() !== "";
 
   const buildMeetingsUrl = (query: string, offset: number) => {
     const params = new URLSearchParams({
@@ -51,13 +121,22 @@ export function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: st
     });
     const q = query.trim();
     if (q) params.set("search", q);
+    const f = filtersRef.current;
+    if (f.status) params.set("status", f.status);
+    if (f.source) params.set("source", f.source);
+    for (const tag of f.tags) params.append("tags", tag);
+    const start = dateFilterStart(f.date);
+    if (start !== null) params.set("startTime", String(start));
     return `/api/meetings?${params.toString()}`;
   };
+
+  const isUnfiltered = () => !debouncedSearchRef.current.trim() && !hasActiveFilters(filtersRef.current);
 
   const applyPage = (data: MeetingsResponse, mode: "reset" | "append") => {
     const incoming = data.meetings || [];
     const pagination = data.pagination;
     const totalCount = pagination ? pagination.total : incoming.length;
+    if (isUnfiltered()) setLibraryTotal(totalCount);
     if (mode === "reset") {
       setMeetings(incoming);
       setTotal(totalCount);
@@ -83,6 +162,7 @@ export function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: st
     }
     setLoadingMore(false);
     setError(null);
+    setLoadMoreError(null);
     try {
       const query = debouncedSearchRef.current;
       const [res, activeRes] = await Promise.all([
@@ -113,6 +193,7 @@ export function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: st
     if (offset == null) return;
     const requestId = ++meetingsRequestId.current;
     setLoadingMore(true);
+    setLoadMoreError(null);
     try {
       const res = await fetch(buildMeetingsUrl(debouncedSearchRef.current, offset));
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -121,7 +202,9 @@ export function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: st
       applyPage(data, "append");
     } catch (err) {
       if (requestId !== meetingsRequestId.current) return;
-      setError(err instanceof Error ? err.message : "Failed to load more meetings");
+      // Keep the loaded list visible; stop auto-loading until the user retries.
+      setHasMore(false);
+      setLoadMoreError(err instanceof Error ? err.message : "Failed to load more meetings");
     } finally {
       if (requestId === meetingsRequestId.current) {
         setLoadingMore(false);
@@ -135,8 +218,23 @@ export function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: st
   }, [search]);
 
   useEffect(() => {
+    // The ref effect above runs first (same commit, declaration order), so
+    // fetchMeetings reads the current filters.
     void fetchMeetings();
-  }, [debouncedSearch]);
+  }, [debouncedSearch, filtersKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/tags")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { tags?: { tag: string; meetingCount: number }[] } | null) => {
+        if (!cancelled && data?.tags) setAvailableTags(data.tags);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!hasMore || loading || loadingMore) return;
@@ -150,7 +248,14 @@ export function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: st
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, [hasMore, loading, loadingMore, nextOffset, debouncedSearch, meetings.length]);
+  }, [hasMore, loading, loadingMore, nextOffset, debouncedSearch, filtersKey, meetings.length]);
+
+  const sortedMeetings = useMemo(() => sortMeetings(meetings, sort), [meetings, sort]);
+
+  const changeView = (next: ViewMode) => {
+    setView(next);
+    storeView(next);
+  };
 
   const toggleSelectMeeting = (id: string) => {
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((m) => m !== id) : [...prev, id]));
@@ -163,10 +268,6 @@ export function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: st
 
   const handleSelectVisible = () => {
     setSelectedIds(meetings.map((m) => m.id));
-  };
-
-  const handleClearSelection = () => {
-    setSelectedIds([]);
   };
 
   const handleMergeSelected = async () => {
@@ -190,7 +291,6 @@ export function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: st
       return;
     }
     setMergingMeetings(true);
-    setError(null);
     try {
       const res = await fetch("/api/meetings/merge", {
         method: "POST",
@@ -207,36 +307,83 @@ export function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: st
       await fetchMeetings({ silent: true });
       if (mergedId) onSelectMeeting(mergedId);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to merge meetings");
+      notify("error", err instanceof Error ? err.message : "Failed to merge meetings");
     } finally {
       setMergingMeetings(false);
     }
   };
 
-  const handleDeleteMeeting = async (id: string, title: string) => {
-    if (!(await confirmAction({ title: "Delete meeting", message: `Are you sure you want to delete meeting "${title}"? This will permanently remove its recordings, transcripts, and summaries.`, confirmLabel: "Delete", danger: true }))) {
+  const removeFromList = (ids: string[]) => {
+    if (ids.length === 0) return;
+    const gone = new Set(ids);
+    setMeetings((prev) => prev.filter((m) => !gone.has(m.id)));
+    setTotal((t) => Math.max(0, t - ids.length));
+    setLibraryTotal((t) => (t === null ? t : Math.max(0, t - ids.length)));
+    setSelectedIds((prev) => prev.filter((sid) => !gone.has(sid)));
+    if (paginationRef.current.hasMore) {
+      setNextOffset(Math.max(0, meetingsRef.current.length - ids.length));
+    }
+    setActiveProgressMap((prev) => {
+      if (!ids.some((id) => id in prev)) return prev;
+      const next = { ...prev };
+      for (const id of ids) delete next[id];
+      return next;
+    });
+  };
+
+  const deleteMeetingRequest = async (id: string) => {
+    const res = await fetch(`/api/meetings/${id}`, { method: "DELETE" });
+    if (!res.ok) {
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(data.error || `Failed to delete meeting (HTTP ${res.status})`);
+    }
+  };
+
+  const handleDeleteMeeting = async (meeting: MeetingListItem) => {
+    if (!(await confirmAction({ title: "Delete meeting", message: `Are you sure you want to delete meeting "${meeting.title}"? This will permanently remove its recordings, transcripts, and summaries.`, confirmLabel: "Delete", danger: true }))) {
       return;
     }
     try {
-      const res = await fetch(`/api/meetings/${id}`, { method: "DELETE" });
-      if (!res.ok) {
-        const data = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(data.error || `Failed to delete meeting (HTTP ${res.status})`);
-      }
-      setMeetings((prev) => prev.filter((m) => m.id !== id));
-      setTotal((t) => Math.max(0, t - 1));
-      setSelectedIds((prev) => prev.filter((sid) => sid !== id));
-      if (paginationRef.current.hasMore) {
-        setNextOffset(Math.max(0, meetingsRef.current.length - 1));
-      }
-      setActiveProgressMap((prev) => {
-        if (!(id in prev)) return prev;
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      });
+      await deleteMeetingRequest(meeting.id);
+      removeFromList([meeting.id]);
     } catch (err) {
       notify("error", err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  // No bulk-delete endpoint: delete one by one after a single confirmation.
+  const handleDeleteSelected = async () => {
+    if (deletingSelected || selectedIds.length === 0) return;
+    const ids = selectedIds.slice();
+    const count = ids.length;
+    if (
+      !(await confirmAction({
+        title: `Delete ${count} meeting${count === 1 ? "" : "s"}`,
+        message: `Permanently delete ${count} selected meeting${count === 1 ? "" : "s"}, including recordings, transcripts and summaries? This cannot be undone.`,
+        confirmLabel: `Delete ${count}`,
+        danger: true
+      }))
+    ) {
+      return;
+    }
+    setDeletingSelected(true);
+    const deleted: string[] = [];
+    const failures: string[] = [];
+    for (const id of ids) {
+      try {
+        await deleteMeetingRequest(id);
+        deleted.push(id);
+      } catch (err) {
+        failures.push(err instanceof Error ? err.message : String(err));
+      }
+    }
+    removeFromList(deleted);
+    setDeletingSelected(false);
+    if (failures.length > 0) {
+      notify("error", `Deleted ${deleted.length} of ${count}. ${failures[0]}`);
+    } else {
+      notify("success", `Deleted ${count} meeting${count === 1 ? "" : "s"}.`);
+      setSelectMode(false);
     }
   };
 
@@ -271,6 +418,7 @@ export function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: st
             const combined = [...newcomers, ...prev.map((m) => freshById.get(m.id) ?? m)];
             setMeetings(combined);
             setTotal(freshTotal);
+            if (isUnfiltered()) setLibraryTotal(freshTotal);
             const more = combined.length < freshTotal;
             setHasMore(more);
             setNextOffset(more ? combined.length : null);
@@ -280,257 +428,307 @@ export function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: st
     }, 2500);
 
     return () => clearInterval(interval);
-  }, [meetings, activeProgressMap, debouncedSearch]);
+  }, [meetings, activeProgressMap, debouncedSearch, filtersKey]);
+
+  const closeMore = useCallback(() => setMoreOpen(false), []);
+
+  const clearAllFilters = () => {
+    setFilters(EMPTY_FILTERS);
+    setSearch("");
+  };
+
+  const sources = Array.from(new Set(meetings.map((m) => m.source)));
+  const sourcePhrase = sources.length > 0 ? ` from ${joinWords(sources.map((s) => SOURCE_PHRASES[s] ?? sourceLabel(s)))}` : "";
+  const shownTotal = libraryTotal ?? total;
+  const subtitle = loading && libraryTotal === null
+    ? "Loading your recordings…"
+    : `${shownTotal} recording${shownTotal === 1 ? "" : "s"}${filtering ? "" : sourcePhrase}.`;
+
+  const selectionActive = selectMode || selectedIds.length > 0;
+  const viewProps = {
+    meetings: sortedMeetings,
+    progressMap: activeProgressMap,
+    selectedIds,
+    selectMode,
+    onOpen: onSelectMeeting,
+    onToggle: toggleSelectMeeting,
+    onRetranscribe: (id: string) => setBulkModal({ ids: [id], fromSelection: false }),
+    onDelete: (m: MeetingListItem) => void handleDeleteMeeting(m),
+  };
+
+  const moreMenu = (
+    <>
+      <button
+        ref={moreButtonRef}
+        type="button"
+        aria-label="More actions"
+        aria-haspopup="menu"
+        aria-expanded={moreOpen}
+        onClick={() => setMoreOpen((v) => !v)}
+        className="inline-flex h-11 w-11 items-center justify-center rounded-md text-base-content/60 hover:bg-hover hover:text-base-content sm:h-8 sm:w-8"
+      >
+        <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+      </button>
+      {moreOpen && (
+        <Popover anchor={moreButtonRef.current} onClose={closeMore} align="end" width={240} label="More actions">
+          <MenuItem
+            icon={<CheckSquare className="h-4 w-4" />}
+            onSelect={() => {
+              setMoreOpen(false);
+              if (selectMode) exitSelectMode();
+              else setSelectMode(true);
+            }}
+          >
+            {selectMode ? "Done selecting" : "Select meetings"}
+          </MenuItem>
+          <MenuItem
+            icon={<RotateCw className="h-4 w-4" />}
+            onSelect={() => {
+              setMoreOpen(false);
+              setBulkModal({ ids: selectedIds, fromSelection: selectedIds.length > 0 });
+            }}
+          >
+            Bulk re-transcribe…
+          </MenuItem>
+        </Popover>
+      )}
+    </>
+  );
+
+  const searchBox = (
+    <label className="flex h-11 min-w-0 items-center gap-1.5 rounded-md bg-hover px-2.5 text-base-content/60 focus-within:ring-1 focus-within:ring-primary/40 sm:h-8 sm:w-56">
+      <Search className="h-4 w-4 shrink-0" aria-hidden="true" />
+      <input
+        type="search"
+        placeholder="Search title, tags, transcript"
+        aria-label="Search meetings"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        className="w-full min-w-0 bg-transparent text-sm text-base-content outline-none placeholder:text-base-content/50"
+      />
+    </label>
+  );
+
+  const resultsLabel = !loading && !error && (
+    <span className="shrink-0 whitespace-nowrap text-[13px] text-base-content/60" aria-live="polite">
+      {total} result{total === 1 ? "" : "s"}
+      {sort !== "newest" && hasMore ? " · sorted within loaded" : ""}
+    </span>
+  );
+
+  const retryLoadMore = () => {
+    paginationRef.current = { ...paginationRef.current, hasMore: true };
+    setHasMore(true);
+    setLoadMoreError(null);
+    void loadMore();
+  };
 
   return (
-    <div className="space-y-5 sm:space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Meetings</h1>
-          <p className="mt-1 text-sm text-base-content/70">Recorded and ingested audio archive</p>
+    <div className={`flex flex-col gap-5 ${selectionActive ? "pb-24" : ""}`}>
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1 space-y-1.5">
+          <h1 className="text-[30px] font-bold leading-tight tracking-tight sm:text-4xl">Meetings</h1>
+          <p className="text-base-content/60">{subtitle}</p>
         </div>
-        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:gap-3">
-          <input
-            type="search"
-            placeholder="Search meetings…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="input input-md w-full sm:w-64"
+        {isMobile && (
+          <div className="flex shrink-0 items-center gap-1">
+            {moreMenu}
+            <button
+              type="button"
+              onClick={() => setShowUploadModal(true)}
+              aria-label="Upload audio"
+              className="btn btn-primary btn-square min-h-11 min-w-11"
+            >
+              <Plus className="h-5 w-5" aria-hidden="true" />
+            </button>
+          </div>
+        )}
+      </div>
+
+      {isMobile ? (
+        <div className="-mx-4 flex flex-col gap-3">
+          <div className="px-4">{searchBox}</div>
+          <div className="flex items-center gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <FilterChips filters={filters} onChange={setFilters} availableTags={availableTags} />
+            <SortMenu sort={sort} onChange={setSort} variant="chip" />
+            {(hasActiveFilters(filters) || search) && <ClearFiltersButton onClick={clearAllFilters} />}
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-end justify-between gap-x-3 gap-y-2 border-b border-divider">
+            <div role="tablist" aria-label="View" className="flex gap-1">
+              {(
+                [
+                  { key: "table", label: "Table", icon: <Table2 className="h-4 w-4" aria-hidden="true" /> },
+                  { key: "gallery", label: "Gallery", icon: <LayoutGrid className="h-4 w-4" aria-hidden="true" /> },
+                ] as const
+              ).map((tab) => (
+                <button
+                  key={tab.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={view === tab.key}
+                  onClick={() => changeView(tab.key)}
+                  className={`-mb-px flex h-10 items-center gap-1.5 rounded-t-md border-b-2 px-2.5 text-sm hover:bg-hover ${
+                    view === tab.key ? "border-base-content font-semibold" : "border-transparent text-base-content/70"
+                  }`}
+                >
+                  {tab.icon}
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center gap-1 pb-1.5">
+              <SortMenu sort={sort} onChange={setSort} />
+              {searchBox}
+              {moreMenu}
+              <button
+                type="button"
+                onClick={() => setShowUploadModal(true)}
+                className="btn btn-primary btn-sm ml-1 h-8 gap-1.5 font-medium"
+              >
+                <Plus className="h-4 w-4" aria-hidden="true" />
+                Upload audio
+              </button>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <FilterChips filters={filters} onChange={setFilters} availableTags={availableTags} />
+            {(hasActiveFilters(filters) || search) && <ClearFiltersButton onClick={clearAllFilters} />}
+            <span className="ml-1">{resultsLabel}</span>
+          </div>
+        </div>
+      )}
+
+      {loading && <MeetingsSkeleton />}
+
+      {!loading && error && (
+        <div role="alert" className="flex flex-wrap items-center gap-3 rounded-lg border border-error/40 bg-error/10 px-4 py-3 text-sm text-error">
+          <span className="min-w-0 flex-1">Couldn’t load meetings: {error}</span>
+          <button type="button" onClick={() => void fetchMeetings()} className="btn btn-sm btn-ghost min-h-11 text-error sm:min-h-8">
+            Try again
+          </button>
+        </div>
+      )}
+
+      {!loading && !error && meetings.length === 0 && (
+        <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-base-content/15 px-6 py-16 text-center">
+          {filtering ? (
+            <>
+              <p className="font-medium">No meetings match</p>
+              <p className="max-w-sm text-sm text-base-content/60">Try a different search or remove some filters.</p>
+              <button type="button" onClick={clearAllFilters} className="btn btn-sm min-h-11 sm:min-h-8">
+                Clear search and filters
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="font-medium">No meetings yet</p>
+              <p className="max-w-sm text-sm text-base-content/60">
+                Upload a recording, or connect Plaud or the iOS Shortcut in Settings, and it will show up here.
+              </p>
+              <button type="button" onClick={() => setShowUploadModal(true)} className="btn btn-primary btn-sm min-h-11 gap-1.5 sm:min-h-8">
+                <Plus className="h-4 w-4" aria-hidden="true" />
+                Upload audio
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {!loading && !error && meetings.length > 0 && (
+        <>
+          {isMobile ? (
+            <MeetingMobileList {...viewProps} grouped={sort === "newest" || sort === "oldest"} />
+          ) : view === "gallery" ? (
+            <MeetingGallery {...viewProps} />
+          ) : (
+            <MeetingTable {...viewProps} onToggleAll={(select) => setSelectedIds(select ? sortedMeetings.map((m) => m.id) : [])} />
+          )}
+
+          <div className="flex flex-col items-start gap-2">
+            <p className="text-xs text-base-content/50">
+              Showing {meetings.length} of {total} meeting{total === 1 ? "" : "s"}
+            </p>
+            {hasMore && !loadingMore && (
+              <button
+                type="button"
+                onClick={() => void loadMore()}
+                className="inline-flex h-11 items-center rounded-md px-2 text-sm text-base-content/60 hover:bg-hover hover:text-base-content sm:h-8"
+              >
+                Load {Math.min(MEETINGS_PAGE_SIZE, Math.max(0, total - meetings.length))} more
+              </button>
+            )}
+            {loadingMore && <p className="text-xs text-base-content/50">Loading more meetings…</p>}
+            {loadMoreError && (
+              <p role="alert" className="flex items-center gap-2 text-xs text-error">
+                Couldn’t load more: {loadMoreError}
+                <button type="button" onClick={retryLoadMore} className="underline">
+                  Retry
+                </button>
+              </p>
+            )}
+            <div ref={loadMoreSentinelRef} aria-hidden="true" className="h-1 w-full" />
+          </div>
+        </>
+      )}
+
+      {selectionActive && (
+        <div
+          role="toolbar"
+          aria-label="Bulk actions"
+          className="fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] left-1/2 z-40 flex max-w-[calc(100vw-16px)] -translate-x-1/2 items-center gap-0.5 rounded-lg bg-base-100 p-1.5 shadow-pop lg:bottom-8 lg:left-[calc(50%+7.5rem)]"
+        >
+          <span className="whitespace-nowrap px-2 text-sm font-medium text-primary sm:px-2.5">
+            {selectedIds.length > 0 ? `${selectedIds.length} selected` : "Select meetings"}
+          </span>
+          <span className="mx-0.5 h-5 w-px bg-base-content/10" aria-hidden="true" />
+          {selectedIds.length < meetings.length && (
+            <BulkButton label={`Select all ${meetings.length}`} shortLabel="All" onClick={handleSelectVisible} />
+          )}
+          <BulkButton
+            label="Re-transcribe…"
+            icon={<RotateCw className="h-4 w-4" aria-hidden="true" />}
+            disabled={selectedIds.length === 0}
+            onClick={() => setBulkModal({ ids: selectedIds, fromSelection: true })}
+          />
+          <BulkButton
+            label={mergingMeetings ? "Merging…" : "Merge…"}
+            icon={<Link2 className="h-4 w-4" aria-hidden="true" />}
+            disabled={selectedIds.length < 2 || mergingMeetings}
+            title="Join the selected meetings (chronological) into one and delete the rest"
+            onClick={() => void handleMergeSelected()}
+          />
+          <BulkButton
+            label={deletingSelected ? "Deleting…" : "Delete…"}
+            icon={<Trash2 className="h-4 w-4" aria-hidden="true" />}
+            danger
+            disabled={selectedIds.length === 0 || deletingSelected}
+            onClick={() => void handleDeleteSelected()}
           />
           <button
             type="button"
-            onClick={() => {
-              if (selectMode) {
-                exitSelectMode();
-              } else {
-                setSelectMode(true);
-              }
-            }}
-            aria-pressed={selectMode}
-            className={`flex min-h-[44px] items-center justify-center rounded-lg border px-4 py-2 text-sm font-semibold transition shrink-0 ${
-              selectMode
-                ? "border-primary bg-primary/10 text-primary"
-                : "border-base-300 text-base-content hover:border-base-300 hover:text-white"
-            }`}
+            aria-label="Clear selection"
+            onClick={exitSelectMode}
+            className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-base-content/60 hover:bg-hover hover:text-base-content sm:h-[34px] sm:w-[34px]"
           >
-            {selectMode ? "Done" : "Select"}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setBulkNotice(null);
-              setShowBulkModal(true);
-            }}
-            className={`btn min-h-[44px] flex-1 sm:flex-none gap-2 shrink-0 ${
-              selectMode && selectedIds.length > 0
-                ? "btn-primary"
-                : "btn-primary btn-soft"
-            }`}
-            title="Re-transcribe many meetings with one engine"
-          >
-            <span><RotateCw className="h-4 w-4 shrink-0" aria-hidden="true" /></span> {selectMode && selectedIds.length > 0 ? `Re-transcribe ${selectedIds.length}` : "Bulk re-transcribe"}
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowUploadModal(true)}
-            className="btn btn-primary flex min-h-[44px] flex-1 sm:flex-none items-center justify-center gap-2 shrink-0"
-          >
-            <span>+</span> Upload Audio
+            <X className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
-      </div>
-
-      {bulkNotice && (
-        <div className="rounded-xl border border-primary bg-primary/10 p-4 text-sm text-primary">{bulkNotice}</div>
       )}
 
-      {selectMode && !loading && !error && meetings.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-base-300 bg-base-200/60 px-3 py-2 text-xs text-base-content/70 sm:gap-3">
-          <span className={`mr-auto ${selectedIds.length > 0 ? "font-semibold text-primary" : ""}`}>
-            {selectedIds.length > 0 ? `${selectedIds.length} selected` : "Tap meetings to select"}
-          </span>
-          <button type="button" onClick={handleSelectVisible} className="btn min-h-[36px] hover:border-primary/60 hover:text-primary">
-            Select visible ({meetings.length})
-          </button>
-          {selectedIds.length > 0 && (
-            <button type="button" onClick={handleClearSelection} className="btn min-h-[36px] hover:border-error/60 hover:text-error">
-              Clear
-            </button>
-          )}
-          {selectedIds.length >= 2 && (
-            <button
-              type="button"
-              onClick={() => void handleMergeSelected()}
-              disabled={mergingMeetings}
-              className="btn min-h-[36px] gap-1.5 border-primary/60 text-primary hover:bg-primary/10"
-              title="Join the selected meetings (chronological) into one and delete the rest"
-            >
-              <Link2 className="h-4 w-4 shrink-0" aria-hidden="true" />
-              {mergingMeetings ? "Merging…" : `Merge ${selectedIds.length}`}
-            </button>
-          )}
-        </div>
-      )}
-
-      {loading && <p className="text-base-content/70">Loading meetings…</p>}
-      {error && <div className="rounded-xl border border-error bg-error/10 p-4 text-error">{error}</div>}
-
-      {!loading && !error && meetings.length === 0 && (
-        <div className="rounded-2xl border border-dashed border-base-300 bg-base-200/40 py-16 text-center">
-          <p className="text-base-content/70">No meetings found.</p>
-        </div>
-      )}
-
-      {!loading && !error && meetings.length > 0 && (
-        <div className="grid gap-3 sm:grid-cols-2">
-          {meetings.map((meeting) => {
-            const selected = selectedIds.includes(meeting.id);
-            const progress = activeProgressMap[meeting.id];
-            const audioPending = meeting.audioStatus === "retrieving" || meeting.audioStatus === "missing";
-            return (
-              <div
-                key={meeting.id}
-                onClick={() => (selectMode ? toggleSelectMeeting(meeting.id) : onSelectMeeting(meeting.id))}
-                aria-selected={selectMode ? selected : undefined}
-                className={`group flex h-full cursor-pointer flex-col gap-2.5 rounded-xl border p-4 sm:p-5 shadow-sm transition ${
-                  selectMode && selected
-                    ? "border-primary bg-primary/5"
-                    : audioPending
-                    ? "border-base-300 bg-base-200/60 opacity-60 saturate-50 hover:border-info/50 hover:opacity-80"
-                    : "border-base-300 bg-base-200/90 hover:border-primary/60 hover:bg-base-200"
-                }`}
-              >
-                <div className="flex items-start gap-2">
-                  {selectMode && (
-                    <span className="-ml-2 -mt-1.5 flex h-11 w-11 shrink-0 items-center justify-center">
-                      <input
-                        type="checkbox"
-                        checked={selected}
-                        onChange={() => toggleSelectMeeting(meeting.id)}
-                        onClick={(e) => e.stopPropagation()}
-                        className="h-5 w-5 accent-primary"
-                        aria-label={`Select meeting ${meeting.title}`}
-                      />
-                    </span>
-                  )}
-                  <div className="min-w-0 flex-1">
-                    <h2 className="line-clamp-2 break-words text-lg font-semibold leading-snug text-base-content group-hover:text-primary transition">
-                      {meeting.title}
-                    </h2>
-                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-base-content/70">
-                      <span>{formatDate(meeting.startTime)}</span>
-                      <span>•</span>
-                      <span>{formatDuration(meeting.endTime - meeting.startTime)}</span>
-                      <span>•</span>
-                      <span className="capitalize">{meeting.source}</span>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void handleDeleteMeeting(meeting.id, meeting.title);
-                    }}
-                    className="btn btn-circle btn-ghost -mr-2 -mt-1.5 flex shrink-0 items-center justify-center text-base-content/50 hover:bg-error/10 hover:text-error min-h-11 min-w-11"
-                    title="Delete meeting"
-                    aria-label={`Delete meeting ${meeting.title}`}
-                  >
-                    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <polyline points="3 6 5 6 21 6"></polyline>
-                      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                    </svg>
-                  </button>
-                </div>
-
-                <div className="mt-auto flex flex-wrap items-center gap-1.5">
-                  {meeting.audioStatus === "retrieving" && !progress ? (
-                    <span className="badge badge-info badge-soft gap-1.5 px-3 py-1 animate-pulse">
-                      <span className="status status-info status-xs animate-ping" />
-                      Retrieving audio…
-                    </span>
-                  ) : meeting.audioStatus === "missing" && !progress ? (
-                    <span className="badge badge-error badge-soft gap-1.5 px-3 py-1">
-                      Audio missing
-                    </span>
-                  ) : progress ? (
-                    <div className="badge badge-warning badge-soft gap-2 px-3 py-1">
-                      <span className="status status-warning status-xs animate-ping" />
-                      <span className="font-semibold">{progress.stage} ({Math.round(progress.percent)}%)</span>
-                    </div>
-                  ) : (
-                    <span
-                      className={`badge badge-soft capitalize ${
-                        meeting.status === "ready"
-                          ? "badge-success"
-                          : meeting.status === "processing"
-                          ? "badge-warning animate-pulse"
-                          : "badge-neutral"
-                      }`}
-                    >
-                      {meeting.status}
-                    </span>
-                  )}
-                  {meeting.primaryTranscriptArtifactId && (
-                    <span className="rounded-full bg-base-300 px-2.5 py-1 text-xs text-base-content">
-                      Transcript
-                    </span>
-                  )}
-                  {meeting.tags.map((tag) => (
-                    <span
-                      key={tag}
-                      className="rounded-full border border-base-300 bg-base-300/80 px-2 py-0.5 text-[11px] text-base-content"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-
-                {progress && (
-                  <div className="space-y-1">
-                    <div className="flex justify-between gap-2 text-[11px] text-base-content/70">
-                      <span className="truncate max-w-[80%]">{progress.message}</span>
-                      <span className="font-mono text-warning font-bold">{Math.round(progress.percent)}%</span>
-                    </div>
-                    <progress className="progress progress-warning w-full" value={Math.max(5, progress.percent)} max={100} aria-label="Meeting progress" />
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {!loading && !error && meetings.length > 0 && (
-        <div className="flex flex-col items-center gap-3 pt-1">
-          <p className="text-xs text-base-content/50" aria-live="polite">
-            Showing {meetings.length} of {total} meeting{total === 1 ? "" : "s"}
-          </p>
-          {hasMore && !loadingMore && (
-            <button
-              type="button"
-              onClick={() => void loadMore()}
-              className="btn min-h-[44px] font-semibold hover:border-primary/60 hover:text-primary"
-            >
-              Load more
-            </button>
-          )}
-          {loadingMore && <p className="text-xs text-base-content/50">Loading more meetings…</p>}
-          {!hasMore && total > 0 && (
-            <p className="text-xs text-base-content/50">You&apos;ve reached the end of the list.</p>
-          )}
-          <div ref={loadMoreSentinelRef} aria-hidden="true" className="h-1 w-full" />
-        </div>
-      )}
-
-      {showBulkModal && (
+      {bulkModal && (
         <BulkTranscribeModal
-          selectedIds={selectedIds}
+          selectedIds={bulkModal.ids}
           listSearch={search}
-          onClose={() => setShowBulkModal(false)}
+          listFilters={{ tags: filters.tags, status: filters.status }}
+          onClose={() => setBulkModal(null)}
           onQueued={(summary, queuedIds) => {
-            setShowBulkModal(false);
-            setBulkNotice(summary);
-            if (queuedIds.length > 0) {
+            const fromSelection = bulkModal.fromSelection;
+            setBulkModal(null);
+            notify("success", summary);
+            if (fromSelection && queuedIds.length > 0) {
               setSelectedIds([]);
             }
             void fetchMeetings({ silent: true });
@@ -551,6 +749,47 @@ export function MeetingsListView({ onSelectMeeting }: { onSelectMeeting: (id: st
   );
 }
 
+function BulkButton({
+  label,
+  shortLabel,
+  icon,
+  danger = false,
+  disabled = false,
+  title,
+  onClick,
+}: {
+  label: string;
+  shortLabel?: string;
+  icon?: ReactElement;
+  danger?: boolean;
+  disabled?: boolean;
+  title?: string;
+  onClick: () => void;
+}): ReactElement {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title ?? label}
+      aria-label={label}
+      className={`inline-flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 rounded-md px-2 text-sm hover:bg-hover disabled:pointer-events-none disabled:opacity-40 sm:h-[34px] sm:px-2.5 ${
+        danger ? "text-error" : ""
+      }`}
+    >
+      {icon}
+      {shortLabel ? (
+        <>
+          <span className="sm:hidden">{shortLabel}</span>
+          <span className="hidden sm:inline">{label}</span>
+        </>
+      ) : (
+        <span className={icon ? "hidden sm:inline" : ""}>{label}</span>
+      )}
+    </button>
+  );
+}
+
 export interface BulkQueueResult {
   bulkId: string;
   provider: string;
@@ -564,11 +803,14 @@ export interface BulkQueueResult {
 export function BulkTranscribeModal({
   selectedIds,
   listSearch,
+  listFilters,
   onClose,
   onQueued
 }: {
   selectedIds: string[];
   listSearch: string;
+  /** Tag/status filters active on the list; applied to the "matching" scope. */
+  listFilters?: { tags: string[]; status: string };
   onClose: () => void;
   onQueued: (summary: string, queuedIds: string[]) => void;
 }): ReactElement {
@@ -580,6 +822,10 @@ export function BulkTranscribeModal({
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [currentProvider, setCurrentProvider] = useState("any");
+  const [useListFilters, setUseListFilters] = useState(true);
+  const listTags = listFilters?.tags ?? [];
+  const listStatus = listFilters?.status ?? "";
+  const hasListFilters = listTags.length > 0 || Boolean(listStatus);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BulkQueueResult | null>(null);
@@ -605,6 +851,10 @@ export function BulkTranscribeModal({
           if (!Number.isNaN(ms)) filters.endTime = ms;
         }
         if (currentProvider && currentProvider !== "any") filters.currentProvider = currentProvider;
+        if (useListFilters) {
+          if (listTags.length > 0) filters.tags = listTags;
+          if (listStatus) filters.status = listStatus;
+        }
       }
       const body: Record<string, unknown> = { provider, force };
       if (language) body.language = language;
@@ -632,12 +882,12 @@ export function BulkTranscribeModal({
   const failures = (result?.results || []).filter((r) => r.status === "skipped").slice(0, 8);
 
   return (
-    <Modal onClose={onClose} title={"Bulk re-transcribe"} ariaLabel="Bulk re-transcribe meetings" maxWidth="max-w-lg">
-      {error && <div className="rounded-xl border border-error bg-error/10 p-3 text-xs text-error">{error}</div>}
+    <Modal onClose={onClose} title={selectedIds.length === 1 ? "Re-transcribe" : "Bulk re-transcribe"} ariaLabel="Re-transcribe meetings" maxWidth="max-w-lg">
+      {error && <div className="rounded-lg border border-error/40 bg-error/10 p-3 text-xs text-error">{error}</div>}
 
       {result ? (
         <div className="space-y-4 text-sm">
-          <div className="rounded-xl border border-primary bg-primary/10 p-4 text-primary">
+          <div className="rounded-lg border border-primary/40 bg-primary/10 p-4 text-primary">
             Queued {result.queued} of {result.total} meeting{result.total === 1 ? "" : "s"} with <strong>{result.provider}</strong>
             {result.alreadyRunning > 0 && <span> ({result.alreadyRunning} already running)</span>}
             {result.skipped > 0 && <span> ({result.skipped} skipped)</span>}. Watch progress on the meetings list.
@@ -645,7 +895,7 @@ export function BulkTranscribeModal({
           {failures.length > 0 && (
             <ul className="space-y-1 text-xs text-base-content/70">
               {failures.map((f) => (
-                <li key={f.meetingId} className="rounded-lg border border-base-300 bg-base-100/60 px-3 py-2">
+                <li key={f.meetingId} className="rounded-md border border-base-content/15 px-3 py-2">
                   <span className="font-mono text-base-content">{f.meetingId.slice(0, 8)}…</span>: {f.error || "skipped"}
                 </li>
               ))}
@@ -667,19 +917,29 @@ export function BulkTranscribeModal({
       ) : (
         <form onSubmit={handleSubmit} className="space-y-4 text-sm">
           <div className="grid gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wider text-base-content/70">Which meetings?</span>
-            <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-base-300 bg-base-100/60 px-3 py-2.5 hover:border-base-300 transition">
+            <span className="text-sm font-medium">Which meetings?</span>
+            <label className="flex min-h-11 cursor-pointer items-center gap-2 rounded-lg border border-base-content/15 px-3 py-2.5 hover:bg-hover">
               <input type="radio" name="bulk-scope" checked={scope === "selected"} onChange={() => setScope("selected")} disabled={selectedIds.length === 0} className="accent-primary" />
-              <span>Selected meetings ({selectedIds.length}){selectedIds.length === 0 && " — tick meetings in the list first"}</span>
+              <span>Selected meetings ({selectedIds.length}){selectedIds.length === 0 && ": tick meetings in the list first"}</span>
             </label>
-            <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-base-300 bg-base-100/60 px-3 py-2.5 hover:border-base-300 transition">
+            <label className="flex min-h-11 cursor-pointer items-center gap-2 rounded-lg border border-base-content/15 px-3 py-2.5 hover:bg-hover">
               <input type="radio" name="bulk-scope" checked={scope === "filtered"} onChange={() => setScope("filtered")} className="accent-primary" />
               <span>All meetings matching filters (whole library, server-side)</span>
             </label>
           </div>
 
           {scope === "filtered" && (
-            <div className="space-y-3 rounded-xl border border-base-300 bg-base-100/60 p-4">
+            <div className="space-y-3 rounded-lg border border-base-content/15 p-4">
+              {hasListFilters && (
+                <label className="flex cursor-pointer items-start gap-2 text-xs text-base-content">
+                  <input type="checkbox" checked={useListFilters} onChange={(e) => setUseListFilters(e.target.checked)} className="checkbox checkbox-sm mt-0.5" />
+                  <span>
+                    Also apply the list filters
+                    {listStatus && <> · status <strong>{listStatus}</strong></>}
+                    {listTags.length > 0 && <> · tags <strong>{listTags.join(", ")}</strong></>}
+                  </span>
+                </label>
+              )}
               <input
                 type="text"
                 placeholder="Search title, tags, transcript…"
@@ -712,7 +972,7 @@ export function BulkTranscribeModal({
           )}
 
           <label className="space-y-1 text-xs text-base-content/70">
-            <span className="text-xs font-semibold uppercase tracking-wider">Transcribe with</span>
+            <span className="text-sm font-medium text-base-content">Transcribe with</span>
             <Combobox
               value={provider}
               onChange={setProvider}
@@ -724,7 +984,7 @@ export function BulkTranscribeModal({
           </label>
 
           <label className="space-y-1 text-xs text-base-content/70">
-            <span className="text-xs font-semibold uppercase tracking-wider">Language</span>
+            <span className="text-sm font-medium text-base-content">Language</span>
             <Combobox
               value={language}
               onChange={setLanguage}
@@ -741,7 +1001,7 @@ export function BulkTranscribeModal({
           </label>
 
           <div className="flex justify-end gap-3 pt-1">
-            <button type="button" onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-base-content/70 hover:text-base-content">Cancel</button>
+            <button type="button" onClick={onClose} className="btn btn-ghost min-h-11">Cancel</button>
             <button
               type="submit"
               disabled={submitting || (scope === "selected" && selectedIds.length === 0)}
