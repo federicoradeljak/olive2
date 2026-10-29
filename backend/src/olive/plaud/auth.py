@@ -1,4 +1,4 @@
-"""Plaud OAuth PKCE in-memory session store (port of packages/server/src/plaud/auth.ts)."""
+"""In-memory OAuth PKCE session store for paste-the-callback logins (Plaud, ChatGPT plan)."""
 
 from __future__ import annotations
 
@@ -13,15 +13,11 @@ class PlaudAuthSessionStore:
     def __init__(self) -> None:
         self._sessions: dict[str, dict[str, Any]] = {}
 
-    def create(self, session: dict[str, str], now: int | None = None) -> str:
+    def create(self, session: dict[str, Any], now: int | None = None) -> str:
         t = now if now is not None else int(time.time() * 1000)
         self._remove_expired(t)
         session_id = str(uuid.uuid4())
-        self._sessions[session_id] = {
-            "verifier": session["verifier"],
-            "state": session["state"],
-            "expiresAt": t + AUTH_SESSION_TTL_MS,
-        }
+        self._sessions[session_id] = {**session, "expiresAt": t + AUTH_SESSION_TTL_MS}
         return session_id
 
     def get(self, session_id: str, now: int | None = None) -> dict[str, Any] | None:

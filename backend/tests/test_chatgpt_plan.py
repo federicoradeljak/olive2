@@ -346,3 +346,233 @@ async def test_list_models_keeps_listed_entries_in_server_order() -> None:
         {"slug": "b-model", "name": "B"},
         {"slug": "a-model", "name": "A"},
     ]
+
+
+# -- LlmService, chat and API integration -------------------------------------
+
+
+def _write_signed_in_tokens(config_dir: Path) -> None:
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "chatgpt-plan-tokens.json").write_text(
+        json.dumps(
+            {
+                "extAgentHostId": "urn:uuid:host",
+                "clientId": CLIENT_ID,
+                "account": {
+                    "sub": "user-1",
+                    "email": "ana@example.com",
+                    "accessToken": "plan-access",
+                    "refreshToken": "plan-refresh",
+                    "expiresAt": int(time.time() * 1000) + 3_600_000,
+                    "scopes": SCOPES.split(),
+                },
+            }
+        )
+    )
+
+
+def _plan_api(seen: list[dict[str, Any]]) -> httpx.MockTransport:
+    """Fake api.openai.com: a model list and a streamed Responses answer."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.headers["authorization"] == "Bearer plan-access"
+        if req.method == "GET" and req.url.path == "/v1/models":
+            return httpx.Response(
+                200, json={"models": [{"slug": "gpt-plan", "display_name": "GPT Plan", "visibility": "list"}]}
+            )
+        seen.append(json.loads(req.content))
+        return httpx.Response(
+            200,
+            content=_sse(
+                {"type": "response.output_text.delta", "delta": "Friday."},
+                {
+                    "type": "response.completed",
+                    "response": {"usage": {"input_tokens": 7, "output_tokens": 2, "total_tokens": 9}},
+                },
+            ),
+        )
+
+    return httpx.MockTransport(handler)
+
+
+async def test_llm_service_uses_plan_without_api_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import any_llm
+
+    from olive.db import create_db
+    from olive.services.llm import LlmService
+
+    async def no_any_llm(**_kwargs: Any) -> None:
+        raise AssertionError("any_llm must not be called for the ChatGPT plan")
+
+    monkeypatch.setattr(any_llm, "acompletion", no_any_llm)
+    _write_signed_in_tokens(tmp_path)
+    handle = create_db(":memory:")
+    service = LlmService(db=handle.engine, config_dir=str(tmp_path))
+    seen: list[dict[str, Any]] = []
+    service.chatgpt_plan_auth().transport = _plan_api(seen)
+
+    providers = {p.id: p for p in await service.list_providers()}
+    assert providers["chatgpt-plan"].isConfigured
+    assert providers["chatgpt-plan"].name == "ChatGPT plan"
+    configured = await service.list_models({"configured": True, "provider": "chatgpt-plan"})
+    assert [(m.id, m.name, m.source) for m in configured] == [("gpt-plan", "GPT Plan", "account")]
+
+    deltas: list[str] = []
+    res = await service.stream_text(
+        {
+            "provider": "chatgpt-plan",
+            "model": "gpt-plan",
+            "systemPrompt": "Use the meeting.",
+            "prompt": "When?",
+            "temperature": 0.2,
+            "messages": [{"role": "user", "content": "When?"}],
+        },
+        deltas.append,
+    )
+    assert (res.text, res.provider, res.model) == ("Friday.", "chatgpt-plan", "gpt-plan")
+    assert res.usage.totalTokens == 9 and res.usage.cost == 0.0
+    assert deltas == ["Friday."]
+    assert seen[0]["instructions"] == "Use the meeting."
+    assert "temperature" not in seen[0]
+
+    summary = await service.generate_text(
+        {"provider": "chatgpt-plan", "model": "gpt-plan", "prompt": "Sum up"}
+    )
+    assert summary.text == "Friday."
+    assert seen[1]["input"] == [{"role": "user", "content": "Sum up"}]
+    handle.engine.dispose()
+
+
+async def test_plan_provider_is_listed_but_unusable_until_connected(tmp_path: Path) -> None:
+    from olive.db import create_db
+    from olive.services.llm import LlmService
+
+    handle = create_db(":memory:")
+    service = LlmService(db=handle.engine, config_dir=str(tmp_path))
+
+    plan = next(p for p in await service.list_providers() if p.id == "chatgpt-plan")
+    assert not plan.isConfigured and plan.modelCount == 0
+    assert all(m.provider != "chatgpt-plan" for m in await service.list_models({"configured": True}))
+    with pytest.raises(ChatGptPlanError, match="not connected"):
+        await service.generate_text({"provider": "chatgpt-plan", "model": "gpt-plan", "prompt": "hi"})
+    handle.engine.dispose()
+
+
+async def test_chat_model_setting_round_trips_and_clears(tmp_path: Path) -> None:
+    from olive.db import create_db
+    from olive.services.llm import LlmService
+
+    handle = create_db(":memory:")
+    service = LlmService(db=handle.engine, config_dir=str(tmp_path))
+
+    updated = await service.update_settings({"chatProvider": "chatgpt-plan", "chatModel": "gpt-plan"})
+    assert (updated.chatProvider, updated.chatModel) == ("chatgpt-plan", "gpt-plan")
+
+    kept = await service.update_settings({"defaultProvider": "openai", "defaultModel": "gpt-4o"})
+    assert (kept.chatProvider, kept.chatModel) == ("chatgpt-plan", "gpt-plan")
+
+    cleared = await service.update_settings({"chatProvider": None, "chatModel": None})
+    assert (cleared.chatProvider, cleared.chatModel) == (None, None)
+    assert (await service.get_settings()).defaultProvider == "openai"
+    handle.engine.dispose()
+
+
+async def test_meeting_chat_uses_the_chat_model(tmp_path: Path) -> None:
+    from sqlalchemy import text
+
+    from olive.db import create_db
+    from olive.services.chat import ChatService
+    from olive.services.llm import LlmService
+
+    _write_signed_in_tokens(tmp_path / "config")
+    handle = create_db(":memory:")
+    now = int(time.time() * 1000)
+    with handle.engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO meetings (id, title, start_time, end_time, source, status, tags, created_at, updated_at)
+                VALUES ('m-1', 'Plan sync', :now, :now, 'upload', 'ready', '[]', :now, :now)
+                """
+            ),
+            {"now": now},
+        )
+    llm = LlmService(db=handle.engine, config_dir=str(tmp_path / "config"))
+    seen: list[dict[str, Any]] = []
+    llm.chatgpt_plan_auth().transport = _plan_api(seen)
+    await llm.update_settings(
+        {
+            "defaultProvider": "anthropic",
+            "defaultModel": "claude-x",
+            "chatProvider": "chatgpt-plan",
+            "chatModel": "gpt-plan",
+        }
+    )
+
+    chat = ChatService(db=handle.engine, meetings_dir=str(tmp_path / "meetings"), llm_service=llm)
+    reply = await chat.stream_message({"meetingId": "m-1", "content": "When do we ship?"})
+
+    assert (reply.provider, reply.model, reply.content) == ("chatgpt-plan", "gpt-plan", "Friday.")
+    assert seen[0]["model"] == "gpt-plan"
+    assert "Plan sync" in seen[0]["instructions"]
+    handle.engine.dispose()
+
+
+def test_chatgpt_plan_connect_api(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    from olive.app import create_app
+    from olive.db import create_db
+    from olive.providers.chatgpt_plan import get_chatgpt_plan_auth
+
+    handle = create_db(":memory:")
+    client = TestClient(create_app({"db": handle.engine, "configDir": str(tmp_path)}))
+    auth = get_chatgpt_plan_auth(str(tmp_path))
+    nonce: dict[str, str] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET":
+            return httpx.Response(200, json={"revocation_endpoint": "https://auth.openai.com/revoke"})
+        if str(req.url) == TOKEN_URL:
+            return httpx.Response(200, json=_token_response(nonce["value"]))
+        return httpx.Response(200)
+
+    auth.transport = httpx.MockTransport(handler)
+
+    assert client.get("/api/llm/chatgpt-plan/status").json()["connected"] is False
+
+    start = client.post("/api/llm/chatgpt-plan/auth/start").json()
+    assert set(start) == {"authUrl", "sessionId"}
+    query = parse_qs(urlparse(start["authUrl"]).query)
+    nonce["value"] = query["nonce"][0]
+
+    bad = client.post(
+        "/api/llm/chatgpt-plan/auth/complete",
+        json={"sessionId": start["sessionId"], "pastedUrlOrCode": f"{REDIRECT_URI}?code=c&state=wrong"},
+    )
+    assert bad.status_code == 400
+
+    pasted = f"{REDIRECT_URI}?code=c&state={query['state'][0]}&client_id={CLIENT_ID}"
+    done = client.post(
+        "/api/llm/chatgpt-plan/auth/complete",
+        json={"sessionId": start["sessionId"], "pastedUrlOrCode": pasted},
+    )
+    assert done.status_code == 200, done.text
+    assert done.json()["account"]["email"] == "ana@example.com"
+    reused = client.post(
+        "/api/llm/chatgpt-plan/auth/complete",
+        json={"sessionId": start["sessionId"], "pastedUrlOrCode": pasted},
+    )
+    assert reused.status_code == 400
+
+    status = client.get("/api/llm/chatgpt-plan/status").json()
+    assert status["connected"] and status["planEnabled"]
+
+    cfg = client.post("/api/llm/config", json={"chatProvider": "chatgpt-plan", "chatModel": "gpt-plan"})
+    assert cfg.status_code == 200
+    assert client.get("/api/llm/config").json()["chatProvider"] == "chatgpt-plan"
+
+    out = client.post("/api/llm/chatgpt-plan/logout").json()
+    assert out == {"status": "disconnected", "revoked": True}
+    assert client.get("/api/llm/chatgpt-plan/status").json()["connected"] is False
+    handle.engine.dispose()
