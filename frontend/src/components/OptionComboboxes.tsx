@@ -231,7 +231,10 @@ export function llmProviderOptions(providers: LlmProviderLike[]): ComboboxOption
   return providers.map((p) => ({
     value: p.id,
     label: p.name,
-    description: `${p.modelCount} models · ${p.isConfigured ? "Key configured" : "Needs API key"}`,
+    description:
+      p.id === "chatgpt-plan"
+        ? `${p.modelCount} models · ${p.isConfigured ? "Signed in" : "Connect in the providers list"}`
+        : `${p.modelCount} models · ${p.isConfigured ? "Key configured" : "Needs API key"}`,
     keywords: p.isConfigured ? "configured" : "unconfigured",
     icon: p.isConfigured ? (
       <CircleCheck className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden="true" />

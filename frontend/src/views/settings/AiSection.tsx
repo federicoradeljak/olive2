@@ -5,7 +5,13 @@ import { Combobox } from "../../components/Combobox";
 import { ThinkingLabel, llmProviderOptions, modelOptions, thinkingLevelOptions } from "../../components/OptionComboboxes";
 import { Button, notify } from "../../components/ui";
 import type { LlmModelCatalogItem, LlmProviderSummary } from "../../api/types.ts";
+import { ChatGptPlanRow } from "./ChatGptPlanRow";
 import { GroupTitle, INPUT_CLASS, Panel, SectionHeader, StatusTag, errorText, readError } from "./shared";
+
+/** Provider id of the ChatGPT plan (sign-in instead of an API key). */
+export const CHATGPT_PLAN_PROVIDER = "chatgpt-plan";
+/** Chat provider option meaning "use the default model". */
+const SAME_AS_DEFAULT = "";
 
 export interface LlmCustomModel {
   id: string;
@@ -25,6 +31,8 @@ export interface LlmConfigDto {
   defaultThinkingLevel: string;
   providers: Record<string, { hasApiKey?: boolean; baseUrl?: string; headers?: Record<string, string> }>;
   customModels: LlmCustomModel[];
+  chatProvider?: string | null;
+  chatModel?: string | null;
 }
 
 export interface LlmDraft {
@@ -34,6 +42,9 @@ export interface LlmDraft {
   /** Only providers the user touched: a new API key (blank keeps the saved one) and the base URL. */
   providerEdits: Record<string, { apiKey: string; baseUrl: string }>;
   customModels: LlmCustomModel[];
+  /** Meeting chat model; an empty provider means "same as the default model". */
+  chatProvider: string;
+  chatModel: string;
 }
 
 export function llmDraftFrom(cfg: LlmConfigDto): LlmDraft {
@@ -43,12 +54,15 @@ export function llmDraftFrom(cfg: LlmConfigDto): LlmDraft {
     defaultThinkingLevel: cfg.defaultThinkingLevel || "off",
     providerEdits: {},
     customModels: cfg.customModels ?? [],
+    chatProvider: cfg.chatProvider ?? SAME_AS_DEFAULT,
+    chatModel: cfg.chatModel ?? "",
   };
 }
 
 export function isLlmDraftDirty(saved: LlmConfigDto, draft: LlmDraft): boolean {
   if (draft.defaultProvider !== saved.defaultProvider || draft.defaultModel !== saved.defaultModel) return true;
   if (draft.defaultThinkingLevel !== (saved.defaultThinkingLevel || "off")) return true;
+  if (draft.chatProvider !== (saved.chatProvider ?? SAME_AS_DEFAULT) || draft.chatModel !== (saved.chatModel ?? "")) return true;
   for (const [id, edit] of Object.entries(draft.providerEdits)) {
     if (edit.apiKey.trim()) return true;
     if (edit.baseUrl.trim() !== (saved.providers[id]?.baseUrl ?? "")) return true;
@@ -72,6 +86,7 @@ export function llmDraftErrors(draft: LlmDraft): string | null {
   for (const edit of Object.values(draft.providerEdits)) {
     if (baseUrlError(edit.baseUrl)) return "Fix the highlighted base URL before saving.";
   }
+  if (draft.chatProvider && !draft.chatModel) return "Pick a model for meeting chat, or set it back to the default model.";
   return null;
 }
 
@@ -93,6 +108,8 @@ export function llmSavePayload(draft: LlmDraft, models: LlmModelCatalogItem[]): 
     defaultThinkingLevel: effectiveThinkingLevel(draft, models),
     providers,
     customModels: draft.customModels,
+    chatProvider: draft.chatProvider || null,
+    chatModel: draft.chatProvider ? draft.chatModel || null : null,
   };
 }
 
@@ -379,6 +396,15 @@ export function AiSection({
 
   const providerModels = useMemo(() => models.filter((m) => m.provider === draft.defaultProvider), [models, draft.defaultProvider]);
   const selectedModel = providerModels.find((m) => m.id === draft.defaultModel);
+  // Chat can use any provider with a key, plus the ChatGPT plan once signed in.
+  const chatProviderOptions = useMemo(
+    () => [
+      { value: SAME_AS_DEFAULT, label: "Same as default model", description: "Chat uses the default model above" },
+      ...llmProviderOptions(providers.filter((p) => p.isConfigured || p.id === draft.chatProvider)),
+    ],
+    [providers, draft.chatProvider],
+  );
+  const chatModels = useMemo(() => models.filter((m) => m.provider === draft.chatProvider), [models, draft.chatProvider]);
 
   const sortedProviders = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -406,6 +432,9 @@ export function AiSection({
       return { ...prev, defaultModel: id, defaultThinkingLevel: level };
     });
   };
+
+  const setChatProvider = (id: string) =>
+    setDraft((prev) => ({ ...prev, chatProvider: id, chatModel: id ? (models.find((m) => m.provider === id)?.id ?? "") : "" }));
 
   const test = async () => {
     setTesting(true);
@@ -453,7 +482,11 @@ export function AiSection({
 
   return (
     <section aria-labelledby="settings-ai">
-      <SectionHeader id="settings-ai" title="AI models" description="Used for summaries, chat and suggested titles. Each summary can still pick another model." />
+      <SectionHeader
+        id="settings-ai"
+        title="AI models"
+        description="The default model writes summaries and suggested titles, and answers meeting chat unless you pick a chat model. Each summary can still pick another model."
+      />
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="flex min-w-0 flex-col gap-1.5">
@@ -509,6 +542,36 @@ export function AiSection({
       </div>
       <p className="mt-1.5 text-xs text-base-content/60">Tests the provider and model above, using any key or URL you typed below even before saving.</p>
 
+      <GroupTitle>Meeting chat</GroupTitle>
+      <p className="mb-2 text-[13px] text-base-content/65">Lists providers with a key, and your ChatGPT plan once it is connected below.</p>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <span className={LABEL}>Chat provider</span>
+          <Combobox
+            value={draft.chatProvider}
+            onChange={setChatProvider}
+            ariaLabel="Meeting chat provider"
+            placeholder="Same as default model"
+            searchPlaceholder="Search providers…"
+            options={chatProviderOptions}
+          />
+        </div>
+        {draft.chatProvider && (
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <span className={LABEL}>Chat model</span>
+            <Combobox
+              value={draft.chatModel}
+              onChange={(v) => setDraft((prev) => ({ ...prev, chatModel: v }))}
+              ariaLabel="Meeting chat model"
+              placeholder={chatModels.length ? "Select model…" : "No models for this provider"}
+              searchPlaceholder="Search models…"
+              emptyText="No models match your search."
+              options={modelOptions(chatModels)}
+            />
+          </div>
+        )}
+      </div>
+
       <GroupTitle
         action={
           <Button size="sm" variant="ghost" onClick={() => void refreshCatalog()} disabled={refreshing} className="text-base-content/70">
@@ -537,15 +600,19 @@ export function AiSection({
         {sortedProviders.length === 0 ? (
           <li className="px-3.5 py-6 text-center text-sm text-base-content/60">No providers match.</li>
         ) : (
-          sortedProviders.map((p) => (
-            <ProviderRow
-              key={p.id}
-              provider={p}
-              saved={saved.providers[p.id]}
-              edit={draft.providerEdits[p.id]}
-              onEdit={(edit) => setDraft((prev) => ({ ...prev, providerEdits: { ...prev.providerEdits, [p.id]: edit } }))}
-            />
-          ))
+          sortedProviders.map((p) =>
+            p.id === CHATGPT_PLAN_PROVIDER ? (
+              <ChatGptPlanRow key={p.id} provider={p} onChanged={onCatalogChanged} />
+            ) : (
+              <ProviderRow
+                key={p.id}
+                provider={p}
+                saved={saved.providers[p.id]}
+                edit={draft.providerEdits[p.id]}
+                onEdit={(edit) => setDraft((prev) => ({ ...prev, providerEdits: { ...prev.providerEdits, [p.id]: edit } }))}
+              />
+            ),
+          )
         )}
       </ul>
 
