@@ -1,147 +1,171 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactElement, ReactNode } from "react";
-import { Ellipsis, Settings, Sparkles } from "lucide-react";
-import { ThemeToggle } from "./components/ui";
-import { SpeakerWithStats, isGenericSpeakerLabel, PlaudStatus } from "./lib/common";
+import {
+  Activity,
+  AudioLines,
+  BarChart3,
+  FileText,
+  Menu,
+  Plus,
+  Search,
+  Settings,
+  Sparkles,
+  Upload,
+  Users,
+  X,
+} from "lucide-react";
+import { ThemeToggle, useTheme } from "./components/ui";
+import { CommandPalette, type PaletteAction } from "./components/CommandPalette";
+import { JobsIndicator, useJobsSnapshot } from "./components/JobsIndicator";
+import { SpeakerWithStats, isGenericSpeakerLabel, PlaudStatus, formatDate } from "./lib/common";
 import { MeetingChatPanel } from "./views/MeetingChat";
-import { Modal, ChangelogModal, PlaudModal } from "./views/AppModals";
+import { ChangelogModal } from "./views/AppModals";
 import { MeetingsListView } from "./views/MeetingsList";
 import { MeetingDetailView } from "./views/MeetingDetail";
+import { UploadAudioModal } from "./views/meetingModals";
 import { SpeakersListView } from "./views/People";
 import { TemplatesListView } from "./views/Templates";
-import { LlmSettingsModal } from "./views/LlmSettings";
 import { UsageView } from "./views/Usage";
-import { LogsView } from "./views/Logs";
-import { BackupRestoreView } from "./views/Backup";
+import { ActivityView, type ActivityTab } from "./views/Activity";
+import { SettingsView, isSettingsSection, type SettingsSection } from "./views/Settings";
 
-export type TabKey = "meetings" | "speakers" | "templates" | "logs" | "backup" | "usage";
+type TabKey = "meetings" | "speakers" | "templates" | "activity" | "usage" | "settings";
 
-export function parseLocation(pathname: string): { tab: TabKey; meetingId: string | null } {
-  const clean = pathname.replace(/^\/+|\/+$/g, "");
-  if (!clean || clean === "meetings") {
-    return { tab: "meetings", meetingId: null };
-  }
-
-  if (clean.startsWith("meetings/")) {
-    const id = clean.slice("meetings/".length).trim();
-    return { tab: "meetings", meetingId: id || null };
-  }
-
-  if (clean === "people" || clean === "speakers") {
-    return { tab: "speakers", meetingId: null };
-  }
-
-  if (clean === "templates") {
-    return { tab: "templates", meetingId: null };
-  }
-
-  if (clean === "logs") {
-    return { tab: "logs", meetingId: null };
-  }
-
-  if (clean === "backup" || clean === "backups") {
-    return { tab: "backup", meetingId: null };
-  }
-
-  if (clean === "usage") {
-    return { tab: "usage", meetingId: null };
-  }
-
-  return { tab: "meetings", meetingId: null };
+interface Route {
+  tab: TabKey;
+  meetingId: string | null;
+  activityTab: ActivityTab;
+  settingsSection: SettingsSection;
 }
 
-export const NAV_TABS: { key: TabKey; path: string; label: string }[] = [
-  { key: "meetings", path: "/meetings", label: "Meetings" },
-  { key: "speakers", path: "/people", label: "People" },
-  { key: "templates", path: "/templates", label: "Templates" },
-  { key: "logs", path: "/logs", label: "Logs" },
-  { key: "backup", path: "/backup", label: "Backup" },
-  { key: "usage", path: "/usage", label: "Usage" },
+const DEFAULT_ROUTE: Route = { tab: "meetings", meetingId: null, activityTab: "jobs", settingsSection: "general" };
+
+export function parseLocation(pathname: string): Route {
+  const clean = pathname.replace(/^\/+|\/+$/g, "");
+  const [head, rest = ""] = clean.split(/\/(.*)/s);
+
+  switch (head) {
+    case "":
+    case "meetings":
+      return { ...DEFAULT_ROUTE, meetingId: rest.trim() || null };
+    case "people":
+    case "speakers":
+      return { ...DEFAULT_ROUTE, tab: "speakers" };
+    case "templates":
+      return { ...DEFAULT_ROUTE, tab: "templates" };
+    case "usage":
+      return { ...DEFAULT_ROUTE, tab: "usage" };
+    case "activity":
+      return { ...DEFAULT_ROUTE, tab: "activity", activityTab: rest === "logs" ? "logs" : "jobs" };
+    // Legacy paths from the old tab bar and the hidden queue page.
+    case "logs":
+      return { ...DEFAULT_ROUTE, tab: "activity", activityTab: "logs" };
+    case "debug":
+      return { ...DEFAULT_ROUTE, tab: "activity", activityTab: "jobs" };
+    case "backup":
+    case "backups":
+      return { ...DEFAULT_ROUTE, tab: "settings", settingsSection: "data" };
+    case "settings":
+      return { ...DEFAULT_ROUTE, tab: "settings", settingsSection: isSettingsSection(rest) ? rest : "general" };
+    default:
+      return DEFAULT_ROUTE;
+  }
+}
+
+const PRIMARY_NAV: { key: TabKey; path: string; label: string; icon: ReactElement }[] = [
+  { key: "meetings", path: "/meetings", label: "Meetings", icon: <AudioLines className="h-4 w-4" aria-hidden="true" /> },
+  { key: "speakers", path: "/people", label: "People", icon: <Users className="h-4 w-4" aria-hidden="true" /> },
+  { key: "templates", path: "/templates", label: "Templates", icon: <FileText className="h-4 w-4" aria-hidden="true" /> },
 ];
 
-export const TAB_ICON_CONTENT: Record<TabKey, ReactNode> = {
-  meetings: (
-    <>
-      <rect x="3" y="4" width="18" height="18" rx="2" />
-      <path d="M16 2v4M8 2v4M3 10h18" />
-    </>
-  ),
-  speakers: (
-    <>
-      <circle cx="9" cy="7" r="4" />
-      <path d="M2 21v-2a5 5 0 0 1 5-5h4a5 5 0 0 1 5 5v2" />
-    </>
-  ),
-  templates: (
-    <>
-      <rect x="4" y="3" width="16" height="18" rx="2" />
-      <path d="M8 8h8M8 12h8M8 16h5" />
-    </>
-  ),
-  logs: <path d="M4 6h16M4 12h16M4 18h10" />,
-  backup: (
-    <>
-      <ellipse cx="12" cy="5" rx="8" ry="3" />
-      <path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" />
-    </>
-  ),
-  usage: <path d="M4 20V10M10 20V4M16 20v-7M2 20h20" />,
-};
+const WORKSPACE_NAV: typeof PRIMARY_NAV = [
+  { key: "activity", path: "/activity", label: "Activity", icon: <Activity className="h-4 w-4" aria-hidden="true" /> },
+  { key: "usage", path: "/usage", label: "Usage", icon: <BarChart3 className="h-4 w-4" aria-hidden="true" /> },
+];
 
-export function TabIcon({ name }: { name: TabKey }): ReactElement {
+function NavLink({
+  href,
+  active,
+  icon,
+  label,
+  trailing,
+  onNavigate,
+}: {
+  href: string;
+  active: boolean;
+  icon: ReactElement;
+  label: string;
+  trailing?: ReactNode;
+  onNavigate: (path: string) => void;
+}): ReactElement {
   return (
-    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      {TAB_ICON_CONTENT[name]}
-    </svg>
+    <a
+      href={href}
+      aria-current={active ? "page" : undefined}
+      onClick={(e) => {
+        e.preventDefault();
+        onNavigate(href);
+      }}
+      className={`flex h-8 items-center gap-2.5 rounded-md px-2.5 text-sm ${
+        active ? "bg-active font-medium text-base-content" : "text-base-content/70 hover:bg-hover hover:text-base-content"
+      }`}
+    >
+      <span className={active ? "text-base-content" : "text-base-content/55"}>{icon}</span>
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {trailing != null && <span className="text-xs text-base-content/45">{trailing}</span>}
+    </a>
   );
 }
 
 export function App(): ReactElement {
-  const initialRoute = parseLocation(typeof window !== "undefined" ? window.location.pathname : "/");
-  const [activeTab, setActiveTab] = useState<TabKey>(initialRoute.tab);
-  const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(initialRoute.meetingId);
+  const [route, setRoute] = useState<Route>(() => parseLocation(typeof window !== "undefined" ? window.location.pathname : "/"));
+  const { tab: activeTab, meetingId: selectedMeetingId } = route;
 
   // Global speakers cache
   const [knownSpeakers, setKnownSpeakers] = useState<SpeakerWithStats[]>([]);
-
-  // Plaud status
   const [plaudStatus, setPlaudStatus] = useState<PlaudStatus | null>(null);
-  const [showPlaudModal, setShowPlaudModal] = useState(false);
 
-  // LLM status & settings
-  const [llmConfig, setLlmConfig] = useState<{ defaultProvider: string; defaultModel: string } | null>(null);
-  const [showLlmModal, setShowLlmModal] = useState(false);
-
-  // Changelog
   const [showChangelogModal, setShowChangelogModal] = useState(false);
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  // Bumped after an app-level upload so the meetings list reloads.
+  const [meetingsVersion, setMeetingsVersion] = useState(0);
 
   // Meeting chat drawer (App-level so it overlays nav + content via drawer-side)
   const [chatOpen, setChatOpen] = useState(false);
   const [chatTitle, setChatTitle] = useState("");
-  const [showMoreNav, setShowMoreNav] = useState(false);
+
+  const jobsSnapshot = useJobsSnapshot();
+  const { theme, setPreference } = useTheme();
 
   const isTabActive = (key: TabKey) => (key === "meetings" ? activeTab === "meetings" && !selectedMeetingId : activeTab === key);
 
-  const navigate = (path: string) => {
-    const route = parseLocation(path);
-    setActiveTab(route.tab);
-    setSelectedMeetingId(route.meetingId);
+  const navigate = useCallback((path: string) => {
+    setRoute(parseLocation(path));
     setChatOpen(false);
-    setShowMoreNav(false);
+    setSidebarOpen(false);
     if (typeof window !== "undefined" && window.location.pathname !== path) {
       window.history.pushState({}, "", path);
     }
-  };
+    window.scrollTo({ top: 0 });
+  }, []);
 
   useEffect(() => {
-    const handlePopState = () => {
-      const route = parseLocation(window.location.pathname);
-      setActiveTab(route.tab);
-      setSelectedMeetingId(route.meetingId);
-    };
-
+    const handlePopState = () => setRoute(parseLocation(window.location.pathname));
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
   const refreshSpeakers = async () => {
@@ -160,20 +184,7 @@ export function App(): ReactElement {
     try {
       const res = await fetch("/api/plaud/status");
       if (res.ok) {
-        const data = (await res.json()) as PlaudStatus;
-        setPlaudStatus(data);
-      }
-    } catch {
-      // ignore
-    }
-  };
-
-  const refreshLlmConfig = async () => {
-    try {
-      const res = await fetch("/api/llm/config");
-      if (res.ok) {
-        const data = await res.json();
-        setLlmConfig(data);
+        setPlaudStatus((await res.json()) as PlaudStatus);
       }
     } catch {
       // ignore
@@ -183,8 +194,147 @@ export function App(): ReactElement {
   useEffect(() => {
     void refreshSpeakers();
     void refreshPlaudStatus();
-    void refreshLlmConfig();
   }, []);
+
+  const selectMeeting = useCallback((id: string) => navigate(`/meetings/${id}`), [navigate]);
+
+  const paletteActions = useMemo<PaletteAction[]>(
+    () => [
+      { id: "upload", label: "Upload audio", run: () => setShowUploadModal(true) },
+      { id: "people", label: "Go to People", run: () => navigate("/people") },
+      { id: "templates", label: "Go to Templates", run: () => navigate("/templates") },
+      { id: "activity", label: "Go to Activity", run: () => navigate("/activity") },
+      { id: "logs", label: "View logs", run: () => navigate("/activity/logs") },
+      { id: "usage", label: "Go to Usage", run: () => navigate("/usage") },
+      { id: "settings", label: "Open Settings", run: () => navigate("/settings") },
+      { id: "ai", label: "Settings: AI models", run: () => navigate("/settings/ai") },
+      { id: "plaud", label: "Settings: Plaud and integrations", run: () => navigate("/settings/integrations") },
+      { id: "backup", label: "Settings: Data & backups", run: () => navigate("/settings/data") },
+      {
+        id: "theme",
+        label: theme === "olive-dark" ? "Switch to light theme" : "Switch to dark theme",
+        run: () => setPreference(theme === "olive-dark" ? "light" : "dark"),
+      },
+      { id: "changelog", label: "What's new", run: () => setShowChangelogModal(true) },
+    ],
+    [navigate, theme, setPreference]
+  );
+
+  const sidebar = (
+    <div className="flex h-full flex-col gap-1 px-2 py-3">
+      <div className="flex items-center gap-2 px-2 pb-2">
+        <a
+          href="/meetings"
+          onClick={(e) => {
+            e.preventDefault();
+            navigate("/meetings");
+          }}
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-1 hover:bg-hover"
+        >
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-primary text-xs font-bold text-primary-content">O</span>
+          <span className="truncate font-semibold">Olive</span>
+        </a>
+        <button
+          type="button"
+          aria-label="Close menu"
+          onClick={() => setSidebarOpen(false)}
+          className="btn btn-ghost btn-sm btn-square lg:hidden"
+        >
+          <X className="h-4 w-4" aria-hidden="true" />
+        </button>
+      </div>
+
+      <button
+        type="button"
+        onClick={() => setPaletteOpen(true)}
+        className="flex h-8 items-center gap-2.5 rounded-md px-2.5 text-sm text-base-content/70 hover:bg-hover hover:text-base-content"
+      >
+        <Search className="h-4 w-4 text-base-content/55" aria-hidden="true" />
+        <span className="flex-1 text-left">Search</span>
+        <kbd className="hidden rounded border border-base-300 px-1 text-[11px] text-base-content/50 sm:inline">⌘K</kbd>
+      </button>
+      <button
+        type="button"
+        onClick={() => setShowUploadModal(true)}
+        className="flex h-8 items-center gap-2.5 rounded-md px-2.5 text-sm text-base-content/70 hover:bg-hover hover:text-base-content"
+      >
+        <Plus className="h-4 w-4 text-base-content/55" aria-hidden="true" />
+        <span>Upload audio</span>
+      </button>
+
+      <nav aria-label="Primary" className="mt-3 flex flex-col gap-0.5">
+        {PRIMARY_NAV.map((item) => (
+          <NavLink
+            key={item.key}
+            href={item.path}
+            active={isTabActive(item.key) || (item.key === "meetings" && !!selectedMeetingId)}
+            icon={item.icon}
+            label={item.label}
+            trailing={item.key === "speakers" && knownSpeakers.length > 0 ? knownSpeakers.length : undefined}
+            onNavigate={(path) => {
+              navigate(path);
+              if (item.key === "speakers") void refreshSpeakers();
+            }}
+          />
+        ))}
+        <span className="mt-4 px-2.5 pb-1 text-xs font-medium text-base-content/50">Workspace</span>
+        {WORKSPACE_NAV.map((item) => (
+          <NavLink key={item.key} href={item.path} active={isTabActive(item.key)} icon={item.icon} label={item.label} onNavigate={navigate} />
+        ))}
+      </nav>
+
+      <div className="mt-auto flex flex-col gap-2 pt-4">
+        <JobsIndicator snapshot={jobsSnapshot} onOpenActivity={() => navigate("/activity")} onSelectMeeting={selectMeeting} />
+        <a
+          href="/settings/integrations"
+          onClick={(e) => {
+            e.preventDefault();
+            navigate("/settings/integrations");
+            void refreshPlaudStatus();
+          }}
+          className="flex items-center gap-2 rounded-md px-2.5 py-1 text-xs text-base-content/60 hover:bg-hover"
+        >
+          <span className={`h-2 w-2 shrink-0 rounded-full ${plaudStatus?.connected ? "bg-success" : "bg-warning"}`} aria-hidden="true" />
+          <span className="truncate">
+            {plaudStatus?.connected
+              ? `Plaud synced${plaudStatus.lastPollAt ? ` · ${formatDate(plaudStatus.lastPollAt)}` : ""}`
+              : "Plaud not connected"}
+          </span>
+        </a>
+        <div className="flex flex-col gap-0.5 border-t border-divider pt-2">
+          <NavLink
+            href="/settings"
+            active={activeTab === "settings"}
+            icon={<Settings className="h-4 w-4" aria-hidden="true" />}
+            label="Settings"
+            onNavigate={navigate}
+          />
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setShowChangelogModal(true)}
+              className="flex h-8 flex-1 items-center gap-2.5 rounded-md px-2.5 text-sm text-base-content/70 hover:bg-hover hover:text-base-content"
+            >
+              <Sparkles className="h-4 w-4 text-base-content/55" aria-hidden="true" />
+              What's new
+            </button>
+            <ThemeToggle />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  const mobileNav: { key: string; label: string; icon: ReactElement; active: boolean; onClick: () => void }[] = [
+    { key: "meetings", label: "Meetings", icon: <AudioLines className="h-5 w-5" aria-hidden="true" />, active: activeTab === "meetings", onClick: () => navigate("/meetings") },
+    { key: "people", label: "People", icon: <Users className="h-5 w-5" aria-hidden="true" />, active: activeTab === "speakers", onClick: () => navigate("/people") },
+    { key: "upload", label: "Upload", icon: <Upload className="h-5 w-5" aria-hidden="true" />, active: false, onClick: () => setShowUploadModal(true) },
+    { key: "activity", label: "Activity", icon: <Activity className="h-5 w-5" aria-hidden="true" />, active: activeTab === "activity", onClick: () => navigate("/activity") },
+    { key: "settings", label: "Settings", icon: <Settings className="h-5 w-5" aria-hidden="true" />, active: activeTab === "settings", onClick: () => navigate("/settings") },
+  ];
+
+  const pageTitle =
+    activeTab === "activity" ? "Activity" : activeTab === "usage" ? "Usage" : activeTab === "settings" ? "Settings" : null;
 
   return (
     <div className="drawer drawer-end w-full">
@@ -195,209 +345,111 @@ export function App(): ReactElement {
         checked={chatOpen}
         onChange={(e) => setChatOpen(e.target.checked)}
       />
-      <div className="drawer-content min-h-screen bg-base-100 text-base-content selection:bg-primary selection:text-primary-content w-full overflow-x-clip">
-      <nav className="border-b border-base-300 bg-base-200/80 backdrop-blur sticky top-0 z-30 px-3 sm:px-6 py-2.5 sm:py-3.5 w-full">
-        <div className="mx-auto flex max-w-6xl flex-nowrap items-center justify-between gap-2 sm:gap-4">
-          <div className="flex min-w-0 items-center gap-3 sm:gap-4 lg:gap-6">
-            <a
-              href="/meetings"
-              onClick={(e) => {
-                e.preventDefault();
-                navigate("/meetings");
-              }}
-              className="flex shrink-0 items-center gap-2 cursor-pointer hover:opacity-90 transition"
-            >
-              <span className="flex h-7 w-7 sm:h-8 sm:w-8 items-center justify-center rounded-lg bg-primary font-bold text-primary-content text-sm sm:text-base">
-                O
-              </span>
-              <span className="text-lg sm:text-xl font-semibold tracking-tight">Olive</span>
-            </a>
-            <div className="hidden sm:flex min-w-0 flex-nowrap items-center gap-0.5 overflow-x-auto rounded-lg bg-base-200 p-1 text-xs lg:text-sm font-medium">
-              {NAV_TABS.map((tab) => (
-                <a
-                  key={tab.key}
-                  href={tab.path}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    navigate(tab.path);
-                    if (tab.key === "speakers") void refreshSpeakers();
-                  }}
-                  className={`shrink-0 whitespace-nowrap rounded-field px-2 lg:px-3 py-1.5 transition ${
-                    isTabActive(tab.key) ? "bg-base-100 text-primary shadow" : "text-base-content/60 hover:text-base-content"
-                  }`}
-                >
-                  {tab.key === "speakers" ? `People (${knownSpeakers.length})` : tab.label}
-                </a>
-              ))}
-            </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setShowChangelogModal(true)}
-              title="What's new in Olive"
-              className="btn btn-ghost btn-sm shrink-0"
-            >
-              <span aria-hidden="true" className="inline-flex"><Sparkles className="h-3.5 w-3.5" aria-hidden="true" /></span>
-              <span className="hidden md:inline">What's New</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowLlmModal(true)}
-              className="btn btn-ghost btn-sm max-w-[110px] lg:max-w-[150px] xl:max-w-none"
-            >
-              <span className="h-2 w-2 rounded-full bg-accent shrink-0" />
-              <span className="truncate">AI: {llmConfig ? `${llmConfig.defaultProvider}/${llmConfig.defaultModel}` : "Config"}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setShowPlaudModal(true);
-                void refreshPlaudStatus();
-              }}
-              className={`btn btn-sm shrink-0 ${
-                plaudStatus?.connected
-                  ? "border-primary/30 bg-primary/10 text-primary hover:bg-primary/20"
-                  : "border-warning/30 bg-warning/10 text-warning hover:bg-warning/20"
-              }`}
-            >
-              <span className={`h-2 w-2 rounded-full shrink-0 ${plaudStatus?.connected ? "bg-primary" : "bg-warning"}`} />
-              <span>{plaudStatus?.connected ? "Plaud" : "Connect"}</span>
-            </button>
-            <ThemeToggle />
-          </div>
-        </div>
-      </nav>
+      <div className="drawer-content min-h-screen w-full overflow-x-clip bg-base-100 text-base-content selection:bg-primary/25">
+        {/* Desktop sidebar */}
+        <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 border-r border-divider bg-base-200 lg:block">{sidebar}</aside>
 
-      <nav
-        aria-label="Primary"
-        className="dock dock-md z-30 pb-safe sm:hidden"
-      >
-        {(NAV_TABS.filter((t) => t.key === "meetings" || t.key === "speakers" || t.key === "templates" || t.key === "usage")).map((tab) => {
-          const active = isTabActive(tab.key);
-          return (
-            <button
-              key={tab.key}
-              type="button"
-              aria-current={active ? "page" : undefined}
-              onClick={() => {
-                setShowMoreNav(false);
-                navigate(tab.path);
-                if (tab.key === "speakers") void refreshSpeakers();
-              }}
-              className={active ? "dock-active" : ""}
-            >
-              <TabIcon name={tab.key} />
-              <span className="dock-label">{tab.key === "speakers" ? `People${knownSpeakers.length > 0 ? ` (${knownSpeakers.length})` : ""}` : tab.label}</span>
-            </button>
-          );
-        })}
-        <button
-          type="button"
-          aria-expanded={showMoreNav}
-          aria-label="More sections"
-          onClick={() => setShowMoreNav((v) => !v)}
-          className={activeTab === "logs" || activeTab === "backup" ? "dock-active" : ""}
-        >
-          <Ellipsis className="h-5 w-5" aria-hidden="true" />
-          <span className="dock-label">More</span>
-        </button>
-      </nav>
-      {showMoreNav && (
-        <div className="fixed inset-x-4 bottom-20 z-40 sm:hidden">
-          <ul className="menu rounded-box border border-base-300 bg-base-100 p-2 shadow-lg">
-            {(NAV_TABS.filter((t) => t.key === "logs" || t.key === "backup")).map((tab) => (
-              <li key={tab.key}>
-                <a
-                  href={tab.path}
-                  aria-current={isTabActive(tab.key) ? "page" : undefined}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    setShowMoreNav(false);
-                    navigate(tab.path);
-                  }}
-                  className={isTabActive(tab.key) ? "menu-active" : ""}
-                >
-                  <TabIcon name={tab.key} />
-                  {tab.label}
-                </a>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+        {/* Mobile/tablet sidebar drawer */}
+        {sidebarOpen && (
+          <div className="fixed inset-0 z-50 lg:hidden">
+            <button type="button" aria-label="Close menu" className="absolute inset-0 bg-black/40" onClick={() => setSidebarOpen(false)} />
+            <aside className="absolute inset-y-0 left-0 w-72 max-w-[85vw] bg-base-200 shadow-pop pt-safe">{sidebar}</aside>
+          </div>
+        )}
 
-      <main className="mx-auto max-w-6xl px-3.5 sm:px-6 pt-4 sm:pt-8 pb-[calc(6rem+env(safe-area-inset-bottom))] sm:pb-8 w-full overflow-x-clip min-w-0">
-        {selectedMeetingId ? (
-          <MeetingDetailView
-            meetingId={selectedMeetingId}
-            knownSpeakers={knownSpeakers}
-            onBack={() => navigate("/meetings")}
-            onDeleted={() => navigate("/meetings")}
-            onSpeakerUpdated={() => void refreshSpeakers()}
-            onChatOpenChange={setChatOpen}
-            onChatTitle={setChatTitle}
+        {/* Mobile header */}
+        <header className="sticky top-0 z-20 flex items-center gap-1 border-b border-divider bg-base-100/90 px-2 py-1.5 backdrop-blur pt-safe lg:hidden">
+          <button type="button" aria-label="Open menu" onClick={() => setSidebarOpen(true)} className="btn btn-ghost btn-square">
+            <Menu className="h-5 w-5" aria-hidden="true" />
+          </button>
+          <span className="flex-1" />
+          <JobsIndicator
+            snapshot={jobsSnapshot}
+            variant="pill"
+            onOpenActivity={() => navigate("/activity")}
+            onSelectMeeting={selectMeeting}
           />
-        ) : activeTab === "meetings" ? (
-          <MeetingsListView onSelectMeeting={(id) => navigate(`/meetings/${id}`)} />
-        ) : activeTab === "speakers" ? (
-          <SpeakersListView
-            speakers={knownSpeakers}
-            onRefresh={() => void refreshSpeakers()}
-            onSelectMeeting={(id) => navigate(`/meetings/${id}`)}
-          />
-        ) : activeTab === "templates" ? (
-          <TemplatesListView />
-        ) : activeTab === "logs" ? (
-          <LogsView
-            onSelectMeeting={(id) => navigate(`/meetings/${id}`)}
-          />
-        ) : activeTab === "usage" ? (
-          <UsageView onSelectMeeting={(id) => navigate(`/meetings/${id}`)} />
-        ) : (
-          <BackupRestoreView
-            onRestoreComplete={() => {
-              void refreshSpeakers();
-              void refreshLlmConfig();
+          <button type="button" aria-label="Search" onClick={() => setPaletteOpen(true)} className="btn btn-ghost btn-square">
+            <Search className="h-5 w-5" aria-hidden="true" />
+          </button>
+        </header>
+
+        <main className="min-w-0 lg:pl-60">
+          <div
+            className={`mx-auto w-full min-w-0 px-4 pt-5 pb-[calc(6rem+env(safe-area-inset-bottom))] sm:px-8 lg:pb-16 ${
+              selectedMeetingId ? "max-w-none lg:px-0 lg:pt-0" : "max-w-6xl lg:px-14 lg:pt-10"
+            }`}
+          >
+            {pageTitle && <h1 className="mb-6 text-3xl font-bold tracking-tight sm:text-4xl">{pageTitle}</h1>}
+            {selectedMeetingId ? (
+              <MeetingDetailView
+                meetingId={selectedMeetingId}
+                knownSpeakers={knownSpeakers}
+                onBack={() => navigate("/meetings")}
+                onDeleted={() => navigate("/meetings")}
+                onSpeakerUpdated={() => void refreshSpeakers()}
+                onChatOpenChange={setChatOpen}
+                onChatTitle={setChatTitle}
+              />
+            ) : activeTab === "meetings" ? (
+              <MeetingsListView key={meetingsVersion} onSelectMeeting={selectMeeting} />
+            ) : activeTab === "speakers" ? (
+              <SpeakersListView speakers={knownSpeakers} onRefresh={() => void refreshSpeakers()} onSelectMeeting={selectMeeting} />
+            ) : activeTab === "templates" ? (
+              <TemplatesListView />
+            ) : activeTab === "activity" ? (
+              <ActivityView tab={route.activityTab} onNavigateTab={(t) => navigate(t === "logs" ? "/activity/logs" : "/activity")} onSelectMeeting={selectMeeting} />
+            ) : activeTab === "usage" ? (
+              <UsageView onSelectMeeting={selectMeeting} />
+            ) : (
+              <SettingsView
+                section={route.settingsSection}
+                onNavigateSection={(s) => navigate(`/settings/${s}`)}
+                plaudStatus={plaudStatus}
+                onRefreshPlaud={() => void refreshPlaudStatus()}
+                onSettingsSaved={() => undefined}
+                onRestoreComplete={() => void refreshSpeakers()}
+              />
+            )}
+          </div>
+        </main>
+
+        {/* Mobile bottom nav */}
+        <nav aria-label="Primary" className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-divider bg-base-100 px-1 pt-1.5 pb-safe lg:hidden">
+          {mobileNav.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              aria-current={item.active ? "page" : undefined}
+              onClick={item.onClick}
+              className={`flex min-h-[52px] flex-col items-center justify-center gap-0.5 text-[11px] ${item.active ? "font-semibold text-primary" : "text-base-content/60"}`}
+            >
+              <span className={`flex h-7 w-10 items-center justify-center rounded-full ${item.active ? "bg-primary/15" : ""}`}>{item.icon}</span>
+              {item.label}
+            </button>
+          ))}
+        </nav>
+
+        <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onSelectMeeting={selectMeeting} actions={paletteActions} />
+
+        {showUploadModal && (
+          <UploadAudioModal
+            onClose={() => setShowUploadModal(false)}
+            onUploaded={(id) => {
+              setShowUploadModal(false);
+              setMeetingsVersion((v) => v + 1);
+              selectMeeting(id);
             }}
           />
         )}
-      </main>
 
-      {/* Changelog Modal */}
-      {showChangelogModal && (
-        <ChangelogModal onClose={() => setShowChangelogModal(false)} />
-      )}
-
-      {/* Plaud Auth & Sync Modal */}
-      {showPlaudModal && (
-        <PlaudModal
-          status={plaudStatus}
-          onClose={() => setShowPlaudModal(false)}
-          onRefreshStatus={() => void refreshPlaudStatus()}
-        />
-      )}
-
-      {/* LLM Provider & Model Settings Modal */}
-      {showLlmModal && (
-        <LlmSettingsModal
-          onClose={() => setShowLlmModal(false)}
-          onSaved={() => {
-            setShowLlmModal(false);
-            void refreshLlmConfig();
-          }}
-        />
-      )}
+        {showChangelogModal && <ChangelogModal onClose={() => setShowChangelogModal(false)} />}
       </div>
       <div className="drawer-side z-50">
         <label htmlFor="olive-chat-drawer" aria-label="Close chat" className="drawer-overlay" />
         <div className="min-h-full w-full max-w-xl bg-base-100 shadow-2xl">
           {chatOpen && selectedMeetingId && (
-            <MeetingChatPanel
-              meetingId={selectedMeetingId}
-              meetingTitle={chatTitle || "Meeting"}
-              onClose={() => setChatOpen(false)}
-            />
+            <MeetingChatPanel meetingId={selectedMeetingId} meetingTitle={chatTitle || "Meeting"} onClose={() => setChatOpen(false)} />
           )}
         </div>
       </div>
