@@ -19,7 +19,7 @@ Ingests audio from Plaud hardware recorders, iOS Voice Memos, and browser upload
 
 <br/>
 
-<img src="docs/screenshots/meeting-detail.png" alt="Olive Meeting Detail View" width="100%" />
+<img src="docs/screenshots/meeting-detail.png" alt="Olive meeting page" width="100%" />
 
 </div>
 
@@ -49,68 +49,75 @@ Ingests audio from Plaud hardware recorders, iOS Voice Memos, and browser upload
 
 ## Screenshots
 
-### Meeting archive & detail view
+Olive follows your system's light or dark theme; you can also pick one in Settings.
+
+### Meetings & meeting page
 
 <div align="center">
-  <img src="docs/screenshots/meetings-dashboard.png" alt="Olive Meetings Dashboard" width="100%" />
-  <p><em>Meetings dashboard with full-text search across titles, tags, transcripts, and summaries.</em></p>
+  <img src="docs/screenshots/meetings-dashboard.png" alt="Olive meetings list" width="100%" />
+  <p><em>Every recording in one table, with filters for status, source, tags and date, and search across titles, tags, transcripts and summaries.</em></p>
 </div>
 
 <br/>
 
 <div align="center">
-  <img src="docs/screenshots/meeting-detail.png" alt="Meeting Detail with Audio and Summary" width="100%" />
-  <p><em>Meeting detail view with seekable audio player, speaker assignment pills, and Markdown summaries.</em></p>
-</div>
-
----
-
-### LLM provider & local ASR settings
-
-<div align="center">
-  <img src="docs/screenshots/llm-settings.png" alt="LLM Provider and ASR Settings" width="70%" />
-  <p><em>Model catalog, reasoning/thinking level config, Hugging Face token, and diarization/voiceprint thresholds.</em></p>
-</div>
-
----
-
-### Ingestion & Plaud sync
-
-<div align="center">
-  <table>
-    <tr>
-      <td width="50%" align="center">
-        <img src="docs/screenshots/upload-modal.png" alt="Upload Audio Recording" />
-        <br/>
-        <em>Direct audio upload with auto-transcribe toggle and engine selector.</em>
-      </td>
-      <td width="50%" align="center">
-        <img src="docs/screenshots/plaud-integration.png" alt="Plaud Device Sync" />
-        <br/>
-        <em>Plaud Cloud OAuth 2.0 PKCE login and background sync.</em>
-      </td>
-    </tr>
-  </table>
-</div>
-
----
-
-### Summary templates, logs & backups
-
-<div align="center">
-  <img src="docs/screenshots/summary-templates.png" alt="Summary Prompt Templates" width="100%" />
+  <img src="docs/screenshots/meeting-detail.png" alt="Meeting page with summary and chat" width="100%" />
+  <p><em>Meeting page: properties, summaries labelled by template and model, chat about the meeting, and an audio player tinted by who is speaking.</em></p>
 </div>
 
 <br/>
 
 <div align="center">
-  <img src="docs/screenshots/system-logs.png" alt="System and Job Logs" width="100%" />
+  <img src="docs/screenshots/meeting-detail-dark.png" alt="Meeting transcript and speakers in dark mode" width="100%" />
+  <p><em>Transcript that follows the audio, with Confirm and Change on each turn, next to the Speakers panel (dark mode).</em></p>
+</div>
+
+---
+
+### Settings
+
+<div align="center">
+  <img src="docs/screenshots/llm-settings.png" alt="AI model settings" width="100%" />
+  <p><em>AI models: default provider and model, thinking level, connection test and provider keys from the models.dev catalog.</em></p>
 </div>
 
 <br/>
 
 <div align="center">
-  <img src="docs/screenshots/backup-restore.png" alt="Backup and Restore" width="100%" />
+  <img src="docs/screenshots/plaud-integration.png" alt="Integrations settings" width="100%" />
+  <p><em>Integrations: Plaud Cloud sync, the MCP server and the iOS Shortcut address.</em></p>
+</div>
+
+---
+
+### Upload
+
+<div align="center">
+  <img src="docs/screenshots/upload-modal.png" alt="Upload audio" width="100%" />
+  <p><em>Drop an audio file, choose whether to transcribe it right away, and pick the engine and language.</em></p>
+</div>
+
+---
+
+### Summary templates, activity & backups
+
+<div align="center">
+  <img src="docs/screenshots/summary-templates.png" alt="Summary template editor with preview" width="100%" />
+  <p><em>Template editor with a live preview against one of your meetings.</em></p>
+</div>
+
+<br/>
+
+<div align="center">
+  <img src="docs/screenshots/system-logs.png" alt="Activity logs" width="100%" />
+  <p><em>Activity: running jobs and a live log with level, category and text filters.</em></p>
+</div>
+
+<br/>
+
+<div align="center">
+  <img src="docs/screenshots/backup-restore.png" alt="Backup and restore" width="100%" />
+  <p><em>Download a full backup, save snapshots on the server, or restore from a file.</em></p>
 </div>
 
 ---
