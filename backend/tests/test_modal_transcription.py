@@ -258,9 +258,10 @@ async def test_modal_abort_cancels_remote_call(tmp_path: Path) -> None:
     controller = AbortController()
 
     async def _abort_soon() -> None:
-        while not service._active_jobs:
+        # Abort only once the remote call is being polled: FLAC conversion runs
+        # before spawn and can outlast any fixed delay on a slow CI runner.
+        while fake.polls_left == 10_000:
             await asyncio.sleep(0.001)
-        await asyncio.sleep(0.02)
         controller.abort()
 
     aborter = asyncio.ensure_future(_abort_soon())
