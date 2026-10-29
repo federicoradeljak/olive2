@@ -296,6 +296,7 @@ async def test_post_transcribe_background_returns_202_and_streams_progress(
                 "muse",
                 "modal",
                 "summarize",
+                "modal_billing",
             ]
             ffmpeg_q = next(q for q in debug_data["queues"] if q["name"] == "ffmpeg")
             assert len(ffmpeg_q["recentJobs"]) >= 1

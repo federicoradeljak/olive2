@@ -14,6 +14,7 @@ export const QUEUE_LABELS: Record<string, string> = {
   muse: "Transcribing with Muse",
   modal: "Transcribing on Modal GPU",
   summarize: "Writing summary",
+  modal_billing: "Syncing Modal billing",
 };
 
 /* Noun form of each queue, for the capacity tiles. */
@@ -29,6 +30,7 @@ export const QUEUE_TITLES: Record<string, string> = {
   muse: "Muse",
   modal: "Modal GPU",
   summarize: "Summaries",
+  modal_billing: "Modal billing",
 };
 
 /* Engine shown next to a job ("Local pipeline", "AssemblyAI", ...). */
@@ -44,6 +46,7 @@ const QUEUE_ENGINES: Record<string, string> = {
   muse: "Muse",
   modal: "Modal GPU",
   summarize: "Summary",
+  modal_billing: "Modal billing",
 };
 
 export function queueLabel(queueName: string | null | undefined): string {
@@ -91,7 +94,7 @@ export function jobKind(queueName: string | null | undefined): JobKind {
   if (!queueName) return "other";
   if (TRANSCRIPTION_QUEUES.has(queueName)) return "transcription";
   if (queueName === "summarize") return "summary";
-  if (queueName === "plaud_sync") return "sync";
+  if (queueName === "plaud_sync" || queueName === "modal_billing") return "sync";
   return "other";
 }
 
