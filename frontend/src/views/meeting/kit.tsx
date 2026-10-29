@@ -42,7 +42,10 @@ export function Menu({
   title?: string;
 }): ReactElement {
   const [open, setOpen] = useState(false);
-  const entries = items.filter((e): e is MenuItem | "divider" => Boolean(e));
+  // Drop hidden items, then leading/trailing/doubled dividers.
+  const entries = items
+    .filter((e): e is MenuItem | "divider" => Boolean(e))
+    .filter((e, i, arr) => e !== "divider" || (i > 0 && i < arr.length - 1 && arr[i - 1] !== "divider"));
 
   return (
     <div
