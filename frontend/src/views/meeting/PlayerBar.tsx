@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
-import { Pause, Play, RotateCcw, Sparkles } from "lucide-react";
+import { Pause, Play, RotateCcw, Sparkles, Volume1, Volume2, VolumeX } from "lucide-react";
 import { formatClock, type TranscriptTurn } from "./transcript";
 import { speakerTone } from "./kit";
 
@@ -43,7 +43,8 @@ function timelineBlocks(turns: TranscriptTurn[], totalMs: number): TimelineBlock
 
 /**
  * Sticky audio player: play/pause, skip back, current/total time, a seek bar
- * tinted by who is speaking, playback speed and the enhanced-voice toggle.
+ * tinted by who is speaking, volume (desktop only), playback speed and the
+ * enhanced-voice toggle.
  * Reads time straight from the <audio> element so the rest of the page does
  * not re-render on every tick.
  */
@@ -67,6 +68,8 @@ export function PlayerBar({
   const [currentMs, setCurrentMs] = useState(0);
   const [durationMs, setDurationMs] = useState<number | null>(null);
   const [rate, setRate] = useState<number>(1);
+  const [volume, setVolume] = useState(1);
+  const [muted, setMuted] = useState(false);
   const rateRef = useRef(rate);
   useEffect(() => {
     rateRef.current = rate;
@@ -79,17 +82,24 @@ export function PlayerBar({
       if (Number.isFinite(audio.duration)) setDurationMs(Math.round(audio.duration * 1000));
       audio.playbackRate = rateRef.current;
     };
+    const onVolume = () => {
+      setVolume(audio.volume);
+      setMuted(audio.muted);
+    };
     onTime();
     onMeta();
+    onVolume();
     audio.addEventListener("timeupdate", onTime);
     audio.addEventListener("seeked", onTime);
     audio.addEventListener("loadedmetadata", onMeta);
     audio.addEventListener("durationchange", onMeta);
+    audio.addEventListener("volumechange", onVolume);
     return () => {
       audio.removeEventListener("timeupdate", onTime);
       audio.removeEventListener("seeked", onTime);
       audio.removeEventListener("loadedmetadata", onMeta);
       audio.removeEventListener("durationchange", onMeta);
+      audio.removeEventListener("volumechange", onVolume);
     };
   }, [audio]);
 
@@ -114,6 +124,22 @@ export function PlayerBar({
     if (audio) audio.playbackRate = next;
   };
   const rateLabel = `${rate}×`;
+  const changeVolume = (next: number) => {
+    if (!audio) return;
+    audio.volume = next;
+    audio.muted = next === 0;
+  };
+  const toggleMute = () => {
+    if (!audio) return;
+    if (audio.muted || audio.volume === 0) {
+      audio.muted = false;
+      if (audio.volume === 0) audio.volume = 1;
+    } else {
+      audio.muted = true;
+    }
+  };
+  const shownVolume = muted ? 0 : volume;
+  const VolumeIcon = shownVolume === 0 ? VolumeX : shownVolume < 0.5 ? Volume1 : Volume2;
 
   const seekBar = (
     <div className="relative flex h-7 min-w-0 flex-1 items-center">
@@ -188,6 +214,28 @@ export function PlayerBar({
       <span className="font-mono text-xs text-base-content/60 tabular-nums">{formatClock(currentMs)}</span>
       {seekBar}
       <span className="font-mono text-xs text-base-content/60 tabular-nums">{formatClock(totalMs)}</span>
+      <div className="flex items-center">
+        <button
+          type="button"
+          onClick={toggleMute}
+          aria-label={shownVolume === 0 ? "Unmute" : "Mute"}
+          title={shownVolume === 0 ? "Unmute" : "Mute"}
+          className="btn btn-ghost btn-square btn-sm text-base-content/60"
+        >
+          <VolumeIcon className="h-4 w-4" aria-hidden="true" />
+        </button>
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.05}
+          value={shownVolume}
+          onChange={(e) => changeVolume(Number(e.target.value))}
+          aria-label="Volume"
+          aria-valuetext={`${Math.round(shownVolume * 100)}%`}
+          className="range range-primary range-xs w-20"
+        />
+      </div>
       <button type="button" onClick={cycleRate} aria-label={`Playback speed ${rateLabel}`} title="Playback speed" className="btn btn-ghost btn-sm w-14 font-medium">
         {rateLabel}
       </button>
