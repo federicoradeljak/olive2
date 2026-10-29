@@ -335,6 +335,10 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         cfg = _current_app_config()
         return getattr(cfg, "modalAsrModel", None) if cfg is not None else None
 
+    def _custom_vocabulary_setting() -> list[str]:
+        cfg = _current_app_config()
+        return list(getattr(cfg, "customVocabulary", None) or []) if cfg is not None else []
+
     def get_llm_service() -> Any:
         nonlocal llm_service
         if llm_service is None:
@@ -354,6 +358,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                 llm_service=get_llm_service(),
                 template_service=template_service,
                 default_language=load_app_config(app_config_paths).defaultSummaryLanguage,
+                custom_vocabulary=_custom_vocabulary_setting,
             )
         return summary_service
 
@@ -396,6 +401,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                 modal_asr_model=_modal_asr_model_setting,
                 default_provider=default_provider,
                 default_language=load_app_config(app_config_paths).defaultTranscriptionLanguage,
+                custom_vocabulary=_custom_vocabulary_setting,
                 webhook_secret=speechmatics_webhook_secret,
                 config_dir=config_dir,
             )
@@ -1444,6 +1450,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             "clusteringThreshold": clustering_threshold,
             "modelId": model_id,
             "asrModel": body.get("asrModel"),
+            "additionalVocab": body.get("additionalVocab"),
         }
         wants_background = (
             body.get("background") is True

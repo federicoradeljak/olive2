@@ -256,3 +256,27 @@ async def test_default_client_uses_speechmatics_sdk_adapter(monkeypatch: pytest.
 
     await client.delete_job("job-123")
     assert _FakeSdkAsyncClient.deleted == "job-123"
+
+
+async def test_submit_normalizes_additional_vocab_strings() -> None:
+    captured_config: dict[str, Any] = {}
+
+    async def create_job(_inp: dict[str, Any], cfg: dict[str, Any]) -> dict[str, str]:
+        captured_config.update(cfg)
+        return {"id": "job-vocab"}
+
+    client = SpeechmaticsClient(
+        {"apiKey": "test-api-key", "batchClient": _MockBatchClient(createTranscriptionJob=create_job)}
+    )
+    await client.submit_job(
+        {
+            "audio": bytes([1, 2, 3]),
+            "filename": "test.m4a",
+            "additionalVocab": ["Olive", " ", {"content": "Plaud", "sounds_like": ["plod"]}],
+        }
+    )
+
+    assert captured_config["transcription_config"]["additional_vocab"] == [
+        {"content": "Olive"},
+        {"content": "Plaud", "sounds_like": ["plod"]},
+    ]
