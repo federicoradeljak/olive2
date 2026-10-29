@@ -15,6 +15,7 @@ QUEUE_ASSEMBLYAI = "assemblyai"
 QUEUE_MUSE = "muse"
 QUEUE_MODAL = "modal"
 QUEUE_SUMMARIZE = "summarize"
+QUEUE_MODAL_BILLING = "modal_billing"
 
 
 @dataclass(frozen=True)
@@ -36,12 +37,14 @@ STAGE_QUEUE_SPECS: tuple[StageQueueSpec, ...] = (
     StageQueueSpec(name=QUEUE_MUSE, worker_concurrency=2),
     StageQueueSpec(name=QUEUE_MODAL, worker_concurrency=2),
     StageQueueSpec(name=QUEUE_SUMMARIZE, worker_concurrency=2),
+    StageQueueSpec(name=QUEUE_MODAL_BILLING, worker_concurrency=1),
 )
 
 __all__ = [
     "QUEUE_ALIGN",
     "QUEUE_ASSEMBLYAI",
     "QUEUE_MODAL",
+    "QUEUE_MODAL_BILLING",
     "QUEUE_MUSE",
     "QUEUE_ASR",
     "QUEUE_DIARIZE",

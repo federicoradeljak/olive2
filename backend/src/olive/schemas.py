@@ -667,6 +667,8 @@ class UsageEvent(CamelModel):
     audioSeconds: float | None = None
     costUsd: float | None = None
     createdAt: int
+    # Modal transcriptions only: this run's share of Modal's billed hourly cost.
+    billedCostUsd: float | None = None
 
 
 class UsageProviderBreakdown(CamelModel):
@@ -692,11 +694,26 @@ class UsageMeetingBreakdown(CamelModel):
     llmCostUsd: float = 0
     totalCostUsd: float = 0
     eventCount: int = 0
+    modalBilledUsd: float | None = None
 
 
 class UsageRates(CamelModel):
     transcriptionUsdPerHour: dict[str, float] = Field(default_factory=dict)
     llmUsdPerMTokensNote: str = "Per-model input/output rates per 1M tokens from the LLM catalog."
+
+
+class ModalBillingSummary(CamelModel):
+    """Modal's billed cost for the range, next to the estimates it reconciles."""
+
+    billedUsd: float = 0
+    attributedUsd: float = 0
+    unattributedUsd: float = 0
+    reconciledEvents: int = 0
+    pendingEvents: int = 0
+    estimatedReconciledUsd: float = 0
+    lastSyncedAt: int | None = None
+    lastAttemptAt: int | None = None
+    lastError: str | None = None
 
 
 class UsageSummary(CamelModel):
@@ -713,6 +730,7 @@ class UsageSummary(CamelModel):
     byProvider: list[UsageProviderBreakdown] = Field(default_factory=list)
     byMeeting: list[UsageMeetingBreakdown] = Field(default_factory=list)
     rates: UsageRates | None = None
+    modalBilling: ModalBillingSummary | None = None
 
 
 class MeetingUsageResponse(CamelModel):

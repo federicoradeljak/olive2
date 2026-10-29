@@ -1838,6 +1838,22 @@
         }
       }
     },
+    "/api/usage/modal/reconcile": {
+      "post": {
+        "summary": "Post Modal Billing Reconcile Route",
+        "operationId": "post_modal_billing_reconcile_route_api_usage_modal_reconcile_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/meetings/{meeting_id}/usage": {
       "get": {
         "summary": "Get Meeting Usage Route",
@@ -3855,6 +3871,18 @@
           "createdAt": {
             "title": "Createdat",
             "type": "integer"
+          },
+          "billedCostUsd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Billedcostusd"
           }
         },
         "required": [
@@ -3991,6 +4019,18 @@
             "default": 0,
             "title": "Eventcount",
             "type": "integer"
+          },
+          "modalBilledUsd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Modalbilledusd"
           }
         },
         "required": [
@@ -4015,6 +4055,79 @@
           }
         },
         "title": "UsageRates",
+        "type": "object"
+      },
+      "ModalBillingSummary": {
+        "description": "Modal's billed cost for the range, next to the estimates it reconciles.",
+        "properties": {
+          "billedUsd": {
+            "default": 0,
+            "title": "Billedusd",
+            "type": "number"
+          },
+          "attributedUsd": {
+            "default": 0,
+            "title": "Attributedusd",
+            "type": "number"
+          },
+          "unattributedUsd": {
+            "default": 0,
+            "title": "Unattributedusd",
+            "type": "number"
+          },
+          "reconciledEvents": {
+            "default": 0,
+            "title": "Reconciledevents",
+            "type": "integer"
+          },
+          "pendingEvents": {
+            "default": 0,
+            "title": "Pendingevents",
+            "type": "integer"
+          },
+          "estimatedReconciledUsd": {
+            "default": 0,
+            "title": "Estimatedreconciledusd",
+            "type": "number"
+          },
+          "lastSyncedAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Lastsyncedat"
+          },
+          "lastAttemptAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Lastattemptat"
+          },
+          "lastError": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Lasterror"
+          }
+        },
+        "title": "ModalBillingSummary",
         "type": "object"
       },
       "UsageSummary": {
@@ -4101,6 +4214,17 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/UsageRates"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "modalBilling": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModalBillingSummary"
               },
               {
                 "type": "null"
