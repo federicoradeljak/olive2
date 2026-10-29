@@ -198,8 +198,9 @@ async def test_start_summary_generation_runs_in_background_and_tracks_status(
     with pytest.raises(RuntimeError, match="already in progress"):
         await summary_service.start_summary_generation({"meetingId": meeting_id})
 
+    # ~1s locally; slow CI runners took over 2s, so give it a generous budget.
     final = summary_service.get_summary_generation_status(meeting_id)
-    for _ in range(100):
+    for _ in range(500):
         if final and final.stage != "running":
             break
         await asyncio.sleep(0.02)
