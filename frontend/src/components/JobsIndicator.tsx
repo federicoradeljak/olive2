@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactElement } from "react";
-import type { DebugQueueJob, DebugQueuesSnapshot } from "../views/DebugQueues";
-import { describeJob } from "../lib/jobs";
+import { X } from "lucide-react";
+import type { DebugQueuesSnapshot } from "../views/DebugQueues";
+import { KIND_COLOR, activityFraction, activityMeta, activityTitle, buildActivity } from "../lib/jobs";
+import type { ActivityItem } from "../lib/jobs";
+import { confirmAction } from "./ui";
 
 const POLL_MS = 5000;
 
@@ -34,12 +37,9 @@ export function useJobsSnapshot(): DebugQueuesSnapshot | null {
   return snapshot;
 }
 
-function runningJobs(snapshot: DebugQueuesSnapshot | null): { active: DebugQueueJob[]; waiting: DebugQueueJob[] } {
-  if (!snapshot) return { active: [], waiting: [] };
-  return {
-    active: snapshot.queues.flatMap((q) => q.activeJobs),
-    waiting: snapshot.queues.flatMap((q) => q.waitingJobs),
-  };
+function Dot({ item }: { item: ActivityItem }): ReactElement {
+  const color = item.state === "queued" ? "yellow" : KIND_COLOR[item.kind];
+  return <span className="mt-[7px] h-2 w-2 shrink-0 rounded-full" style={{ background: `var(--tag-${color})` }} aria-hidden="true" />;
 }
 
 export function JobsIndicator({
@@ -54,9 +54,10 @@ export function JobsIndicator({
   variant?: "card" | "pill";
 }): ReactElement | null {
   const [open, setOpen] = useState(false);
+  const [cancelled, setCancelled] = useState<Set<string>>(new Set());
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const { active, waiting } = runningJobs(snapshot);
-  const total = active.length + waiting.length;
+  const { running, queued } = buildActivity(snapshot);
+  const total = running.length + queued.length;
 
   useEffect(() => {
     if (!open) return;
@@ -76,7 +77,31 @@ export function JobsIndicator({
 
   if (total === 0) return null;
 
-  const label = active.length > 0 ? `${active.length} running` : `${waiting.length} queued`;
+  const label =
+    running.length > 0
+      ? variant === "card"
+        ? `${running.length} ${running.length === 1 ? "job" : "jobs"} running`
+        : `${running.length} running`
+      : `${queued.length} queued`;
+
+  const cancel = async (item: ActivityItem) => {
+    if (!item.meetingId) return;
+    const ok = await confirmAction({
+      title: "Cancel transcription",
+      message: `Stop transcribing "${item.meetingTitle || "this meeting"}"?`,
+      confirmLabel: "Cancel transcription",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      const res = await fetch(`/api/meetings/${item.meetingId}/transcribe/cancel`, { method: "POST" });
+      if (res.ok) setCancelled((s) => new Set(s).add(item.key));
+    } catch {
+      // the next poll shows the real state
+    }
+  };
+
+  const items = [...running, ...queued].slice(0, 8);
 
   return (
     <div ref={rootRef} className="relative">
@@ -84,39 +109,45 @@ export function JobsIndicator({
         <button
           type="button"
           aria-expanded={open}
+          aria-haspopup="dialog"
           onClick={() => setOpen((v) => !v)}
-          className="flex w-full flex-col gap-1.5 rounded-lg border border-base-300 bg-base-100 px-3 py-2.5 text-left text-sm hover:bg-hover"
+          className="flex w-full flex-col gap-1 rounded-lg border border-base-300 bg-base-100 px-3 py-2.5 text-left text-sm hover:bg-hover"
         >
           <span className="flex items-center gap-2 font-medium">
             <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-primary" aria-hidden="true" />
             {label}
-            {active.length > 0 && waiting.length > 0 && <span className="font-normal text-base-content/55">· {waiting.length} queued</span>}
+            {running.length > 0 && queued.length > 0 && <span className="font-normal text-base-content/55">· {queued.length} queued</span>}
           </span>
-          {active[0] && <span className="truncate text-xs text-base-content/60">{describeJob(active[0])}</span>}
+          {(running[0] ?? queued[0]) && <span className="truncate text-xs text-base-content/60">{activityTitle(running[0] ?? queued[0])}</span>}
         </button>
       ) : (
         <button
           type="button"
           aria-expanded={open}
-          aria-label={`${total} background jobs`}
+          aria-haspopup="dialog"
+          aria-label={`${total} background ${total === 1 ? "job" : "jobs"}`}
           onClick={() => setOpen((v) => !v)}
-          className="flex h-8 items-center gap-1.5 rounded-full border border-base-300 px-2.5 text-xs font-medium"
+          className="flex min-h-11 items-center gap-1.5 rounded-full px-1 text-xs font-medium"
         >
-          <span className="h-2 w-2 animate-pulse rounded-full bg-primary" aria-hidden="true" />
-          {label}
+          <span className="flex h-8 items-center gap-1.5 rounded-full border border-base-300 px-2.5">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-primary" aria-hidden="true" />
+            {label}
+          </span>
         </button>
       )}
       {open && (
-        <div
-          className={`absolute z-50 w-[22rem] max-w-[calc(100vw-2rem)] rounded-xl bg-base-100 p-1.5 shadow-pop ${
-            variant === "card" ? "bottom-full left-0 mb-2" : "right-0 top-full mt-2"
+        <section
+          role="dialog"
+          aria-label="Background jobs"
+          className={`absolute z-50 w-[22.5rem] max-w-[calc(100vw-2rem)] rounded-xl bg-base-100 p-1.5 shadow-pop ${
+            variant === "card" ? "bottom-full left-0 mb-2" : "right-0 top-full mt-1"
           }`}
         >
           <div className="flex items-center justify-between px-2.5 py-2">
             <span className="font-semibold">Running now</span>
             <button
               type="button"
-              className="text-sm text-primary hover:underline"
+              className="min-h-11 text-[13px] text-primary hover:underline sm:min-h-0"
               onClick={() => {
                 setOpen(false);
                 onOpenActivity();
@@ -126,33 +157,54 @@ export function JobsIndicator({
             </button>
           </div>
           <ul className="max-h-80 overflow-y-auto">
-            {[...active, ...waiting].slice(0, 8).map((job) => {
-              const isActive = active.includes(job);
+            {items.map((item) => {
+              const fraction = item.state === "running" ? activityFraction(item) : null;
+              const canCancel = item.kind === "transcription" && !!item.meetingId && !cancelled.has(item.key);
+              const meetingId = item.meetingId;
               return (
-                <li key={job.workflowId}>
+                <li key={item.key} className="flex items-start gap-1 rounded-lg hover:bg-hover">
                   <button
                     type="button"
-                    disabled={!job.meetingId}
+                    disabled={!meetingId}
                     onClick={() => {
-                      if (!job.meetingId) return;
+                      if (!meetingId) return;
                       setOpen(false);
-                      onSelectMeeting(job.meetingId);
+                      onSelectMeeting(meetingId);
                     }}
-                    className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm hover:bg-hover disabled:cursor-default disabled:hover:bg-transparent"
+                    className="flex min-w-0 flex-1 items-start gap-2 px-2.5 py-2 text-left text-sm disabled:cursor-default"
                   >
-                    <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${isActive ? "bg-primary" : "bg-warning"}`} aria-hidden="true" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate font-medium">{describeJob(job)}</span>
-                      <span className="block truncate text-xs text-base-content/60">
-                        {isActive ? "Running" : job.queuePosition != null ? `Queued · #${job.queuePosition + 1} in line` : "Queued"}
+                    <Dot item={item} />
+                    <span className="flex min-w-0 flex-1 flex-col gap-1">
+                      <span className="truncate font-medium">{activityTitle(item)}</span>
+                      <span className="truncate text-xs text-base-content/60">
+                        {cancelled.has(item.key) ? "Cancelling…" : activityMeta(item)}
                       </span>
+                      {fraction != null && (
+                        <span className="block h-1 overflow-hidden rounded-full bg-active">
+                          <span className="block h-full rounded-full bg-primary" style={{ width: `${Math.round(fraction * 100)}%` }} />
+                        </span>
+                      )}
                     </span>
                   </button>
+                  {canCancel && (
+                    <button
+                      type="button"
+                      onClick={() => void cancel(item)}
+                      aria-label={`Cancel: ${activityTitle(item)}`}
+                      className="mr-1 mt-1 inline-flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-md px-2 text-xs text-base-content/60 hover:bg-active hover:text-base-content sm:min-h-[26px] sm:min-w-0"
+                    >
+                      <X className="h-3.5 w-3.5 sm:hidden" aria-hidden="true" />
+                      <span className="hidden sm:inline">Cancel</span>
+                    </button>
+                  )}
                 </li>
               );
             })}
           </ul>
-        </div>
+          {total > items.length && (
+            <p className="px-2.5 pb-1.5 pt-1 text-xs text-base-content/50">and {total - items.length} more in Activity</p>
+          )}
+        </section>
       )}
     </div>
   );
