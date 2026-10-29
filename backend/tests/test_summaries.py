@@ -302,3 +302,25 @@ async def test_summaries_api_and_full_text_search(tmp_path: Path) -> None:
         assert del_res.status_code == 200
 
     handle.engine.dispose()
+
+
+async def test_summary_appends_custom_vocabulary_glossary(tmp_path: Path) -> None:
+    handle, meetings_dir, llm_service, template_service, summary_service = _create_test_context(tmp_path)
+    meeting_id, _ = _seed_meeting_with_transcript(handle.engine, meetings_dir)
+    calls = _capture_llm_calls(llm_service)
+
+    await summary_service.generate_summary({"meetingId": meeting_id})
+    vocabulary = ["Olive", "Plaud"]
+    summary_service.custom_vocabulary = lambda: vocabulary
+    await summary_service.generate_summary({"meetingId": meeting_id})
+    template = await template_service.create_template(
+        {"name": "Glossary", "userPrompt": "Terms: {{glossary}}\n{{transcript}}"}
+    )
+    await summary_service.generate_summary({"meetingId": meeting_id, "templateId": template.id})
+
+    prompts = [c.get("systemPrompt") or "" for c in calls]
+    assert "Glossary" not in prompts[0]
+    assert prompts[1].endswith("in the transcript: Olive, Plaud.")
+    assert calls[2]["prompt"].startswith("Terms: Olive, Plaud\n")
+    assert "Glossary of correct spellings" not in prompts[2]
+    handle.engine.dispose()
