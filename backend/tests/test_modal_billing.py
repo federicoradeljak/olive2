@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -55,7 +55,8 @@ def _fetcher(hours: list[ModalBillingHour], calls: list[tuple[datetime, datetime
     async def fetch(start: datetime, end: datetime) -> list[ModalBillingHour]:
         if calls is not None:
             calls.append((start, end))
-        return hours
+        lo, hi = start.timestamp() * 1000, end.timestamp() * 1000
+        return [h for h in hours if lo <= h.hour_start_ms < hi]
 
     return fetch
 
@@ -108,7 +109,11 @@ async def test_reconcile_splits_hour_by_gpu_seconds_and_carries_idle_hours() -> 
     )
 
     assert result["status"] == "ok"
-    assert calls == [(datetime(2026, 10, 26, 21, tzinfo=UTC), datetime(2026, 10, 28, 21, tzinfo=UTC))]
+    # First sync backfills from the start of the previous month, in <= 7-day chunks.
+    assert calls[0][0] == datetime(2026, 9, 1, tzinfo=UTC)
+    assert calls[-1][1] == datetime(2026, 10, 28, 21, tzinfo=UTC)
+    assert all(b - a <= timedelta(days=7) for a, b in calls)
+    assert all(prev[1] == cur[0] for prev, cur in zip(calls, calls[1:], strict=False))
     billed = _billed(handle)
     assert billed["modal:a"] == pytest.approx(0.06)  # 1/4 of (0.20 + 0.04)
     assert billed["modal:b"] == pytest.approx(0.18)
@@ -126,6 +131,7 @@ async def test_reconcile_splits_hour_by_gpu_seconds_and_carries_idle_hours() -> 
     assert block["estimatedReconciledUsd"] == pytest.approx(0.12)
     assert block["lastSyncedAt"] == NOW
     assert block["lastError"] is None
+    assert block["coveredFrom"] == int(datetime(2026, 9, 1, tzinfo=UTC).timestamp() * 1000)
     handle.engine.dispose()
 
 
@@ -268,4 +274,25 @@ def test_reconcile_route_requires_token_and_enqueues(tmp_path: Any, monkeypatch:
     assert (res.status_code, res.json()) == (202, {"status": "queued"})
     assert client.post("/api/usage/modal/reconcile").json() == {"status": "already_queued"}
     assert queued == [modal_client, modal_client]
+    handle.engine.dispose()
+
+
+async def test_sync_after_long_downtime_fills_the_gap() -> None:
+    handle = create_db(":memory:")
+    await reconcile_modal_billing(handle.engine, _fetcher([]), app_name="olive-gpu", now_ms=NOW)
+
+    # Olive was down for 10 days; a run happened 5 days after the last sync.
+    later_run = H18 + 5 * 24 * HOUR_MS
+    _modal_run(handle, None, later_run + 60_000, 10.0, 0.01, "a")
+    calls: list[tuple[datetime, datetime]] = []
+    await reconcile_modal_billing(
+        handle.engine,
+        _fetcher([ModalBillingHour(later_run, 0.30)], calls),
+        app_name="olive-gpu",
+        now_ms=NOW + 10 * 24 * HOUR_MS,
+    )
+    # Resumes 48 h before the previously covered hour (21:00), never skipping.
+    assert calls[0][0] == datetime(2026, 10, 26, 21, tzinfo=UTC)
+    assert calls[-1][1] == datetime(2026, 11, 7, 21, tzinfo=UTC)
+    assert _billed(handle) == {"modal:a": pytest.approx(0.30)}
     handle.engine.dispose()

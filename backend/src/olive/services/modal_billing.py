@@ -25,8 +25,11 @@ from ..providers.modal.billing import ModalBillingHour
 from .usage import _engine_of
 
 HOUR_MS = 3_600_000
-# Modal revises recent hours for a while; every sync re-fetches this window.
-WINDOW_HOURS = 48
+# Modal revises recent hours for a while; every sync re-fetches this much
+# before the last hour it already covered (so outages leave no gap).
+REFETCH_HOURS = 48
+# Modal rejects hourly reports spanning more than 7 days.
+CHUNK_MS = 7 * 24 * HOUR_MS
 STATUS_KEY = "modal_billing_status"
 SYNC_DEDUP_ID = "modal-billing"
 
@@ -77,6 +80,13 @@ def _write_status(conn: Connection, status: dict[str, Any]) -> None:
         text("INSERT INTO sync_state (key, value) VALUES (:k, :v) ON CONFLICT(key) DO UPDATE SET value = :v"),
         {"k": STATUS_KEY, "v": json.dumps(status)},
     )
+
+
+def _backfill_start_ms(end_ms: int) -> int:
+    """First sync: from the start of the previous UTC month."""
+    end = _dt(end_ms)
+    year, month = (end.year, end.month - 1) if end.month > 1 else (end.year - 1, 12)
+    return int(datetime(year, month, 1, tzinfo=UTC).timestamp() * 1000)
 
 
 def _gpu_seconds(detail: Any) -> float:
@@ -147,19 +157,32 @@ async def reconcile_modal_billing(
     *,
     app_name: str,
     now_ms: int | None = None,
-    window_hours: int = WINDOW_HOURS,
 ) -> dict[str, Any]:
-    """Fetches the last ``window_hours`` complete hours and re-splits them."""
+    """Fetches every complete hour since the last covered one and re-splits them.
+
+    The range starts ``REFETCH_HOURS`` before the hour the previous sync
+    covered up to (the start of the previous month on the first sync), so
+    downtime of any length is filled in; it is fetched in 7-day chunks.
+    """
     ensure_modal_billing_tables(db)
     engine = _engine_of(db)
     now = now_ms if now_ms is not None else int(time.time() * 1000)
     end_ms = now - now % HOUR_MS
-    start_ms = end_ms - window_hours * HOUR_MS
     with engine.connect() as conn:
         status = _read_status(conn) or {}
+    covered_until = status.get("coveredUntil")
+    if isinstance(covered_until, int):
+        start_ms = min(covered_until, end_ms) - REFETCH_HOURS * HOUR_MS
+    else:
+        start_ms = _backfill_start_ms(end_ms)
     status["lastAttemptAt"] = now
     try:
-        fetched = await fetch(_dt(start_ms), _dt(end_ms))
+        fetched: list[ModalBillingHour] = []
+        chunk_start = start_ms
+        while chunk_start < end_ms:
+            chunk_end = min(chunk_start + CHUNK_MS, end_ms)
+            fetched.extend(await fetch(_dt(chunk_start), _dt(chunk_end)))
+            chunk_start = chunk_end
     except Exception as exc:
         status["lastError"] = str(exc) or type(exc).__name__
         with engine.begin() as conn:
@@ -189,7 +212,15 @@ async def reconcile_modal_billing(
                 },
             )
         attributed = _attribute(conn, hours, start_ms, end_ms, now)
-        status.update({"lastSyncedAt": now, "lastError": None})
+        covered_from = status.get("coveredFrom")
+        status.update(
+            {
+                "lastSyncedAt": now,
+                "lastError": None,
+                "coveredFrom": min(covered_from, start_ms) if isinstance(covered_from, int) else start_ms,
+                "coveredUntil": end_ms,
+            }
+        )
         _write_status(conn, status)
     return {"status": "ok", "hours": len(hours), "attributedRows": attributed}
 
@@ -251,6 +282,7 @@ def get_modal_billing_summary(
         "lastSyncedAt": status.get("lastSyncedAt"),
         "lastAttemptAt": status.get("lastAttemptAt"),
         "lastError": status.get("lastError"),
+        "coveredFrom": status.get("coveredFrom"),
     }
 
 

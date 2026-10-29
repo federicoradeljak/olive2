@@ -2066,6 +2066,11 @@ export interface components {
              * @default null
              */
             lastError: string | null;
+            /**
+             * Coveredfrom
+             * @default null
+             */
+            coveredFrom: number | null;
         };
         /** UsageSummary */
         UsageSummary: {

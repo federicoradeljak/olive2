@@ -714,6 +714,8 @@ class ModalBillingSummary(CamelModel):
     lastSyncedAt: int | None = None
     lastAttemptAt: int | None = None
     lastError: str | None = None
+    # Billed hours are only known from here on (earlier spend is estimate-only).
+    coveredFrom: int | None = None
 
 
 class UsageSummary(CamelModel):
