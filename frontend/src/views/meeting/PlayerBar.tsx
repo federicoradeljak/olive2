@@ -68,7 +68,9 @@ export function PlayerBar({
   const [durationMs, setDurationMs] = useState<number | null>(null);
   const [rate, setRate] = useState<number>(1);
   const rateRef = useRef(rate);
-  rateRef.current = rate;
+  useEffect(() => {
+    rateRef.current = rate;
+  }, [rate]);
 
   useEffect(() => {
     if (!audio) return;

@@ -40,6 +40,7 @@ export function MeetingTitle({
   }, [editing]);
 
   const commit = async () => {
+    if (saving) return;
     const next = draft.trim();
     if (!next || next === title) {
       onEditingChange(false);
