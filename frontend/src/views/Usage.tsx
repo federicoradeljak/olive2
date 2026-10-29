@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ReactElement } from "react";
-import type { UsageMeetingBreakdown, UsageProviderBreakdown, UsageSummary } from "../api/types.ts";
+import type { ModalBillingSummary, UsageMeetingBreakdown, UsageProviderBreakdown, UsageSummary } from "../api/types.ts";
 
 export function formatLogTimestamp(timestamp: number): string {
   const d = new Date(timestamp);
@@ -72,6 +72,20 @@ async function fetchUsage(params: string): Promise<UsageSummary> {
   return (await res.json()) as UsageSummary;
 }
 
+function combineModalBilling(a: ModalBillingSummary | null | undefined, b: ModalBillingSummary): ModalBillingSummary {
+  if (!a) return { ...b };
+  return {
+    // Sync status is global, identical in every month's summary.
+    ...b,
+    billedUsd: (a.billedUsd ?? 0) + (b.billedUsd ?? 0),
+    attributedUsd: (a.attributedUsd ?? 0) + (b.attributedUsd ?? 0),
+    unattributedUsd: (a.unattributedUsd ?? 0) + (b.unattributedUsd ?? 0),
+    reconciledEvents: (a.reconciledEvents ?? 0) + (b.reconciledEvents ?? 0),
+    pendingEvents: (a.pendingEvents ?? 0) + (b.pendingEvents ?? 0),
+    estimatedReconciledUsd: (a.estimatedReconciledUsd ?? 0) + (b.estimatedReconciledUsd ?? 0),
+  };
+}
+
 /* Merges per-month summaries into one (used for the 6-month period). */
 function combineSummaries(parts: UsageSummary[]): UsageSummary {
   const providers = new Map<string, UsageProviderBreakdown>();
@@ -90,6 +104,7 @@ function combineSummaries(parts: UsageSummary[]): UsageSummary {
     byProvider: [],
     byMeeting: [],
     rates: null,
+    modalBilling: null,
   };
   for (const s of parts) {
     if (s.startAt != null) total.startAt = total.startAt == null ? s.startAt : Math.min(total.startAt, s.startAt);
@@ -103,6 +118,7 @@ function combineSummaries(parts: UsageSummary[]): UsageSummary {
     total.totalCostUsd += s.totalCostUsd ?? 0;
     total.eventCount += s.eventCount ?? 0;
     total.rates = s.rates ?? total.rates;
+    if (s.modalBilling) total.modalBilling = combineModalBilling(total.modalBilling, s.modalBilling);
     for (const p of s.byProvider ?? []) {
       const cur = providers.get(p.provider);
       if (!cur) {
@@ -131,6 +147,7 @@ function combineSummaries(parts: UsageSummary[]): UsageSummary {
       cur.llmCostUsd += m.llmCostUsd ?? 0;
       cur.totalCostUsd += m.totalCostUsd ?? 0;
       cur.eventCount += m.eventCount ?? 0;
+      if (m.modalBilledUsd != null) cur.modalBilledUsd = (cur.modalBilledUsd ?? 0) + m.modalBilledUsd;
     }
   }
   total.byProvider = [...providers.values()].sort((a, b) => b.costUsd - a.costUsd);
@@ -256,6 +273,22 @@ function providerAmount(p: UsageProviderBreakdown): string {
   return parts.join(" · ") || "—";
 }
 
+/* "Billed by Modal" line under the Modal provider row. */
+function modalBillingNote(b: ModalBillingSummary, rangeStart: number | null | undefined): string {
+  const runs = (b.reconciledEvents ?? 0) + (b.pendingEvents ?? 0);
+  // Hours before the first sync's backfill were never fetched: say so instead of looking complete.
+  const partial = b.coveredFrom != null && (rangeStart == null || b.coveredFrom > rangeStart);
+  return [
+    partial ? `billing data since ${shortDate(b.coveredFrom!)}` : null,
+    `billed by Modal ${formatUsageUsd(b.billedUsd)}`,
+    (b.reconciledEvents ?? 0) > 0 ? `vs ${formatUsageUsd(b.estimatedReconciledUsd)} estimated` : null,
+    (b.unattributedUsd ?? 0) > 0 ? `${formatUsageUsd(b.unattributedUsd)} idle/unmatched` : null,
+    runs > 0 ? `${b.reconciledEvents} of ${runs} runs reconciled` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 function shortDate(ts: number): string {
   const d = new Date(ts);
   const sameYear = d.getFullYear() === new Date().getFullYear();
@@ -272,6 +305,7 @@ export function UsageView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
   const [allTime, setAllTime] = useState<UsageSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showAllMeetings, setShowAllMeetings] = useState(false);
+  const [modalSync, setModalSync] = useState<string | null>(null);
 
   const chartEnd = period === "custom" ? customMonth : currentMonth;
   const chartLen = period === "all" ? 12 : 6;
@@ -332,6 +366,24 @@ export function UsageView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
   const rates = (summary ?? Object.values(monthData).find(Boolean) ?? allTime)?.rates?.transcriptionUsdPerHour;
   const byProvider = summary?.byProvider ?? [];
   const byMeeting = summary?.byMeeting ?? [];
+  const modalBilling = summary?.modalBilling ?? null;
+
+  async function syncModalBilling(): Promise<void> {
+    setModalSync("Syncing Modal billing…");
+    try {
+      const res = await fetch("/api/usage/modal/reconcile", { method: "POST" });
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      // The sync runs in the background queue; reload once it has had time to finish.
+      setTimeout(() => {
+        setMonthData({});
+        setAllTime(null);
+        setModalSync(null);
+      }, 8000);
+    } catch (exc) {
+      setModalSync(exc instanceof Error ? exc.message : "Modal billing sync failed");
+    }
+  }
   const meetingsShown = showAllMeetings ? byMeeting : byMeeting.slice(0, MEETINGS_PREVIEW);
   const rateNote = rates
     ? Object.entries(rates)
@@ -428,12 +480,35 @@ export function UsageView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
                     <span className="flex min-w-0 flex-col">
                       <span className="truncate font-medium">{p.provider}</span>
                       {(p.kinds ?? []).length > 0 && <span className="truncate text-xs text-base-content/50">{(p.kinds ?? []).join(", ")}</span>}
+                      {p.provider === "modal" && modalBilling && (
+                        <span className="text-xs text-base-content/50">{modalBillingNote(modalBilling, summary.startAt)}</span>
+                      )}
                     </span>
                     <span className="text-right text-[13px] text-base-content/60">{providerAmount(p)}</span>
                     <span className="text-right font-medium tabular-nums">{formatUsageUsd(p.costUsd)}</span>
                   </li>
                 ))}
               </ul>
+            )}
+            {(modalBilling || byProvider.some((p) => p.provider === "modal")) && (
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-base-content/60">
+                <span>
+                  {modalSync ??
+                    (modalBilling?.lastError
+                      ? `Modal billing sync failed: ${modalBilling.lastError}`
+                      : modalBilling?.lastSyncedAt
+                        ? `Modal billing synced ${new Date(modalBilling.lastSyncedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`
+                        : "Modal billing not synced yet")}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void syncModalBilling()}
+                  disabled={modalSync !== null}
+                  className="inline-flex min-h-11 items-center rounded-md px-2 text-base-content/70 hover:bg-hover hover:text-base-content disabled:opacity-50 sm:min-h-7"
+                >
+                  Refresh
+                </button>
+              </div>
             )}
           </section>
 
@@ -459,6 +534,7 @@ export function UsageView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
                             {[
                               (m.audioSeconds ?? 0) > 0 ? `${formatUsageHours(m.audioSeconds)} audio` : null,
                               `transcription ${formatUsageUsd(m.transcriptionCostUsd)}`,
+                              m.modalBilledUsd != null ? `Modal billed ${formatUsageUsd(m.modalBilledUsd)}` : null,
                               `LLM ${formatUsageUsd(m.llmCostUsd)} (${formatUsageTokens(m.totalTokens)})`,
                             ]
                               .filter(Boolean)
@@ -487,7 +563,8 @@ export function UsageView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
       )}
 
       <p className="text-xs text-base-content/60">
-        Estimates, not invoices.{rateNote ? ` Transcription rates: ${rateNote}.` : ""} LLM per-token rates vary by model (see the AI
+        Estimates, not invoices.{rateNote ? ` Transcription rates: ${rateNote}.` : ""} Modal totals use GPU-time estimates; the
+        amount Modal billed (GPU, CPU, memory and idle time, split across each hour&apos;s runs) is shown alongside once synced. LLM per-token rates vary by model (see the AI
         model picker for per-model pricing). Summary LLM usage is tracked from the usage-tracking update onward; older summaries
         predate it, while transcription and chat history were backfilled.
       </p>

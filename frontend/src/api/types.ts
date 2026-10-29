@@ -34,6 +34,7 @@ export type UsageProviderBreakdown = OpenApiSchemas["UsageProviderBreakdown"];
 export type UsageMeetingBreakdown = OpenApiSchemas["UsageMeetingBreakdown"];
 export type UsageRates = OpenApiSchemas["UsageRates"];
 export type UsageSummary = OpenApiSchemas["UsageSummary"];
+export type ModalBillingSummary = OpenApiSchemas["ModalBillingSummary"];
 export type MeetingUsageResponse = OpenApiSchemas["MeetingUsageResponse"];
 export type RapidEnrollCandidateSample = OpenApiSchemas["RapidEnrollCandidateSample"];
 export type RapidEnrollCandidateGroup = OpenApiSchemas["RapidEnrollCandidateGroup"];
