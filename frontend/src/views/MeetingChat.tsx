@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactElement } from "react";
-import { ArrowUp, Copy, Square, X } from "lucide-react";
+import { ArrowUp, Copy, Square } from "lucide-react";
 import { ActionBarPrimitive, AssistantRuntimeProvider, ComposerPrimitive, MessagePrimitive, ThreadPrimitive, useLocalRuntime, type ChatModelAdapter, type ThreadMessageLike } from "@assistant-ui/react";
 import { confirmAction, notify } from "../components/ui";
 import type { ChatMessage } from "../api/types.ts";
@@ -34,13 +34,6 @@ export function parseChatStreamBlock(block: string): { event: string; data: stri
     if (line.startsWith("data:")) data += line.slice(5).trim();
   }
   return data ? { event, data } : null;
-}
-
-export function ChatTitleReporter({ title, onChatTitle }: { title: string; onChatTitle: (title: string) => void }): ReactElement | null {
-  useEffect(() => {
-    onChatTitle(title);
-  }, [title, onChatTitle]);
-  return null;
 }
 
 /** Prompts offered above the composer; clicking one sends it right away. */
@@ -107,45 +100,6 @@ async function clearChatHistory(meetingId: string): Promise<boolean> {
     notify("error", error instanceof Error ? error.message : String(error));
     return false;
   }
-}
-
-/** Drawer variant (App-level overlay). */
-export function MeetingChatPanel({ meetingId, meetingTitle, onClose }: { meetingId: string; meetingTitle: string; onClose: () => void }): ReactElement {
-  const { initialMessages, loading, loadError, version } = useChatHistory(meetingId);
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
-
-  return (
-    <aside className="flex h-full w-full max-w-xl flex-col bg-base-100" role="dialog" aria-modal="true" aria-label={`Chat with ${meetingTitle}`}>
-      <div className="flex items-center justify-between gap-2 border-b border-divider px-4 py-2.5">
-        <div className="min-w-0">
-          <h2 className="font-semibold">Chat</h2>
-          <p className="truncate text-xs text-base-content/50">{meetingTitle}</p>
-        </div>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={async () => {
-              if (await clearChatHistory(meetingId)) onClose();
-            }}
-            className="btn btn-ghost btn-sm min-h-11"
-          >
-            New chat
-          </button>
-          <button type="button" onClick={onClose} className="btn btn-ghost btn-square min-h-11 min-w-11" aria-label="Close chat">
-            <X className="h-4 w-4 shrink-0" aria-hidden="true" />
-          </button>
-        </div>
-      </div>
-      <ChatBody meetingId={meetingId} loading={loading} loadError={loadError} initialMessages={initialMessages} version={version} />
-    </aside>
-  );
 }
 
 /** Inline variant for the meeting side panel and the mobile Chat tab. */

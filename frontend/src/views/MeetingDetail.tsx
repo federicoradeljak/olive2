@@ -4,7 +4,7 @@ import { ChevronLeft, CircleAlert, ClipboardCopy, Download, Ellipsis, FileText, 
 import { confirmAction, notify } from "../components/ui";
 import type { MeetingListItem, MeetingUsageResponse, SummaryGenerationStatus, SpeakerReidentificationStatus, TranscriptionProgressUpdate } from "../api/types.ts";
 import { MeetingDetailResponse, SpeakerWithStats } from "../lib/common";
-import { ChatTitleReporter, MeetingChatInline } from "./MeetingChat";
+import { MeetingChatInline } from "./MeetingChat";
 import {
   GenerateSummaryModal,
   MergeMeetingModal,
@@ -56,17 +56,13 @@ export function MeetingDetailView({
   knownSpeakers,
   onBack,
   onDeleted,
-  onSpeakerUpdated,
-  onChatTitle
+  onSpeakerUpdated
 }: {
   meetingId: string;
   knownSpeakers: SpeakerWithStats[];
   onBack: () => void;
   onDeleted: () => void;
   onSpeakerUpdated: () => void;
-  /** Kept for App compatibility; chat now lives in the page's side panel. */
-  onChatOpenChange: (open: boolean) => void;
-  onChatTitle: (title: string) => void;
 }): ReactElement {
   const isDesktop = useMediaQuery("(min-width: 1024px)");
   const modelNames = useModelNames();
@@ -1321,7 +1317,6 @@ export function MeetingDetailView({
       })()}
 
       {/* Keeps App's (legacy) chat drawer header in sync. */}
-      <ChatTitleReporter title={meeting.title} onChatTitle={onChatTitle} />
     </>
   );
 

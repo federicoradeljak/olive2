@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ReactElement } from "react";
-import type { MeetingUsageResponse, UsageMeetingBreakdown, UsageProviderBreakdown, UsageSummary } from "../api/types.ts";
+import type { UsageMeetingBreakdown, UsageProviderBreakdown, UsageSummary } from "../api/types.ts";
 
 export function formatLogTimestamp(timestamp: number): string {
   const d = new Date(timestamp);
@@ -495,33 +495,3 @@ export function UsageView({ onSelectMeeting }: { onSelectMeeting: (id: string) =
   );
 }
 
-export function MeetingUsageLine({ meetingId }: { meetingId: string }): ReactElement | null {
-  const [usage, setUsage] = useState<MeetingUsageResponse | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const res = await fetch(`/api/meetings/${meetingId}/usage`);
-        if (res.ok) {
-          const data = (await res.json()) as MeetingUsageResponse;
-          if (!cancelled) setUsage(data);
-        }
-      } catch {
-        // Usage is informational; never break the meeting view.
-      }
-    };
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [meetingId]);
-  if (!usage || usage.eventCount === 0) return null;
-  return (
-    <div className="mt-2 text-xs sm:text-sm text-base-content/70" title="Estimated cloud spend for this meeting (transcription billed per audio hour, LLM per token).">
-      Cost ≈ <span className="font-semibold text-base-content">{formatUsageUsd(usage.totalCostUsd)}</span>
-      <span className="text-base-content/50">
-        {" "}(transcription {formatUsageUsd(usage.transcriptionCostUsd)} · LLM {formatUsageUsd(usage.llmCostUsd)})
-      </span>
-    </div>
-  );
-}

@@ -18,7 +18,6 @@ import { ThemeToggle, useTheme } from "./components/ui";
 import { CommandPalette, type PaletteAction } from "./components/CommandPalette";
 import { JobsIndicator, useJobsSnapshot } from "./components/JobsIndicator";
 import { SpeakerWithStats, isGenericSpeakerLabel, PlaudStatus, formatDate } from "./lib/common";
-import { MeetingChatPanel } from "./views/MeetingChat";
 import { ChangelogModal } from "./views/AppModals";
 import { MeetingsListView } from "./views/MeetingsList";
 import { MeetingDetailView } from "./views/MeetingDetail";
@@ -132,10 +131,6 @@ export function App(): ReactElement {
   // Bumped after an app-level upload so the meetings list reloads.
   const [meetingsVersion, setMeetingsVersion] = useState(0);
 
-  // Meeting chat drawer (App-level so it overlays nav + content via drawer-side)
-  const [chatOpen, setChatOpen] = useState(false);
-  const [chatTitle, setChatTitle] = useState("");
-
   const jobsSnapshot = useJobsSnapshot();
   const { theme, setPreference } = useTheme();
 
@@ -143,7 +138,6 @@ export function App(): ReactElement {
 
   const navigate = useCallback((path: string) => {
     setRoute(parseLocation(path));
-    setChatOpen(false);
     setSidebarOpen(false);
     if (typeof window !== "undefined" && window.location.pathname !== path) {
       window.history.pushState({}, "", path);
@@ -337,122 +331,103 @@ export function App(): ReactElement {
     activeTab === "activity" ? "Activity" : activeTab === "usage" ? "Usage" : activeTab === "settings" ? "Settings" : null;
 
   return (
-    <div className="drawer drawer-end w-full">
-      <input
-        id="olive-chat-drawer"
-        type="checkbox"
-        className="drawer-toggle"
-        checked={chatOpen}
-        onChange={(e) => setChatOpen(e.target.checked)}
-      />
-      <div className="drawer-content min-h-screen w-full overflow-x-clip bg-base-100 text-base-content selection:bg-primary/25">
-        {/* Desktop sidebar */}
-        <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 border-r border-divider bg-base-200 lg:block">{sidebar}</aside>
+    <div className="min-h-screen w-full overflow-x-clip bg-base-100 text-base-content selection:bg-primary/25">
+      {/* Desktop sidebar */}
+      <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 border-r border-divider bg-base-200 lg:block">{sidebar}</aside>
 
-        {/* Mobile/tablet sidebar drawer */}
-        {sidebarOpen && (
-          <div className="fixed inset-0 z-50 lg:hidden">
-            <button type="button" aria-label="Close menu" className="absolute inset-0 bg-black/40" onClick={() => setSidebarOpen(false)} />
-            <aside className="absolute inset-y-0 left-0 w-72 max-w-[85vw] bg-base-200 shadow-pop pt-safe">{sidebar}</aside>
-          </div>
-        )}
+      {/* Mobile/tablet sidebar drawer */}
+      {sidebarOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden">
+          <button type="button" aria-label="Close menu" className="absolute inset-0 bg-black/40" onClick={() => setSidebarOpen(false)} />
+          <aside className="absolute inset-y-0 left-0 w-72 max-w-[85vw] bg-base-200 shadow-pop pt-safe">{sidebar}</aside>
+        </div>
+      )}
 
-        {/* Mobile header */}
-        <header className="sticky top-0 z-20 flex items-center gap-1 border-b border-divider bg-base-100/90 px-2 py-1.5 backdrop-blur pt-safe lg:hidden">
-          <button type="button" aria-label="Open menu" onClick={() => setSidebarOpen(true)} className="btn btn-ghost btn-square">
-            <Menu className="h-5 w-5" aria-hidden="true" />
-          </button>
-          <span className="flex-1" />
-          <JobsIndicator
-            snapshot={jobsSnapshot}
-            variant="pill"
-            onOpenActivity={() => navigate("/activity")}
-            onSelectMeeting={selectMeeting}
-          />
-          <button type="button" aria-label="Search" onClick={() => setPaletteOpen(true)} className="btn btn-ghost btn-square">
-            <Search className="h-5 w-5" aria-hidden="true" />
-          </button>
-        </header>
+      {/* Mobile header */}
+      <header className="sticky top-0 z-20 flex items-center gap-1 border-b border-divider bg-base-100/90 px-2 py-1.5 backdrop-blur pt-safe lg:hidden">
+        <button type="button" aria-label="Open menu" onClick={() => setSidebarOpen(true)} className="btn btn-ghost btn-square">
+          <Menu className="h-5 w-5" aria-hidden="true" />
+        </button>
+        <span className="flex-1" />
+        <JobsIndicator
+          snapshot={jobsSnapshot}
+          variant="pill"
+          onOpenActivity={() => navigate("/activity")}
+          onSelectMeeting={selectMeeting}
+        />
+        <button type="button" aria-label="Search" onClick={() => setPaletteOpen(true)} className="btn btn-ghost btn-square">
+          <Search className="h-5 w-5" aria-hidden="true" />
+        </button>
+      </header>
 
-        <main className="min-w-0 lg:pl-60">
-          <div
-            className={`mx-auto w-full min-w-0 px-4 pt-5 pb-[calc(6rem+env(safe-area-inset-bottom))] sm:px-8 lg:pb-16 ${
-              selectedMeetingId ? "max-w-none lg:px-0 lg:pt-0" : "max-w-6xl lg:px-14 lg:pt-10"
-            }`}
-          >
-            {pageTitle && <h1 className="mb-6 text-3xl font-bold tracking-tight sm:text-4xl">{pageTitle}</h1>}
-            {selectedMeetingId ? (
-              <MeetingDetailView
-                meetingId={selectedMeetingId}
-                knownSpeakers={knownSpeakers}
-                onBack={() => navigate("/meetings")}
-                onDeleted={() => navigate("/meetings")}
-                onSpeakerUpdated={() => void refreshSpeakers()}
-                onChatOpenChange={setChatOpen}
-                onChatTitle={setChatTitle}
-              />
-            ) : activeTab === "meetings" ? (
-              <MeetingsListView key={meetingsVersion} onSelectMeeting={selectMeeting} />
-            ) : activeTab === "speakers" ? (
-              <SpeakersListView speakers={knownSpeakers} onRefresh={() => void refreshSpeakers()} onSelectMeeting={selectMeeting} />
-            ) : activeTab === "templates" ? (
-              <TemplatesListView />
-            ) : activeTab === "activity" ? (
-              <ActivityView tab={route.activityTab} onNavigateTab={(t) => navigate(t === "logs" ? "/activity/logs" : "/activity")} onSelectMeeting={selectMeeting} />
-            ) : activeTab === "usage" ? (
-              <UsageView onSelectMeeting={selectMeeting} />
-            ) : (
-              <SettingsView
-                section={route.settingsSection}
-                onNavigateSection={(s) => navigate(`/settings/${s}`)}
-                plaudStatus={plaudStatus}
-                onRefreshPlaud={() => void refreshPlaudStatus()}
-                onSettingsSaved={() => undefined}
-                onRestoreComplete={() => void refreshSpeakers()}
-              />
-            )}
-          </div>
-        </main>
-
-        {/* Mobile bottom nav */}
-        <nav aria-label="Primary" className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-divider bg-base-100 px-1 pt-1.5 pb-safe lg:hidden">
-          {mobileNav.map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              aria-current={item.active ? "page" : undefined}
-              onClick={item.onClick}
-              className={`flex min-h-[52px] flex-col items-center justify-center gap-0.5 text-[11px] ${item.active ? "font-semibold text-primary" : "text-base-content/60"}`}
-            >
-              <span className={`flex h-7 w-10 items-center justify-center rounded-full ${item.active ? "bg-primary/15" : ""}`}>{item.icon}</span>
-              {item.label}
-            </button>
-          ))}
-        </nav>
-
-        <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onSelectMeeting={selectMeeting} actions={paletteActions} />
-
-        {showUploadModal && (
-          <UploadAudioModal
-            onClose={() => setShowUploadModal(false)}
-            onUploaded={(id) => {
-              setShowUploadModal(false);
-              setMeetingsVersion((v) => v + 1);
-              selectMeeting(id);
-            }}
-          />
-        )}
-
-        {showChangelogModal && <ChangelogModal onClose={() => setShowChangelogModal(false)} />}
-      </div>
-      <div className="drawer-side z-50">
-        <label htmlFor="olive-chat-drawer" aria-label="Close chat" className="drawer-overlay" />
-        <div className="min-h-full w-full max-w-xl bg-base-100 shadow-2xl">
-          {chatOpen && selectedMeetingId && (
-            <MeetingChatPanel meetingId={selectedMeetingId} meetingTitle={chatTitle || "Meeting"} onClose={() => setChatOpen(false)} />
+      <main className="min-w-0 lg:pl-60">
+        <div
+          className={`mx-auto w-full min-w-0 px-4 pt-5 pb-[calc(6rem+env(safe-area-inset-bottom))] sm:px-8 lg:pb-16 ${
+            selectedMeetingId ? "max-w-none lg:px-0 lg:pt-0" : "max-w-6xl lg:px-14 lg:pt-10"
+          }`}
+        >
+          {pageTitle && <h1 className="mb-6 text-3xl font-bold tracking-tight sm:text-4xl">{pageTitle}</h1>}
+          {selectedMeetingId ? (
+            <MeetingDetailView
+              meetingId={selectedMeetingId}
+              knownSpeakers={knownSpeakers}
+              onBack={() => navigate("/meetings")}
+              onDeleted={() => navigate("/meetings")}
+              onSpeakerUpdated={() => void refreshSpeakers()}
+            />
+          ) : activeTab === "meetings" ? (
+            <MeetingsListView key={meetingsVersion} onSelectMeeting={selectMeeting} />
+          ) : activeTab === "speakers" ? (
+            <SpeakersListView speakers={knownSpeakers} onRefresh={() => void refreshSpeakers()} onSelectMeeting={selectMeeting} />
+          ) : activeTab === "templates" ? (
+            <TemplatesListView />
+          ) : activeTab === "activity" ? (
+            <ActivityView tab={route.activityTab} onNavigateTab={(t) => navigate(t === "logs" ? "/activity/logs" : "/activity")} onSelectMeeting={selectMeeting} />
+          ) : activeTab === "usage" ? (
+            <UsageView onSelectMeeting={selectMeeting} />
+          ) : (
+            <SettingsView
+              section={route.settingsSection}
+              onNavigateSection={(s) => navigate(`/settings/${s}`)}
+              plaudStatus={plaudStatus}
+              onRefreshPlaud={() => void refreshPlaudStatus()}
+              onSettingsSaved={() => undefined}
+              onRestoreComplete={() => void refreshSpeakers()}
+            />
           )}
         </div>
-      </div>
+      </main>
+
+      {/* Mobile bottom nav */}
+      <nav aria-label="Primary" className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-divider bg-base-100 px-1 pt-1.5 pb-safe lg:hidden">
+        {mobileNav.map((item) => (
+          <button
+            key={item.key}
+            type="button"
+            aria-current={item.active ? "page" : undefined}
+            onClick={item.onClick}
+            className={`flex min-h-[52px] flex-col items-center justify-center gap-0.5 text-[11px] ${item.active ? "font-semibold text-primary" : "text-base-content/60"}`}
+          >
+            <span className={`flex h-7 w-10 items-center justify-center rounded-full ${item.active ? "bg-primary/15" : ""}`}>{item.icon}</span>
+            {item.label}
+          </button>
+        ))}
+      </nav>
+
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onSelectMeeting={selectMeeting} actions={paletteActions} />
+
+      {showUploadModal && (
+        <UploadAudioModal
+          onClose={() => setShowUploadModal(false)}
+          onUploaded={(id) => {
+            setShowUploadModal(false);
+            setMeetingsVersion((v) => v + 1);
+            selectMeeting(id);
+          }}
+        />
+      )}
+
+      {showChangelogModal && <ChangelogModal onClose={() => setShowChangelogModal(false)} />}
     </div>
   );
 }
