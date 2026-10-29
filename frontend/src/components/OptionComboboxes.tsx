@@ -22,31 +22,31 @@ export const TRANSCRIBE_PROVIDER_OPTIONS: ComboboxOption[] = [
     value: "assemblyai",
     label: "AssemblyAI (Cloud)",
     keywords: "cloud",
-    icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-info" aria-hidden="true" />,
+    icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-base-content/50" aria-hidden="true" />,
   },
   {
     value: "muse",
     label: "Muse Voice (Cloud)",
     keywords: "cloud meta",
-    icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-info" aria-hidden="true" />,
+    icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-base-content/50" aria-hidden="true" />,
   },
   {
     value: "speechmatics",
     label: "Speechmatics (Cloud)",
     keywords: "cloud",
-    icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-info" aria-hidden="true" />,
+    icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-base-content/50" aria-hidden="true" />,
   },
   {
     value: "modal",
     label: "Modal GPU (Local pipeline in the cloud)",
     keywords: "cloud gpu modal whisper cohere",
-    icon: <Zap className="h-3.5 w-3.5 shrink-0 text-warning" aria-hidden="true" />,
+    icon: <Zap className="h-3.5 w-3.5 shrink-0 text-base-content/50" aria-hidden="true" />,
   },
   {
     value: "local",
     label: "Local (Cohere + Diarization)",
     keywords: "local on-device cohere",
-    icon: <Cpu className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden="true" />,
+    icon: <Cpu className="h-3.5 w-3.5 shrink-0 text-base-content/50" aria-hidden="true" />,
   },
 ];
 
@@ -75,31 +75,31 @@ export const ENGINE_OPTIONS: ComboboxOption[] = [
     value: "local:cohere",
     label: "Local (Cohere + Diarization) (Default)",
     keywords: "local on-device default",
-    icon: <Cpu className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden="true" />,
+    icon: <Cpu className="h-3.5 w-3.5 shrink-0 text-base-content/50" aria-hidden="true" />,
   },
   {
     value: "speechmatics",
     label: "Speechmatics (Cloud)",
     keywords: "cloud",
-    icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-info" aria-hidden="true" />,
+    icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-base-content/50" aria-hidden="true" />,
   },
   {
     value: "assemblyai",
     label: "AssemblyAI (Cloud)",
     keywords: "cloud",
-    icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-info" aria-hidden="true" />,
+    icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-base-content/50" aria-hidden="true" />,
   },
   {
     value: "muse",
     label: "Muse Voice (Cloud)",
     keywords: "cloud meta",
-    icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-info" aria-hidden="true" />,
+    icon: <Cloud className="h-3.5 w-3.5 shrink-0 text-base-content/50" aria-hidden="true" />,
   },
   {
     value: "modal",
     label: "Modal GPU (Local pipeline in the cloud)",
     keywords: "cloud gpu modal whisper cohere",
-    icon: <Zap className="h-3.5 w-3.5 shrink-0 text-warning" aria-hidden="true" />,
+    icon: <Zap className="h-3.5 w-3.5 shrink-0 text-base-content/50" aria-hidden="true" />,
   },
 ];
 
@@ -210,7 +210,7 @@ export function modelOptions(models: ModelLike[]): ComboboxOption[] {
         .join(" · ") || undefined,
     keywords: `${m.id} ${m.reasoning ? "reasoning thinking" : ""}`,
     icon: m.reasoning ? (
-      <Brain className="h-3.5 w-3.5 shrink-0 text-violet-300" aria-hidden="true" />
+      <Brain className="h-3.5 w-3.5 shrink-0 text-[color:var(--tag-purple)]" aria-hidden="true" />
     ) : undefined,
   }));
 }
@@ -218,7 +218,8 @@ export function modelOptions(models: ModelLike[]): ComboboxOption[] {
 export function thinkingLevelOptions(levels: string[]): ComboboxOption[] {
   return levels.map((lvl) => ({
     value: lvl,
-    label: lvl === "off" ? "Off (Standard Response)" : `${lvl.charAt(0).toUpperCase() + lvl.slice(1)} Thinking`,
+    label: lvl === "off" ? "Off" : lvl === "xhigh" ? "Extra high" : lvl.charAt(0).toUpperCase() + lvl.slice(1),
+    description: lvl === "off" ? "Standard response, fastest" : undefined,
   }));
 }
 
@@ -252,7 +253,7 @@ export const LOG_LEVEL_OPTIONS: ComboboxOption[] = [
   {
     value: "info",
     label: "INFO and above",
-    icon: <Info className="h-3.5 w-3.5 shrink-0 text-info" aria-hidden="true" />,
+    icon: <Info className="h-3.5 w-3.5 shrink-0 text-base-content/50" aria-hidden="true" />,
   },
   {
     value: "warn",
@@ -277,12 +278,12 @@ export function logCategoryOptions(categories: string[]): ComboboxOption[] {
   ];
 }
 
-/** Reasoning-level label with a Lucide Brain mark (replaces the 🧠 emoji). */
+/** Reasoning-level label with a Lucide Brain mark. */
 export function ThinkingLabel(): ReactElement {
   return (
     <span className="inline-flex items-center gap-1.5">
-      <Brain className="h-3.5 w-3.5 text-violet-300" aria-hidden="true" />
-      <span>Thinking / Reasoning Level</span>
+      <Brain className="h-3.5 w-3.5 text-[color:var(--tag-purple)]" aria-hidden="true" />
+      <span>Thinking</span>
     </span>
   );
 }

@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import type { ReactElement } from "react";
+import type { CSSProperties, ReactElement } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import type { MeetingDetailAggregate, MeetingListItem, Speaker } from "../api/types.ts";
@@ -74,6 +74,28 @@ marked.setOptions({
   breaks: true
 });
 
+/* Prose colors come from the active daisyUI theme so Markdown reads the same
+   in light and dark (Notion-like: neutral text, olive links, gray code chips). */
+const PROSE_THEME_VARS = {
+  "--tw-prose-body": "color-mix(in oklab, var(--color-base-content) 92%, transparent)",
+  "--tw-prose-headings": "var(--color-base-content)",
+  "--tw-prose-lead": "var(--color-base-content)",
+  "--tw-prose-links": "var(--color-primary)",
+  "--tw-prose-bold": "var(--color-base-content)",
+  "--tw-prose-counters": "color-mix(in oklab, var(--color-base-content) 55%, transparent)",
+  "--tw-prose-bullets": "color-mix(in oklab, var(--color-base-content) 55%, transparent)",
+  "--tw-prose-hr": "var(--divider)",
+  "--tw-prose-quotes": "var(--color-base-content)",
+  "--tw-prose-quote-borders": "var(--color-base-content)",
+  "--tw-prose-captions": "color-mix(in oklab, var(--color-base-content) 60%, transparent)",
+  "--tw-prose-kbd": "var(--color-base-content)",
+  "--tw-prose-code": "var(--tag-red)",
+  "--tw-prose-pre-code": "var(--color-base-content)",
+  "--tw-prose-pre-bg": "var(--color-base-200)",
+  "--tw-prose-th-borders": "color-mix(in oklab, var(--color-base-content) 16%, transparent)",
+  "--tw-prose-td-borders": "var(--divider)",
+} as CSSProperties;
+
 export function MarkdownRenderer({ content, className = "" }: { content: string; className?: string }): ReactElement {
   const renderedHtml = useMemo(() => {
     if (!content) return "";
@@ -89,7 +111,8 @@ export function MarkdownRenderer({ content, className = "" }: { content: string;
 
   return (
     <div
-      className={`prose prose-invert prose-stone max-w-none text-base-content prose-headings:font-semibold prose-headings:tracking-tight prose-headings:text-base-content prose-h1:text-xl prose-h1:border-b prose-h1:border-base-300 prose-h1:pb-2 prose-h2:text-lg prose-h2:border-b prose-h2:border-base-300/60 prose-h2:pb-1.5 prose-h3:text-base prose-h4:text-sm prose-p:leading-relaxed prose-p:my-3 prose-ul:my-2 prose-ul:list-disc prose-ol:my-2 prose-ol:list-decimal prose-li:my-1 prose-a:text-primary hover:prose-a:text-primary prose-strong:text-base-content prose-blockquote:border-l-2 prose-blockquote:border-primary/40 prose-blockquote:bg-base-200/60 prose-blockquote:py-1 prose-blockquote:px-4 prose-blockquote:rounded-r prose-blockquote:text-base-content prose-blockquote:not-italic prose-code:text-primary prose-code:bg-base-300/90 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:font-mono prose-code:text-xs prose-code:before:content-none prose-code:after:content-none prose-pre:bg-base-100 prose-pre:border prose-pre:border-base-300 prose-pre:rounded-xl prose-table:my-4 prose-table:w-full prose-table:text-left prose-th:border-b prose-th:border-base-300 prose-th:py-2 prose-th:px-3 prose-th:text-base-content prose-th:font-semibold prose-td:border-b prose-td:border-base-300 prose-td:py-2 prose-td:px-3 prose-hr:border-base-300 ${className}`}
+      style={PROSE_THEME_VARS}
+      className={`prose max-w-none text-[15px] leading-relaxed text-base-content prose-headings:font-semibold prose-headings:tracking-tight prose-h1:text-xl prose-h1:mt-6 prose-h2:text-lg prose-h2:mt-6 prose-h3:text-base prose-h4:text-sm prose-p:leading-relaxed prose-p:my-2.5 prose-ul:my-2 prose-ul:list-disc prose-ol:my-2 prose-ol:list-decimal prose-li:my-0.5 prose-a:font-normal prose-a:underline prose-a:decoration-base-content/30 prose-a:underline-offset-2 hover:prose-a:decoration-current prose-blockquote:border-l-[3px] prose-blockquote:py-0 prose-blockquote:pl-3.5 prose-blockquote:font-normal prose-blockquote:not-italic prose-code:bg-hover prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:font-mono prose-code:text-[0.85em] prose-code:font-normal prose-code:before:content-none prose-code:after:content-none prose-pre:rounded-lg prose-pre:border prose-pre:border-divider prose-table:my-4 prose-table:w-full prose-table:text-left prose-table:text-sm prose-th:py-2 prose-th:px-3 prose-th:font-medium prose-td:py-2 prose-td:px-3 prose-hr:my-6 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&>:first-child]:mt-0 ${className}`}
       dangerouslySetInnerHTML={{ __html: renderedHtml }}
     />
   );

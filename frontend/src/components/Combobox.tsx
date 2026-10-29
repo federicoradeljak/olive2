@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { ReactElement, ReactNode } from "react";
-import { Check, ChevronsUpDown } from "lucide-react";
+import { Check, ChevronDown, Search } from "lucide-react";
 
 export interface ComboboxOption {
   value: string;
@@ -25,8 +25,9 @@ interface ComboboxProps {
 
 /**
  * shadcn-style combobox (button + popover + inline search) built without
- * Radix/cmdk so the SPA needs no new UI primitives. Matches the existing
- * dark stone/lime theme and supports rich custom items (Lucide icons).
+ * Radix/cmdk so the SPA needs no new UI primitives. Notion-like look: hairline
+ * trigger, floating popover with a borderless search row, and rich custom
+ * items (Lucide icons).
  */
 export function Combobox({
   value,
@@ -92,7 +93,7 @@ export function Combobox({
         aria-controls={listId}
         aria-label={ariaLabel ?? placeholder}
         onClick={() => setOpen((v) => !v)}
-        className={`btn w-full justify-between font-normal ${selected ? "" : "text-base-content/50"} ${triggerClassName}`}
+        className={`flex h-9 w-full items-center justify-between gap-2 rounded-md border border-base-content/15 bg-base-100 px-2.5 text-left text-sm font-normal transition-colors hover:bg-hover focus-visible:border-primary/60 focus-visible:outline-2 focus-visible:outline-primary/20 max-sm:h-11 ${open ? "border-primary/60" : ""} ${triggerClassName}`}
       >
         <span className="flex min-w-0 flex-1 items-center gap-2">
           {selected?.icon}
@@ -100,12 +101,13 @@ export function Combobox({
             {selected?.label ?? placeholder}
           </span>
         </span>
-        <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" aria-hidden="true" />
+        <ChevronDown className={`h-3.5 w-3.5 shrink-0 opacity-60 transition-transform ${open ? "rotate-180" : ""}`} aria-hidden="true" />
       </button>
 
       {open && (
-        <div className="absolute z-50 mt-1.5 w-full overflow-hidden rounded-box border border-base-300 bg-base-100 shadow-lg">
-          <div className="border-b border-base-300 p-2">
+        <div className="absolute z-50 mt-1 w-full min-w-56 overflow-hidden rounded-lg bg-base-100 shadow-pop">
+          <label className="flex items-center gap-2 border-b border-divider px-2.5">
+            <Search className="h-3.5 w-3.5 shrink-0 text-base-content/50" aria-hidden="true" />
             <input
               ref={searchRef}
               type="search"
@@ -127,10 +129,10 @@ export function Combobox({
               }}
               placeholder={searchPlaceholder}
               aria-label={searchPlaceholder}
-              className="input input-sm w-full"
+              className="h-9 w-full bg-transparent text-sm outline-none placeholder:text-base-content/40 max-sm:h-11 [&::-webkit-search-cancel-button]:hidden"
             />
-          </div>
-          <div id={listId} role="listbox" aria-label={ariaLabel ?? placeholder} className="max-h-64 overflow-y-auto p-1.5">
+          </label>
+          <div id={listId} role="listbox" aria-label={ariaLabel ?? placeholder} className="max-h-64 overflow-y-auto p-1">
             {filtered.length === 0 ? (
               <p className="px-3 py-6 text-center text-sm text-base-content/50">{emptyText}</p>
             ) : (
@@ -145,17 +147,17 @@ export function Combobox({
                     aria-selected={active}
                     onMouseEnter={() => setHighlight(index)}
                     onClick={() => choose(option.value)}
-                    className={`flex w-full items-center gap-2 rounded-field px-2.5 py-2 text-left text-sm transition ${
-                      highlighted ? "bg-base-200" : "bg-transparent"
-                    } ${active ? "text-primary" : ""}`}
+                    className={`flex min-h-8 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm max-sm:min-h-11 ${
+                      highlighted ? "bg-hover" : "bg-transparent"
+                    } ${active ? "font-medium" : ""}`}
                   >
                     <Check
-                      className={`h-4 w-4 shrink-0 ${active ? "opacity-100" : "opacity-0"}`}
+                      className={`h-3.5 w-3.5 shrink-0 text-primary ${active ? "opacity-100" : "opacity-0"}`}
                       aria-hidden="true"
                     />
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center gap-1.5">
-                        <span className="truncate font-medium">{option.label}</span>
+                        <span className="truncate">{option.label}</span>
                         {option.icon}
                       </span>
                       {option.description && (

@@ -15,7 +15,7 @@ export function SpeakerStatusIcon({ speaker }: { speaker: Pick<Speaker, "provide
   const enrolled = isSpeakerEnrolled(speaker);
   return enrolled ? (
     <Fingerprint
-      className="h-3.5 w-3.5 shrink-0 text-primary"
+      className="h-3.5 w-3.5 shrink-0 text-[color:var(--tag-green)]"
       aria-label="Voiceprint enrolled"
       role="img"
     />
@@ -103,7 +103,7 @@ export function SpeakerStatusBadges({
   if (!hasLocalVoiceprint && !hasSmVoiceprint) {
     return (
       <span
-        className="badge badge-sm gap-1 font-medium"
+        className="tag gap-1 text-xs"
         title="Discovered — no voiceprint enrolled yet"
       >
         <CircleDashed className="h-3 w-3" aria-hidden="true" />
@@ -117,7 +117,7 @@ export function SpeakerStatusBadges({
     <>
       {hasLocalVoiceprint && (
         <span
-          className={`badge badge-sm badge-success badge-soft gap-1 font-medium ${clips >= 8 ? "font-semibold" : ""}`}
+          className={`tag tag-green gap-1 text-xs ${clips >= 8 ? "font-semibold" : ""}`}
           title={
             clips >= 8
               ? "Profile optimal (8/8 clips enrolled with anchor protection)"
@@ -135,7 +135,7 @@ export function SpeakerStatusBadges({
       )}
       {hasSmVoiceprint && (
         <span
-          className="badge badge-sm badge-info badge-soft gap-1 font-medium"
+          className="tag tag-blue gap-1 text-xs"
           title="Speechmatics voiceprint active"
         >
           <Cloud className="h-3 w-3" aria-hidden="true" />
