@@ -2,16 +2,13 @@ import type { ReactElement } from "react";
 import {
   BadgeCheck,
   Brain,
-  Bug,
   CircleCheck,
   CircleX,
   Cloud,
   Cpu,
-  Info,
   Star,
   Tag,
   Zap,
-  TriangleAlert,
 } from "lucide-react";
 import { Combobox } from "./Combobox";
 import type { ComboboxOption } from "./Combobox";
@@ -243,29 +240,6 @@ export function llmProviderOptions(providers: LlmProviderLike[]): ComboboxOption
     ),
   }));
 }
-
-export const LOG_LEVEL_OPTIONS: ComboboxOption[] = [
-  {
-    value: "debug",
-    label: "All Levels (DEBUG+)",
-    icon: <Bug className="h-3.5 w-3.5 shrink-0 text-base-content/70" aria-hidden="true" />,
-  },
-  {
-    value: "info",
-    label: "INFO and above",
-    icon: <Info className="h-3.5 w-3.5 shrink-0 text-base-content/50" aria-hidden="true" />,
-  },
-  {
-    value: "warn",
-    label: "WARN and ERROR only",
-    icon: <TriangleAlert className="h-3.5 w-3.5 shrink-0 text-warning" aria-hidden="true" />,
-  },
-  {
-    value: "error",
-    label: "ERROR only",
-    icon: <CircleX className="h-3.5 w-3.5 shrink-0 text-error" aria-hidden="true" />,
-  },
-];
 
 export function logCategoryOptions(categories: string[]): ComboboxOption[] {
   return [
