@@ -34,7 +34,7 @@ Ingests audio from Plaud hardware recorders, iOS Voice Memos, and browser upload
 | **Apple Voice Memos shortcut** | One-tap iOS Share-Sheet shortcut to upload recordings directly from iPhone or iPad. |
 | **Dual transcription pipeline** | Local neural STT (Cohere Transcribe 03-2026 INT8 ONNX + CTC forced alignment) or cloud Speechmatics. |
 | **Speaker diarization & voiceprints** | Local `pyannote.audio` (`speaker-diarization-community-1`) + WeSpeaker ResNet293-LM 256-dim embeddings for cross-meeting speaker recognition. |
-| **Multi-provider LLM summaries** | Powered by `any-llm` and the `models.dev` catalog. Works with Gemini, Claude, OpenAI, Groq, OpenRouter, Ollama, or custom OpenAI-compatible proxies. |
+| **Multi-provider LLM summaries** | Powered by `any-llm` and the `models.dev` catalog. Works with Gemini, Claude, OpenAI, Groq, OpenRouter, Ollama, or custom OpenAI-compatible proxies — or your ChatGPT Go/Plus/Pro plan via Sign in with ChatGPT, no API key needed. Meeting chat can use its own model. |
 | **Summary templates** | Prompt templates (`Executive Summary`, `1-on-1 Catchup`, `Technical Architecture & Design Review`, `Action Items & Decisions`) with `{{title}}`, `{{date}}`, `{{speakers}}`, and `{{transcript}}` variables. |
 | **System & job logs** | Streaming log viewer with category filters, severity levels (`DEBUG` to `ERROR`), and JSON detail inspection. |
 | **Backup & restore** | Single-click `.tar.gz` export and restore containing the SQLite snapshot, settings, speaker clips, transcripts, summaries, and raw audio files. |
