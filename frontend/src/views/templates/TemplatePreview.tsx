@@ -61,14 +61,17 @@ function fillTemplate(
   userPrompt: string,
   detail: MeetingDetailAggregate,
   languageCode: string,
+  vocabulary: string[],
 ): { system: string; prompt: string } {
   const language = languageForPrompt(languageCode);
+  const glossary = vocabulary.map((t) => t.trim()).filter(Boolean).join(", ");
   const speakers = detail.speakers.map((s) => s.name).filter((n) => !isGenericSpeakerLabel(n)).join(", ") || "Participants";
   const vars: Record<string, string> = {
     "{{title}}": detail.meeting.title,
     "{{date}}": formatSummaryDate(detail.meeting.startTime),
     "{{speakers}}": speakers,
     "{{language}}": language,
+    "{{glossary}}": glossary,
     "{{transcript}}": formatDialogue(detail.transcriptContent ?? ""),
   };
   const replaceVars = (s: string) => Object.entries(vars).reduce((acc, [k, v]) => acc.split(k).join(v), s);
@@ -76,6 +79,10 @@ function fillTemplate(
   const prompt = replaceVars(userPrompt);
   if (language && !`${systemPrompt}${userPrompt}`.includes("{{language}}")) {
     const instruction = `Write the entire response in ${language}.`;
+    system = system ? `${system}\n\n${instruction}` : instruction;
+  }
+  if (glossary && !`${systemPrompt}${userPrompt}`.includes("{{glossary}}")) {
+    const instruction = `Glossary of correct spellings for names and terms that may appear (possibly misspelled) in the transcript: ${glossary}.`;
     system = system ? `${system}\n\n${instruction}` : instruction;
   }
   return { system, prompt };
@@ -88,6 +95,7 @@ export function TemplatePreview({ systemPrompt, userPrompt }: { systemPrompt: st
   const [meetingId, setMeetingId] = useState("");
   const [llm, setLlm] = useState<LlmConfigLite>({});
   const [summaryLanguage, setSummaryLanguage] = useState("");
+  const [vocabulary, setVocabulary] = useState<string[]>([]);
   const [result, setResult] = useState<GenerateResult | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -116,8 +124,9 @@ export function TemplatePreview({ systemPrompt, userPrompt }: { systemPrompt: st
         }
         if (llmRes.ok) setLlm((await llmRes.json()) as LlmConfigLite);
         if (cfgRes.ok) {
-          const cfg = (await cfgRes.json()) as { defaultSummaryLanguage?: string };
+          const cfg = (await cfgRes.json()) as { defaultSummaryLanguage?: string; customVocabulary?: string[] };
           setSummaryLanguage(cfg.defaultSummaryLanguage || "");
+          setVocabulary(cfg.customVocabulary ?? []);
         }
       } catch {
         // preview stays usable with whatever loaded
@@ -148,7 +157,7 @@ export function TemplatePreview({ systemPrompt, userPrompt }: { systemPrompt: st
       if (!detailRes.ok) throw new Error(`Could not load the meeting (HTTP ${detailRes.status})`);
       const detail = (await detailRes.json()) as MeetingDetailAggregate;
       if (!detail.transcriptContent) throw new Error("This meeting has no transcript yet.");
-      const filled = fillTemplate(systemPrompt, userPrompt, detail, summaryLanguage);
+      const filled = fillTemplate(systemPrompt, userPrompt, detail, summaryLanguage, vocabulary);
       const res = await fetch("/api/llm/generate", {
         method: "POST",
         headers: { "content-type": "application/json" },
