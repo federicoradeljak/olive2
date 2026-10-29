@@ -8,6 +8,25 @@ day its changes merged (`## [YYYY-MM-DD]`), with entries grouped under
 `Added` / `Changed` / `Fixed` — pushing a tag publishes the image and turns
 every section newer than the previous tag into the GitHub release notes.
 
+## [2026-10-29]
+
+### Added
+
+- **Settings page** — everything that lived in the "AI: provider/model" modal now has its own page at Settings, split into General, Transcription, AI models, Speaker recognition, Integrations, and Data & backups. Each section saves on its own and warns about unsaved changes. It also brings settings that had no screen before: custom LLM models, the Plaud check interval, voice library export and import, the MCP endpoint, and the iOS Shortcut URL.
+- **Search with ⌘K** — press ⌘K (Ctrl+K) anywhere to find a meeting by title, tag or transcript, or to jump to any screen or action.
+- **Running jobs at a glance** — the sidebar shows what Olive is working on in the background, with a popover that links to each meeting.
+- **Activity** — the queue view that used to hide at `/debug` and the logs now live together under Activity, with plain-language job names, a step-by-step view of local transcriptions, and Cancel for running transcriptions. The technical details are still there behind a disclosure.
+- **Template preview** — try a template against one of your transcribed meetings before saving it.
+
+### Changed
+
+- **New look** — Olive has a calmer, Notion-like design in light and dark, follows your system theme until you pick one, and uses a sidebar instead of the top tab bar. On phones there is a bottom bar with Meetings, People, Upload, Activity and Settings.
+- **Meetings list** — switch between a table and a gallery, filter by status, source, tags and date, sort, and act on several meetings at once from a floating toolbar. Statuses read in plain words, such as "Transcribing · 42%" or "Failed · retry".
+- **Meeting page** — the summary or transcript sits next to a side panel for Chat, Speakers and Details, and the audio player stays at the bottom. The transcript can be searched, follows the audio, and shows Confirm and Change buttons on each turn instead of hiding them. Chat suggests questions to ask. Summaries are labelled by template and model. Transcripts and summaries can be exported, and playback speed can be changed. Delete moved away from Transcribe, and re-transcribing asks before replacing the transcript.
+- **People** — each person has a page with their voice samples, the meetings they appear in, and Merge, Rebuild and Delete actions, and you can filter for people who still need a voice.
+- **Templates** — templates open in a full-page editor with buttons to insert variables.
+- **Usage** — pick a period and see spending per month in a chart.
+
 ## [2026-10-28]
 
 ### Added
