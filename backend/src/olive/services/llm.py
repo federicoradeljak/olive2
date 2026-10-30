@@ -1269,113 +1269,7 @@ class LlmService:
         return mapping.get(provider.lower(), provider.lower())
 
     async def generate_text(self, raw_options: dict[str, Any] | LlmGenerateOptions) -> LlmGenerateResult:
-        opts = (
-            raw_options
-            if isinstance(raw_options, LlmGenerateOptions)
-            else LlmGenerateOptions.model_validate(raw_options)
-        )
-        start_ms = int(time.time() * 1000)
-        settings = await self.get_settings()
-
-        provider = opts.provider or settings.defaultProvider
-        model_id = opts.model or settings.defaultModel
-        account = self.account_providers.get(provider)
-        if account is not None:
-            return await self._generate_with_account(account, opts, model_id, start_ms)
-
-        api_key = self.resolve_api_key(provider, opts.apiKeyOverride, settings)
-        if not api_key:
-            raise RuntimeError(
-                f'No API key configured for provider "{provider}". '
-                "Please configure an API key in settings or pass one in the request."
-            )
-
-        model_info = await self.resolve_model(provider, model_id, opts.baseUrlOverride)
-        messages: list[dict[str, Any]] = []
-        if opts.systemPrompt:
-            messages.append({"role": "system", "content": opts.systemPrompt})
-        if opts.messages:
-            for m in opts.messages:
-                messages.append({"role": m.role, "content": m.content})
-        else:
-            messages.append({"role": "user", "content": opts.prompt})
-
-        effective_reasoning = self.resolve_effective_reasoning(
-            model_info, opts.thinkingLevel, settings.defaultThinkingLevel
-        )
-
-        provider_cfg = settings.providers.get(provider)
-        default_base = DEFAULT_PROVIDER_BASE_URL.get(provider)
-        resolved_base = model_info.get("baseUrl")
-        raw_custom_base = (
-            opts.baseUrlOverride
-            or (provider_cfg.baseUrl if provider_cfg else None)
-            or (resolved_base if resolved_base and resolved_base != default_base else None)
-        )
-        custom_base = normalize_provider_base_url(provider, raw_custom_base)
-        any_provider = self._map_any_llm_provider(provider)
-        kwargs: dict[str, Any] = {
-            "model": model_id,
-            "provider": any_provider,
-            "messages": messages,
-            "api_key": api_key,
-        }
-        if custom_base:
-            kwargs["api_base"] = custom_base
-        if provider_cfg and provider_cfg.headers:
-            kwargs["client_args"] = {"default_headers": provider_cfg.headers}
-        if opts.temperature is not None:
-            kwargs["temperature"] = opts.temperature
-        if opts.maxTokens is not None:
-            kwargs["max_tokens"] = opts.maxTokens
-        if effective_reasoning and effective_reasoning != "off":
-            kwargs["reasoning_effort"] = effective_reasoning
-
-        logger.info(
-            "Executing LLM generation",
-            {
-                "provider": provider,
-                "model": model_id,
-                "baseUrl": model_info.get("baseUrl"),
-                "reasoning": effective_reasoning,
-            },
-        )
-
-        try:
-            response: Any = await any_llm.acompletion(**kwargs)
-        except Exception as exc:
-            err_msg = str(exc)
-            logger.error(
-                "LLM completion call failed", {"provider": provider, "model": model_id, "error": err_msg}
-            )
-            raise RuntimeError(f"LLM call failed ({provider}/{model_id}): {err_msg}") from exc
-
-        choice = response.choices[0] if getattr(response, "choices", None) else None
-        text_content = ""
-        if choice and getattr(choice, "message", None):
-            text_content = getattr(choice.message, "content", "") or ""
-
-        usage_obj = getattr(response, "usage", None)
-        in_tok = int(getattr(usage_obj, "prompt_tokens", 0) or 0) if usage_obj else 0
-        out_tok = int(getattr(usage_obj, "completion_tokens", 0) or 0) if usage_obj else 0
-        tot_tok = (
-            int(getattr(usage_obj, "total_tokens", in_tok + out_tok) or (in_tok + out_tok))
-            if usage_obj
-            else 0
-        )
-
-        duration_ms = max(1, int(time.time() * 1000) - start_ms)
-        return LlmGenerateResult(
-            text=text_content,
-            provider=provider,
-            model=model_id,
-            durationMs=duration_ms,
-            usage=ChatUsage(
-                inputTokens=in_tok,
-                outputTokens=out_tok,
-                totalTokens=tot_tok,
-            ),
-        )
+        return await self._generate(raw_options)
 
     generateText = generate_text
 
@@ -1384,6 +1278,16 @@ class LlmService:
         raw_options: dict[str, Any] | LlmGenerateOptions,
         on_delta: Callable[[str], Any],
     ) -> LlmGenerateResult:
+        return await self._generate(raw_options, on_delta)
+
+    streamText = stream_text
+
+    async def _generate(
+        self,
+        raw_options: dict[str, Any] | LlmGenerateOptions,
+        on_delta: Callable[[str], Any] | None = None,
+    ) -> LlmGenerateResult:
+        """One generation; streams pieces to ``on_delta`` when it is given."""
         opts = (
             raw_options
             if isinstance(raw_options, LlmGenerateOptions)
@@ -1434,8 +1338,9 @@ class LlmService:
             "provider": any_provider,
             "messages": messages,
             "api_key": api_key,
-            "stream": True,
         }
+        if on_delta is not None:
+            kwargs["stream"] = True
         if custom_base:
             kwargs["api_base"] = custom_base
         if provider_cfg and provider_cfg.headers:
@@ -1447,13 +1352,68 @@ class LlmService:
         if effective_reasoning and effective_reasoning != "off":
             kwargs["reasoning_effort"] = effective_reasoning
 
-        stream = await any_llm.acompletion(**kwargs)
+        logger.info(
+            "Executing LLM generation",
+            {
+                "provider": provider,
+                "model": model_id,
+                "baseUrl": model_info.get("baseUrl"),
+                "reasoning": effective_reasoning,
+            },
+        )
+
+        try:
+            response: Any = await any_llm.acompletion(**kwargs)
+        except Exception as exc:
+            err_msg = str(exc)
+            logger.error(
+                "LLM completion call failed", {"provider": provider, "model": model_id, "error": err_msg}
+            )
+            raise RuntimeError(f"LLM call failed ({provider}/{model_id}): {err_msg}") from exc
+
+        if on_delta is None:
+            text_content, in_tok, out_tok, tot_tok = self._read_completion(response)
+        else:
+            text_content, in_tok, out_tok, tot_tok = await self._read_completion_stream(response, on_delta)
+
+        duration_ms = max(1, int(time.time() * 1000) - start_ms)
+        return LlmGenerateResult(
+            text=text_content,
+            provider=provider,
+            model=model_id,
+            durationMs=duration_ms,
+            usage=ChatUsage(
+                inputTokens=in_tok,
+                outputTokens=out_tok,
+                totalTokens=tot_tok,
+            ),
+        )
+
+    @staticmethod
+    def _read_completion(response: Any) -> tuple[str, int, int, int]:
+        choice = response.choices[0] if getattr(response, "choices", None) else None
+        text_content = ""
+        if choice and getattr(choice, "message", None):
+            text_content = getattr(choice.message, "content", "") or ""
+
+        usage_obj = getattr(response, "usage", None)
+        in_tok = int(getattr(usage_obj, "prompt_tokens", 0) or 0) if usage_obj else 0
+        out_tok = int(getattr(usage_obj, "completion_tokens", 0) or 0) if usage_obj else 0
+        tot_tok = (
+            int(getattr(usage_obj, "total_tokens", in_tok + out_tok) or (in_tok + out_tok))
+            if usage_obj
+            else 0
+        )
+        return text_content, in_tok, out_tok, tot_tok
+
+    @staticmethod
+    async def _read_completion_stream(stream: Any, on_delta: Callable[[str], Any]) -> tuple[str, int, int, int]:
         full_text = ""
         in_tok = 0
         out_tok = 0
         tot_tok = 0
 
-        async for chunk in stream:  # type: ignore[union-attr]
+        async for chunk in stream:
             choices = getattr(chunk, "choices", None)
             if choices:
                 delta_obj = getattr(choices[0], "delta", None)
@@ -1468,18 +1428,4 @@ class LlmService:
                 in_tok = int(getattr(usage_obj, "prompt_tokens", in_tok) or in_tok)
                 out_tok = int(getattr(usage_obj, "completion_tokens", out_tok) or out_tok)
                 tot_tok = int(getattr(usage_obj, "total_tokens", in_tok + out_tok) or (in_tok + out_tok))
-
-        duration_ms = max(1, int(time.time() * 1000) - start_ms)
-        return LlmGenerateResult(
-            text=full_text,
-            provider=provider,
-            model=model_id,
-            durationMs=duration_ms,
-            usage=ChatUsage(
-                inputTokens=in_tok,
-                outputTokens=out_tok,
-                totalTokens=tot_tok,
-            ),
-        )
-
-    streamText = stream_text
+        return full_text, in_tok, out_tok, tot_tok
