@@ -472,6 +472,17 @@ def test_llm_services_share_one_account_auth_per_credential_file(tmp_path: Path)
     handle.engine.dispose()
 
 
+def test_only_the_plan_sign_in_requires_plan_usage(tmp_path: Path) -> None:
+    from olive.providers import chatgpt_codex, chatgpt_plan
+
+    plan = chatgpt_plan.build_provider(str(tmp_path))
+    codex = chatgpt_codex.build_provider(str(tmp_path))
+
+    assert plan.login_error({"planEnabled": True}) is None
+    assert "plan usage was not allowed" in (plan.login_error({"planEnabled": False}) or "")
+    assert codex.login_error({"planType": None}) is None
+
+
 async def test_chat_model_setting_round_trips_and_clears(tmp_path: Path) -> None:
     from olive.db import create_db
     from olive.services.llm import LlmService
