@@ -19,9 +19,10 @@ from sqlalchemy.engine import Engine
 
 from ..db import DbHandle, get_db
 from ..languages import is_auto_language
-from ..layout import MeetingPaths, ensure_meeting_folder, meeting_paths
+from ..layout import MeetingPaths
 from ..logging_db import Logger
 from ..logging_db import logger as default_logger
+from ..meeting_storage import MeetingStorage, first_recording
 from ..ml import (
     AbortController,
     DiscoveredSpeakerVoiceprint,
@@ -350,6 +351,10 @@ class TranscriptionService:
         )
 
     @property
+    def storage(self) -> MeetingStorage:
+        return MeetingStorage(self.meetings_dir)
+
+    @property
     def speechmatics(self) -> SpeechmaticsClient:
         return self.client
 
@@ -605,15 +610,7 @@ class TranscriptionService:
             )
             if not meeting:
                 raise ValueError(f"Meeting not found: {meeting_id}")
-            recording = (
-                conn.execute(
-                    text("SELECT id FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"),
-                    {"mid": meeting_id},
-                )
-                .mappings()
-                .first()
-            )
-            if not recording:
+            if not first_recording(conn, meeting_id):
                 raise ValueError(f"No recording found for meeting {meeting_id}")
 
         existing = self._active_jobs.get(meeting_id)
@@ -799,21 +796,12 @@ class TranscriptionService:
             artifact = self._current_transcript_artifact(conn, meeting_id)
             if artifact is None:
                 raise ValueError(f"No transcript found for meeting {meeting_id}")
-            recording = (
-                conn.execute(
-                    text("SELECT * FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"),
-                    {"mid": meeting_id},
-                )
-                .mappings()
-                .first()
-            )
-        folder = meeting_paths(
-            self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]
-        ).folder
-        audio_path = str(Path(folder) / recording["path"]) if recording and recording.get("path") else None
-        if not audio_path or not Path(audio_path).exists():
+            recording = first_recording(conn, meeting_id)
+        audio_file = self.storage.audio_path(meeting, recording)
+        if audio_file is None:
             raise ValueError(f"No audio recording available for meeting {meeting_id}")
-        transcript_file = Path(folder) / str(artifact["path"])
+        audio_path = str(audio_file)
+        transcript_file = self.storage.file(meeting, str(artifact["path"]))
         if not transcript_file.exists():
             raise ValueError(f"Transcript file is missing for meeting {meeting_id}")
         try:
@@ -1179,9 +1167,7 @@ class TranscriptionService:
         rel_path = str(artifact["path"])
         t_json = f"{json.dumps(renamed.model_dump(exclude_none=True), indent=2)}\n"
         t_text = f"{transcript_to_text(renamed)}\n"
-        paths = ensure_meeting_folder(
-            meeting_paths(self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"])
-        )
+        paths = self.storage.ensure(meeting)
         json_art_id = await self._ensure_artifact(
             meeting["id"], rec_id, "transcript", "json", rel_path, t_json, paths.transcripts_dir, provider
         )
@@ -1605,14 +1591,7 @@ class TranscriptionService:
             if not meeting:
                 raise ValueError(f"Meeting not found: {meeting_id}")
 
-            recording = (
-                conn.execute(
-                    text("SELECT * FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"),
-                    {"mid": meeting_id},
-                )
-                .mappings()
-                .first()
-            )
+            recording = first_recording(conn, meeting_id)
             if not recording:
                 raise ValueError(f"No recording found for meeting {meeting_id}")
 
@@ -1625,12 +1604,10 @@ class TranscriptionService:
                 .first()
             )
 
-        folder = meeting_paths(
-            self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]
-        ).folder
-        audio_full_path = str(Path(folder) / recording["path"])
-        if not Path(audio_full_path).exists():
-            raise FileNotFoundError(f"Audio file not found on disk at {audio_full_path}")
+        audio_file = self.storage.audio_path(meeting, recording)
+        if audio_file is None:
+            raise FileNotFoundError(f"Audio file not found on disk for meeting {meeting_id}")
+        audio_full_path = str(audio_file)
 
         if stage_run and stage_run["status"] == "done" and not opts.get("force"):
             with self.db.connect() as conn:
@@ -1943,9 +1920,8 @@ class TranscriptionService:
         speakers were being identified (nothing is written then).
         """
         meeting, recording, paths = self._meeting_with_recording(meeting_id)
-        audio_path = (
-            str(Path(paths.folder) / recording["path"]) if recording and recording.get("path") else None
-        )
+        audio_file = self.storage.audio_path(meeting, recording)
+        audio_path = str(audio_file) if audio_file else None
 
         identified = await self._maybe_identify_cloud_speakers(meeting_id, audio_path, canonical, options)
         discovered: list[DiscoveredSpeakerVoiceprint] | None = None
@@ -1980,20 +1956,8 @@ class TranscriptionService:
             )
             if not meeting:
                 raise ValueError(f"Meeting {meeting_id} not found")
-            recording = (
-                conn.execute(
-                    text(
-                        "SELECT id, path FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"
-                    ),
-                    {"mid": meeting_id},
-                )
-                .mappings()
-                .first()
-            )
-        paths = ensure_meeting_folder(
-            meeting_paths(self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"])
-        )
-        return dict(meeting), dict(recording) if recording else None, paths
+            recording = first_recording(conn, meeting_id)
+        return dict(meeting), recording, self.storage.ensure(meeting)
 
     async def _write_transcript_artifacts(
         self,

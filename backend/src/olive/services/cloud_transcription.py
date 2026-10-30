@@ -15,14 +15,13 @@ import inspect
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Protocol
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from ..layout import meeting_paths
 from ..logging_db import Logger
+from ..meeting_storage import MeetingStorage, first_recording
 from ..schemas import Transcript, TranscriptionProgressUpdate
 from ..workflows import QUEUE_ASSEMBLYAI, QUEUE_MODAL, QUEUE_MUSE, QUEUE_SPEECHMATICS
 from ..workflows.transcription_run import CANCELLED_ERROR, TranscriptionRun
@@ -177,12 +176,9 @@ class CloudTranscriptionRun:
     ) -> dict[str, Any]:
         spec = transcriber.spec
         meeting, recording, stage_run = self._load(meeting_id, spec.stage)
-        folder = meeting_paths(
-            self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]
-        ).folder
-        audio_path = str(Path(folder) / recording["path"])
-        if not Path(audio_path).exists():
-            raise FileNotFoundError(f"Audio file not found on disk at {audio_path}")
+        audio_file = MeetingStorage(self.meetings_dir).audio_path(meeting, recording)
+        if audio_file is None:
+            raise FileNotFoundError(f"Audio file not found on disk for meeting {meeting_id}")
 
         if stage_run and stage_run["status"] == "done" and not options.get("force"):
             return {
@@ -196,7 +192,7 @@ class CloudTranscriptionRun:
         job = CloudJob(
             meeting=meeting,
             recording=recording,
-            audio_path=audio_path,
+            audio_path=str(audio_file),
             stage_run_id=stage_run_id,
             options=options,
             _on_job_id=lambda job_id: self._record_job_id(meeting_id, spec.stage, stage_run_id, job_id),
@@ -263,14 +259,7 @@ class CloudTranscriptionRun:
             )
             if not meeting:
                 raise ValueError(f"Meeting not found: {meeting_id}")
-            recording = (
-                conn.execute(
-                    text("SELECT * FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"),
-                    {"mid": meeting_id},
-                )
-                .mappings()
-                .first()
-            )
+            recording = first_recording(conn, meeting_id)
             if not recording:
                 raise ValueError(f"No recording found for meeting {meeting_id}")
             stage_run = (
@@ -281,7 +270,7 @@ class CloudTranscriptionRun:
                 .mappings()
                 .first()
             )
-        return dict(meeting), dict(recording), dict(stage_run) if stage_run else None
+        return dict(meeting), recording, dict(stage_run) if stage_run else None
 
     def _existing_transcript_artifact(self, meeting_id: str, provider: str) -> str | None:
         with self.db.connect() as conn:
