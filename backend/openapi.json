@@ -1870,6 +1870,70 @@
         }
       }
     },
+    "/api/llm/chatgpt-codex/status": {
+      "get": {
+        "summary": "Get Chatgpt Codex Status Route",
+        "operationId": "get_chatgpt_codex_status_route_api_llm_chatgpt_codex_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/llm/chatgpt-codex/auth/start": {
+      "post": {
+        "summary": "Post Chatgpt Codex Auth Start Route",
+        "operationId": "post_chatgpt_codex_auth_start_route_api_llm_chatgpt_codex_auth_start_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/llm/chatgpt-codex/auth/complete": {
+      "post": {
+        "summary": "Post Chatgpt Codex Auth Complete Route",
+        "operationId": "post_chatgpt_codex_auth_complete_route_api_llm_chatgpt_codex_auth_complete_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/llm/chatgpt-codex/logout": {
+      "post": {
+        "summary": "Post Chatgpt Codex Logout Route",
+        "operationId": "post_chatgpt_codex_logout_route_api_llm_chatgpt_codex_logout_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/llm/refresh-catalog": {
       "post": {
         "summary": "Post Llm Refresh Catalog Route",

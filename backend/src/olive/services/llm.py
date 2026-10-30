@@ -18,7 +18,7 @@ from sqlalchemy.engine import Engine
 
 from ..db import DbHandle, get_db
 from ..logging_db import logger
-from ..providers import chatgpt_plan
+from ..providers import chatgpt_codex, chatgpt_plan
 from ..schemas import (
     ChatUsage,
     LlmGenerateOptions,
@@ -72,6 +72,11 @@ DEFAULT_PROVIDER_BASE_URL: dict[str, str] = {
     "xai": "https://api.x.ai/v1",
 }
 
+# Providers signed in with a ChatGPT account instead of an API key.
+ACCOUNT_PROVIDER_NAMES: dict[str, str] = {
+    chatgpt_plan.PROVIDER_ID: chatgpt_plan.PROVIDER_NAME,
+    chatgpt_codex.PROVIDER_ID: chatgpt_codex.PROVIDER_NAME,
+}
 # Account model lists (ChatGPT plan) are fetched live; reuse them this long.
 ACCOUNT_MODELS_TTL_SECONDS = 10 * 60
 
@@ -984,9 +989,10 @@ class LlmService:
                 source="custom",
             )
 
-        # 4. Models the signed-in ChatGPT account may use
-        for item in await self._chatgpt_plan_models():
-            catalog_map.setdefault(f"{item.provider}:{item.id}", item)
+        # 4. Models the signed-in ChatGPT accounts may use
+        for provider in ACCOUNT_PROVIDER_NAMES:
+            for item in await self._account_models(provider):
+                catalog_map.setdefault(f"{item.provider}:{item.id}", item)
 
         items = list(catalog_map.values())
 
@@ -1053,19 +1059,20 @@ class LlmService:
                 )
             )
 
-        if chatgpt_plan.PROVIDER_ID not in provider_counts:
-            summaries.append(
-                LlmProviderSummary(
-                    id=chatgpt_plan.PROVIDER_ID,
-                    name=chatgpt_plan.PROVIDER_NAME,
-                    isConfigured=self._is_provider_configured(chatgpt_plan.PROVIDER_ID, settings),
-                    hasCustomBaseUrl=False,
-                    modelCount=0,
+        for account_id, account_name in ACCOUNT_PROVIDER_NAMES.items():
+            if account_id not in provider_counts:
+                summaries.append(
+                    LlmProviderSummary(
+                        id=account_id,
+                        name=account_name,
+                        isConfigured=self._is_provider_configured(account_id, settings),
+                        hasCustomBaseUrl=False,
+                        modelCount=0,
+                    )
                 )
-            )
-        else:
-            plan = next(s for s in summaries if s.id == chatgpt_plan.PROVIDER_ID)
-            plan.name = chatgpt_plan.PROVIDER_NAME
+            else:
+                summary = next(s for s in summaries if s.id == account_id)
+                summary.name = account_name
 
         summaries.sort(key=lambda s: (PROVIDER_PRIORITY.get(s.id, 99), s.name))
         return summaries
@@ -1075,25 +1082,38 @@ class LlmService:
     def chatgpt_plan_auth(self) -> chatgpt_plan.ChatGptPlanAuth:
         return chatgpt_plan.get_chatgpt_plan_auth(self.config_dir)
 
-    async def _chatgpt_plan_models(self) -> list[LlmModelCatalogItem]:
-        auth = self.chatgpt_plan_auth()
+    def chatgpt_codex_auth(self) -> chatgpt_codex.ChatGptCodexAuth:
+        return chatgpt_codex.get_chatgpt_codex_auth(self.config_dir)
+
+    def _account_auth(self, provider: str) -> chatgpt_plan.ChatGptPlanAuth:
+        return self.chatgpt_codex_auth() if provider == chatgpt_codex.PROVIDER_ID else self.chatgpt_plan_auth()
+
+    async def _account_models(self, provider: str) -> list[LlmModelCatalogItem]:
+        auth = self._account_auth(provider)
         if not auth.is_usable():
             return []
         cached = auth.models_cache
         if cached is None or time.time() - cached[0] > ACCOUNT_MODELS_TTL_SECONDS:
             try:
-                token = await auth.get_access_token()
-                models = await chatgpt_plan.list_models(token, transport=auth.transport)
+                if isinstance(auth, chatgpt_codex.ChatGptCodexAuth):
+                    token, account_id = await auth.get_credentials()
+                    models = await chatgpt_codex.list_models(token, account_id, transport=auth.transport)
+                else:
+                    token = await auth.get_access_token()
+                    models = await chatgpt_plan.list_models(token, transport=auth.transport)
                 auth.models_cache = cached = (time.time(), models)
             except Exception as exc:
-                logger.warn("Failed to list ChatGPT plan models", {"error": str(exc)})
+                logger.warn("Failed to list ChatGPT account models", {"provider": provider, "error": str(exc)})
                 if cached is None:
-                    return []
+                    if provider == chatgpt_codex.PROVIDER_ID:
+                        cached = (0.0, list(chatgpt_codex.FALLBACK_MODELS))
+                    else:
+                        return []
         return [
             LlmModelCatalogItem(
                 id=m["slug"],
                 name=m["name"],
-                provider=chatgpt_plan.PROVIDER_ID,
+                provider=provider,
                 api="openai-responses",
                 reasoning=False,
                 supportedThinkingLevels=["off"],
@@ -1104,6 +1124,7 @@ class LlmService:
 
     async def _generate_with_chatgpt_plan(
         self,
+        provider: str,
         opts: LlmGenerateOptions,
         model_id: str,
         start_ms: int,
@@ -1115,28 +1136,40 @@ class LlmService:
             if opts.messages
             else [{"role": "user", "content": opts.prompt}]
         )
-        logger.info("Executing LLM generation", {"provider": chatgpt_plan.PROVIDER_ID, "model": model_id})
-        auth = self.chatgpt_plan_auth()
+        logger.info("Executing LLM generation", {"provider": provider, "model": model_id})
+        auth = self._account_auth(provider)
         try:
-            token = await auth.get_access_token()
-            full_text, usage = await chatgpt_plan.stream_response(
-                token,
-                model=model_id,
-                instructions=opts.systemPrompt,
-                messages=messages,
-                on_delta=on_delta,
-                transport=auth.transport,
-            )
+            if isinstance(auth, chatgpt_codex.ChatGptCodexAuth):
+                token, account_id = await auth.get_credentials()
+                full_text, usage = await chatgpt_codex.stream_response(
+                    token,
+                    account_id,
+                    model=model_id,
+                    instructions=opts.systemPrompt,
+                    messages=messages,
+                    on_delta=on_delta,
+                    transport=auth.transport,
+                )
+            else:
+                token = await auth.get_access_token()
+                full_text, usage = await chatgpt_plan.stream_response(
+                    token,
+                    model=model_id,
+                    instructions=opts.systemPrompt,
+                    messages=messages,
+                    on_delta=on_delta,
+                    transport=auth.transport,
+                )
         except chatgpt_plan.ChatGptPlanError as exc:
             logger.error(
                 "ChatGPT plan call failed",
-                {"model": model_id, "error": str(exc), "code": exc.code, "requestId": exc.request_id},
+                {"provider": provider, "model": model_id, "error": str(exc), "code": exc.code, "requestId": exc.request_id},
             )
             raise
         usage = usage or {}
         return LlmGenerateResult(
             text=full_text,
-            provider=chatgpt_plan.PROVIDER_ID,
+            provider=provider,
             model=model_id,
             durationMs=max(1, int(time.time() * 1000) - start_ms),
             usage=ChatUsage(
@@ -1151,10 +1184,10 @@ class LlmService:
     def _is_provider_configured(self, provider: str, settings: LlmSettings) -> bool:
         """An API key is available for ``provider``, from Settings or the environment.
 
-        The ChatGPT plan has no key: it counts once the account is signed in with plan usage on.
+        ChatGPT account providers have no key: they count once the account is signed in.
         """
-        if provider == chatgpt_plan.PROVIDER_ID:
-            return self.chatgpt_plan_auth().is_usable()
+        if provider in ACCOUNT_PROVIDER_NAMES:
+            return self._account_auth(provider).is_usable()
         return self.resolve_api_key(provider, None, settings) is not None
 
     def _is_provider_usable(self, provider: str, settings: LlmSettings) -> bool:
@@ -1271,8 +1304,8 @@ class LlmService:
 
         provider = opts.provider or settings.defaultProvider
         model_id = opts.model or settings.defaultModel
-        if provider == chatgpt_plan.PROVIDER_ID:
-            return await self._generate_with_chatgpt_plan(opts, model_id, start_ms)
+        if provider in ACCOUNT_PROVIDER_NAMES:
+            return await self._generate_with_chatgpt_plan(provider, opts, model_id, start_ms)
 
         api_key = self.resolve_api_key(provider, opts.apiKeyOverride, settings)
         if not api_key:
@@ -1385,8 +1418,8 @@ class LlmService:
 
         provider = opts.provider or settings.defaultProvider
         model_id = opts.model or settings.defaultModel
-        if provider == chatgpt_plan.PROVIDER_ID:
-            return await self._generate_with_chatgpt_plan(opts, model_id, start_ms, on_delta)
+        if provider in ACCOUNT_PROVIDER_NAMES:
+            return await self._generate_with_chatgpt_plan(provider, opts, model_id, start_ms, on_delta)
 
         api_key = self.resolve_api_key(provider, opts.apiKeyOverride, settings)
         if not api_key:

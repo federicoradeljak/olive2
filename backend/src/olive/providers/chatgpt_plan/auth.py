@@ -100,7 +100,7 @@ def validate_id_token(
     return claims
 
 
-def parse_callback(pasted: str) -> dict[str, str]:
+def parse_callback(pasted: str, *, redirect_uri: str = REDIRECT_URI) -> dict[str, str]:
     """Extract the callback query (``code``, ``state``, ``client_id``, ``error``) from a pasted URL."""
     raw = pasted.strip()
     if not raw:
@@ -114,7 +114,7 @@ def parse_callback(pasted: str) -> dict[str, str]:
         raise ChatGptPlanError(f"ChatGPT sign-in failed: {desc}")
     if not params.get("code") or not params.get("state"):
         raise ChatGptPlanError(
-            f"That address has no sign-in code. Copy the whole address starting with {REDIRECT_URI}?code=…"
+            f"That address has no sign-in code. Copy the whole address starting with {redirect_uri}?code=…"
         )
     return params
 
