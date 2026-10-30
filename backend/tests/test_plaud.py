@@ -342,6 +342,53 @@ async def test_pending_check_downloads_after_deadline_without_rediscovery(tmp_pa
     handle.engine.dispose()
 
 
+async def test_manual_sync_arms_pending_check_without_auto_sync(tmp_path: Path) -> None:
+    client = _CountingListClient(_pending_detail())
+    clock = {"now": 10_000}
+    handle, poller = _pending_check_poller(tmp_path, client, clock)
+
+    # No start(): auto-sync is off, only a manual sync ran.
+    await poller.trigger()
+    assert poller._scheduler is None
+    assert poller._pending_scheduler is not None
+
+    # Turning auto-sync off must not strand the recording that is waiting.
+    poller.stop(keep_pending_check=True)
+    assert poller._pending_scheduler is not None
+
+    clock["now"] = 11_000
+    fetched = await poller.check_pending()
+    assert fetched is not None and fetched["resolved"] == 1
+    assert poller._pending_scheduler is not None
+
+    # Nothing left waiting: the check disarms itself.
+    assert await poller.check_pending() is None
+    assert poller._pending_scheduler is None
+    with handle.engine.connect() as conn:
+        assert conn.execute(text("SELECT COUNT(*) FROM recordings")).scalar() == 1
+    handle.engine.dispose()
+
+
+async def test_stop_on_shutdown_also_stops_pending_check(tmp_path: Path) -> None:
+    client = _CountingListClient(_pending_detail())
+    handle, poller = _pending_check_poller(tmp_path, client, {"now": 10_000})
+
+    await poller.trigger()
+    assert poller._pending_scheduler is not None
+    poller.stop()
+    assert poller._pending_scheduler is None
+    handle.engine.dispose()
+
+
+async def test_sync_without_waiting_recordings_does_not_arm_pending_check(tmp_path: Path) -> None:
+    client = _CountingListClient(_ready_detail())
+    handle, poller = _pending_check_poller(tmp_path, client, {"now": 10_000})
+
+    await poller.trigger()
+    assert poller._pending_scheduler is None
+    handle.engine.dispose()
+
+
 async def test_pending_check_ingests_once_plaud_transcript_is_ready(tmp_path: Path) -> None:
     detail = {"value": _pending_detail()}
     client = _CountingListClient(lambda: detail["value"])
@@ -1017,8 +1064,8 @@ class _RecordingPoller:
     def start(self, interval_minutes: int, *, run_now: bool = True) -> None:
         self.calls.append(("start", (interval_minutes, run_now)))
 
-    def stop(self) -> None:
-        self.calls.append(("stop", None))
+    def stop(self, *, keep_pending_check: bool = False) -> None:
+        self.calls.append(("stop", keep_pending_check))
 
 
 def test_poller_does_not_start_when_auto_sync_is_off(tmp_path: Path) -> None:
@@ -1059,13 +1106,13 @@ def test_config_route_toggles_plaud_auto_sync_live(tmp_path: Path) -> None:
         res = client.post("/api/config", json={"plaudAutoSync": False})
         assert res.status_code == 200
         assert res.json()["config"]["plaudAutoSync"] is False
-        assert poller.calls == [("stop", None)]
+        assert poller.calls == [("stop", True)]
 
         client.post("/api/config", json={"plaudAutoSync": True})
         client.post("/api/config", json={"pollIntervalMinutes": 30})
         client.post("/api/config", json={"defaultSummaryLanguage": "es"})
         assert poller.calls == [
-            ("stop", None),
+            ("stop", True),
             ("start", (15, True)),
             ("start", (30, False)),
         ]
@@ -1086,7 +1133,7 @@ def test_config_route_leaves_poller_alone_when_server_does_not_poll(tmp_path: Pa
     )
     with TestClient(app) as client:
         assert client.post("/api/config", json={"plaudAutoSync": False}).status_code == 200
-    assert poller.calls == [("stop", None)]  # lifespan shutdown only
+    assert poller.calls == [("stop", False)]  # lifespan shutdown only
     handle.engine.dispose()
 
 

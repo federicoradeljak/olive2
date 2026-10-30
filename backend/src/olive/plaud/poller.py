@@ -360,6 +360,7 @@ class PlaudPoller:
         self.retry_options: dict[str, Any] = dict(opts.get("retryOptions") or {})
 
         self._scheduler: AsyncIOScheduler | None = None
+        self._pending_scheduler: AsyncIOScheduler | None = None
         self._in_flight: asyncio.Task[dict[str, Any]] | None = None
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._connected = False
@@ -394,7 +395,7 @@ class PlaudPoller:
         )
 
     def start(self, interval_minutes: int, *, run_now: bool = True) -> None:
-        self.stop()
+        self.stop(keep_pending_check=True)
         try:
             self._scheduler = AsyncIOScheduler()
             self._scheduler.add_job(
@@ -402,18 +403,6 @@ class PlaudPoller:
                 "interval",
                 minutes=max(1, int(interval_minutes)),
                 id="plaud_poll",
-                replace_existing=True,
-                coalesce=True,
-                misfire_grace_time=SCHEDULER_MISFIRE_GRACE_SECONDS,
-            )
-            # Discovery only creates the meeting; the audio is fetched once
-            # Plaud's transcript is ready or the PCS wait expires. Re-check
-            # those recordings every minute instead of waiting a full poll.
-            self._scheduler.add_job(
-                self.check_pending,
-                "interval",
-                seconds=PENDING_CHECK_INTERVAL_SECONDS,
-                id="plaud_pending",
                 replace_existing=True,
                 coalesce=True,
                 misfire_grace_time=SCHEDULER_MISFIRE_GRACE_SECONDS,
@@ -431,13 +420,51 @@ class PlaudPoller:
         except RuntimeError:
             pass
 
-    def stop(self) -> None:
+    def stop(self, *, keep_pending_check: bool = False) -> None:
+        """Stop scheduled polls.
+
+        ``keep_pending_check`` (auto-sync turned off) leaves the pending check
+        running so recordings a manual sync already discovered still finish.
+        """
         if self._scheduler is not None:
             try:
                 self._scheduler.shutdown(wait=False)
             except Exception:
                 pass
             self._scheduler = None
+        if not keep_pending_check:
+            self._stop_pending_checker()
+
+    def _ensure_pending_checker(self) -> None:
+        # Discovery only creates the meeting; the audio is fetched once
+        # Plaud's transcript is ready or the PCS wait expires. Re-check those
+        # recordings every minute, whether or not auto-sync is on, instead of
+        # leaving them until the next poll.
+        if self._pending_scheduler is not None:
+            return
+        try:
+            scheduler = AsyncIOScheduler()
+            scheduler.add_job(
+                self.check_pending,
+                "interval",
+                seconds=PENDING_CHECK_INTERVAL_SECONDS,
+                id="plaud_pending",
+                replace_existing=True,
+                coalesce=True,
+                misfire_grace_time=SCHEDULER_MISFIRE_GRACE_SECONDS,
+            )
+            scheduler.start()
+        except Exception:
+            return
+        self._pending_scheduler = scheduler
+
+    def _stop_pending_checker(self) -> None:
+        if self._pending_scheduler is not None:
+            try:
+                self._pending_scheduler.shutdown(wait=False)
+            except Exception:
+                pass
+            self._pending_scheduler = None
 
     async def trigger(self) -> dict[str, Any]:
         if self._in_flight is not None and not self._in_flight.done():
@@ -468,6 +495,7 @@ class PlaudPoller:
         if self._in_flight is not None and not self._in_flight.done():
             return None
         if not self._has_waiting_recordings():
+            self._stop_pending_checker()
             return None
         task = self._start_cycle(self._run_pending_pass)
         return await task if task is not None else None
@@ -597,6 +625,8 @@ class PlaudPoller:
         pcs_pending = await self._pending_count()
         self._last_poll_at = completed_at
         await self._save_poll_state(completed_at, error)
+        if self._has_waiting_recordings():
+            self._ensure_pending_checker()
 
         return {
             "discoveryCompleted": discovery_completed,
