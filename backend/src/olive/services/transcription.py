@@ -9,7 +9,7 @@ import os
 import re
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -19,7 +19,7 @@ from sqlalchemy.engine import Engine
 
 from ..db import DbHandle, get_db
 from ..languages import is_auto_language
-from ..layout import ensure_meeting_folder, meeting_paths
+from ..layout import MeetingPaths, ensure_meeting_folder, meeting_paths
 from ..logging_db import Logger
 from ..logging_db import logger as default_logger
 from ..ml import (
@@ -68,6 +68,7 @@ from ..workflows import (
     local_stage_workflow_id,
     register_task_context,
 )
+from ..workflows.transcription_run import TranscriptionRun
 from .cloud_transcription import (
     CLOUD_PROVIDERS,
     CloudTranscriber,
@@ -116,7 +117,6 @@ def is_known_transcription_provider(value: Any) -> bool:
         return True
     raw = str(value).strip().lower()
     return raw.startswith(PROVIDER_LOCAL) or raw in CLOUD_PROVIDERS
-
 
 
 def _parse_json_field(value: str | None, fallback: Any) -> Any:
@@ -310,6 +310,15 @@ class TranscriptionService:
         self._progress_listeners: dict[str, set[Callable[[TranscriptionProgressUpdate], Any]]] = {}
         self._reidentify_statuses: dict[str, SpeakerReidentificationStatus] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
+        # Owns every run's state (run row, meeting status, terminal progress,
+        # summarize follow-up) for both the local stage chain and cloud runs.
+        self.run = TranscriptionRun(
+            self.db,
+            now=lambda: self.now(),
+            progress=lambda meeting_id, update: self.emit_progress(meeting_id, update),
+            after_complete=lambda meeting_id: self._enqueue_auto_summarize(meeting_id),
+            logger=self.logger,
+        )
         self._speechmatics = SpeechmaticsTranscriber(
             self.client,
             webhook_url=self.webhook_url,
@@ -1525,9 +1534,9 @@ class TranscriptionService:
         return CloudTranscriptionRun(
             db=self.db,
             meetings_dir=self.meetings_dir,
-            now=self.now,
             logger=self.logger,
-            complete=self._complete_cloud_transcription,
+            lifecycle=self.run,
+            persist=self._persist_cloud_transcript,
             on_job_id=self._note_cloud_job_id,
         )
 
@@ -2108,44 +2117,21 @@ class TranscriptionService:
             )
             return None
 
-    async def _complete_cloud_transcription(
+    async def _persist_cloud_transcript(
         self,
         meeting_id: str,
-        stage_run_id: str,
-        job_id: str,
         canonical: Transcript,
         provider: str,
         raw_payload: dict[str, Any] | None = None,
         options: dict[str, Any] | None = None,
         estimate_usage: bool = True,
-    ) -> dict[str, Any]:
-        """Persist a normalized cloud transcript + identified speakers."""
-        with self.db.connect() as conn:
-            meeting = (
-                conn.execute(
-                    text("SELECT * FROM meetings WHERE id = :id"),
-                    {"id": meeting_id},
-                )
-                .mappings()
-                .first()
-            )
-            if not meeting:
-                raise ValueError(f"Meeting {meeting_id} not found")
+    ) -> dict[str, Any] | None:
+        """Write a normalized cloud transcript's artifacts and identified speakers.
 
-            recording = (
-                conn.execute(
-                    text(
-                        "SELECT id, path FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"
-                    ),
-                    {"mid": meeting_id},
-                )
-                .mappings()
-                .first()
-            )
-
-        paths = ensure_meeting_folder(
-            meeting_paths(self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"])
-        )
+        Returns the artifact ids, or ``None`` when the run was cancelled while
+        speakers were being identified (nothing is written then).
+        """
+        meeting, recording, paths = self._meeting_with_recording(meeting_id)
         audio_path = (
             str(Path(paths.folder) / recording["path"]) if recording and recording.get("path") else None
         )
@@ -2156,50 +2142,10 @@ class TranscriptionService:
             canonical, discovered = identified
 
         if _signal_aborted((options or {}).get("signal")):
-            cancelled_at = self.now()
-            with self.db.begin() as conn:
-                conn.execute(
-                    text(
-                        """
-                        UPDATE stage_runs
-                        SET status = 'cancelled', last_error = 'Cancelled by user',
-                            finished_at = :t, updated_at = :t
-                        WHERE id = :id
-                        """
-                    ),
-                    {"t": cancelled_at, "id": stage_run_id},
-                )
-            return {
-                "stageRunId": stage_run_id,
-                "jobId": job_id,
-                "status": "cancelled",
-                "error": "Cancelled by user",
-            }
+            return None
 
-        t_text = transcript_to_text(canonical)
-        t_json = f"{json.dumps(canonical.model_dump(exclude_none=True), indent=2)}\n"
-
-        rec_id = recording["id"] if recording else None
-        json_art_id = await self._ensure_artifact(
-            meeting["id"],
-            rec_id,
-            "transcript",
-            "json",
-            f"transcripts/{provider}.json",
-            t_json,
-            paths.transcripts_dir,
-            provider,
-            estimate_usage=estimate_usage,
-        )
-        txt_art_id = await self._ensure_artifact(
-            meeting["id"],
-            rec_id,
-            "transcript",
-            "txt",
-            f"transcripts/{provider}.txt",
-            f"{t_text}\n",
-            paths.transcripts_dir,
-            provider,
+        json_art_id, txt_art_id = await self._write_transcript_artifacts(
+            meeting, recording, paths, provider, canonical, estimate_usage=estimate_usage
         )
 
         if discovered is not None:
@@ -2210,40 +2156,68 @@ class TranscriptionService:
         else:
             await self._persist_discovered_speakers(meeting["id"], json_art_id, canonical, {})
 
-        completed_at = self.now()
-        with self.db.begin() as conn:
-            conn.execute(
-                text(
-                    """
-                    UPDATE meetings
-                    SET primary_transcript_artifact_id = :aid, status = 'ready',
-                        last_error = NULL, updated_at = :now
-                    WHERE id = :id
-                    """
-                ),
-                {"aid": json_art_id, "now": completed_at, "id": meeting["id"]},
-            )
-            conn.execute(
-                text(
-                    """
-                    UPDATE stage_runs
-                    SET status = 'done', last_error = NULL,
-                        finished_at = :now, updated_at = :now
-                    WHERE id = :id
-                    """
-                ),
-                {"now": completed_at, "id": stage_run_id},
-            )
+        return {"transcriptArtifactId": json_art_id, "transcriptTextArtifactId": txt_art_id}
 
-        asyncio.create_task(self._enqueue_auto_summarize(meeting["id"]))
+    def _meeting_with_recording(
+        self, meeting_id: str
+    ) -> tuple[dict[str, Any], dict[str, Any] | None, MeetingPaths]:
+        with self.db.connect() as conn:
+            meeting = (
+                conn.execute(text("SELECT * FROM meetings WHERE id = :id"), {"id": meeting_id})
+                .mappings()
+                .first()
+            )
+            if not meeting:
+                raise ValueError(f"Meeting {meeting_id} not found")
+            recording = (
+                conn.execute(
+                    text(
+                        "SELECT id, path FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"
+                    ),
+                    {"mid": meeting_id},
+                )
+                .mappings()
+                .first()
+            )
+        paths = ensure_meeting_folder(
+            meeting_paths(self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"])
+        )
+        return dict(meeting), dict(recording) if recording else None, paths
 
-        return {
-            "stageRunId": stage_run_id,
-            "jobId": job_id,
-            "status": "done",
-            "transcriptArtifactId": json_art_id,
-            "transcriptTextArtifactId": txt_art_id,
-        }
+    async def _write_transcript_artifacts(
+        self,
+        meeting: Mapping[str, Any],
+        recording: Mapping[str, Any] | None,
+        paths: MeetingPaths,
+        provider: str,
+        transcript: Transcript,
+        *,
+        estimate_usage: bool = True,
+    ) -> tuple[str, str]:
+        """Write ``transcripts/<provider>.json`` + ``.txt``; returns their artifact ids."""
+        rec_id = recording["id"] if recording else None
+        json_art_id = await self._ensure_artifact(
+            meeting["id"],
+            rec_id,
+            "transcript",
+            "json",
+            f"transcripts/{provider}.json",
+            f"{json.dumps(transcript.model_dump(exclude_none=True), indent=2)}\n",
+            paths.transcripts_dir,
+            provider,
+            estimate_usage=estimate_usage,
+        )
+        txt_art_id = await self._ensure_artifact(
+            meeting["id"],
+            rec_id,
+            "transcript",
+            "txt",
+            f"transcripts/{provider}.txt",
+            f"{transcript_to_text(transcript)}\n",
+            paths.transcripts_dir,
+            provider,
+        )
+        return json_art_id, txt_art_id
 
     async def complete_transcription(
         self,

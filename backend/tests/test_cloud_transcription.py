@@ -51,6 +51,13 @@ def _stage_run(handle: Any) -> dict[str, Any]:
     return dict(row)
 
 
+def _meeting_status(handle: Any) -> str:
+    with handle.engine.connect() as conn:
+        return str(
+            conn.execute(text("SELECT status FROM meetings WHERE id = :id"), {"id": MEETING_ID}).scalar()
+        )
+
+
 def _meeting_error(handle: Any) -> str | None:
     with handle.engine.connect() as conn:
         return conn.execute(
@@ -116,6 +123,7 @@ async def test_transcriber_failure_marks_error(tmp_path: Path) -> None:
     run = _stage_run(handle)
     assert (run["status"], run["last_error"]) == ("error", "boom")
     assert _meeting_error(handle) == "boom"
+    assert _meeting_status(handle) == "error"
     assert updates[-1] == ("error", "boom")
     handle.engine.dispose()
 
@@ -185,4 +193,53 @@ async def test_transcript_artifact_estimates_usage_by_default(tmp_path: Path) ->
     res, _ = await _transcribe(_service(handle, meetings_dir, FakeTranscriber()))
 
     assert _usage_sources(handle) == [f"transcript:{res['transcriptArtifactId']}"]
+    handle.engine.dispose()
+
+
+async def test_meeting_is_processing_while_the_run_is_active(tmp_path: Path) -> None:
+    handle, meetings_dir = _seed(tmp_path)
+    seen: list[str] = []
+
+    def _observe(_job: CloudJob) -> CloudTranscript:
+        seen.append(_meeting_status(handle))
+        return CloudTranscript(short_transcript())
+
+    res, _ = await _transcribe(_service(handle, meetings_dir, FakeTranscriber(outcome=_observe)))
+
+    assert res["status"] == "done"
+    assert seen == ["processing"]
+    assert _meeting_status(handle) == "ready"
+    handle.engine.dispose()
+
+
+async def test_completion_awaits_the_durable_summarize_enqueue(tmp_path: Path) -> None:
+    handle, meetings_dir = _seed(tmp_path)
+    svc = _service(handle, meetings_dir, FakeTranscriber())
+    enqueued: list[str] = []
+
+    async def _enqueue(meeting_id: str) -> None:
+        enqueued.append(meeting_id)
+
+    svc._enqueue_auto_summarize = _enqueue  # type: ignore[method-assign]
+    await _transcribe(svc)
+
+    # Awaited inside the run, not scheduled as a bare task.
+    assert enqueued == [MEETING_ID]
+    handle.engine.dispose()
+
+
+async def test_callback_completion_reports_done_progress(tmp_path: Path) -> None:
+    handle, meetings_dir = _seed(tmp_path)
+    fake = FakeTranscriber(outcome=Submitted("fake-job-1"))
+    svc = _service(handle, meetings_dir, fake)
+    submitted, _ = await _transcribe(svc)
+
+    # A provider callback (Speechmatics webhook) finishes without a caller's onProgress.
+    res = await svc._cloud_run().finish(
+        fake, MEETING_ID, submitted["stageRunId"], "fake-job-1", CloudTranscript(short_transcript())
+    )
+
+    assert res["status"] == "done"
+    progress = svc.get_transcription_progress(MEETING_ID)
+    assert progress is not None and progress.stage == "done"
     handle.engine.dispose()

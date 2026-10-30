@@ -3,16 +3,16 @@
 Each cloud provider is a small ``CloudTranscriber`` adapter that turns a
 meeting's audio into a canonical ``Transcript`` (``providers/<name>/transcriber.py``).
 ``CloudTranscriptionRun`` owns everything around it: loading the meeting and
-its recording, the "already done" short-circuit, the ``stage_runs`` lifecycle,
-cancellation, failure bookkeeping, progress, and handing the transcript to the
-persistence callback.
+its recording, the "already done" short-circuit, releasing provider jobs, and
+handing the transcript to the persistence callback. Run state (``stage_runs``,
+meeting status, terminal progress, the summarize follow-up) goes through the
+shared ``TranscriptionRun``, the same lifecycle the local stage chain uses.
 """
 
 from __future__ import annotations
 
 import inspect
 import re
-import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,9 +25,7 @@ from ..layout import meeting_paths
 from ..logging_db import Logger
 from ..schemas import Transcript, TranscriptionProgressUpdate
 from ..workflows import QUEUE_ASSEMBLYAI, QUEUE_MODAL, QUEUE_MUSE, QUEUE_SPEECHMATICS
-
-CANCELLED_MESSAGE = "Transcription was cancelled."
-CANCELLED_ERROR = "Cancelled by user"
+from ..workflows.transcription_run import CANCELLED_ERROR, TranscriptionRun
 
 
 @dataclass(frozen=True)
@@ -148,7 +146,9 @@ class CloudTranscriber(Protocol):
         ...
 
 
-CompleteTranscript = Callable[..., Awaitable[dict[str, Any]]]
+# Persists a finished transcript (artifacts + speakers) and returns its artifact
+# ids, or None when the run was cancelled before anything was written.
+PersistTranscript = Callable[..., Awaitable[dict[str, Any] | None]]
 
 
 class CloudTranscriptionRun:
@@ -157,16 +157,16 @@ class CloudTranscriptionRun:
         *,
         db: Engine,
         meetings_dir: str,
-        now: Callable[[], int],
         logger: Logger,
-        complete: CompleteTranscript,
+        lifecycle: TranscriptionRun,
+        persist: PersistTranscript,
         on_job_id: Callable[[str, str, str], None] | None = None,
     ) -> None:
         self.db = db
         self.meetings_dir = meetings_dir
-        self.now = now
         self.logger = logger
-        self._complete = complete
+        self.lifecycle = lifecycle
+        self._persist = persist
         self._on_job_id = on_job_id
 
     async def run(
@@ -192,15 +192,14 @@ class CloudTranscriptionRun:
                 "transcriptArtifactId": self._existing_transcript_artifact(meeting_id, spec.provider),
             }
 
-        stage_run_id = str(stage_run["id"]) if stage_run else str(uuid.uuid4())
-        self._mark_running(meeting_id, spec.stage, stage_run_id, stage_run)
+        stage_run_id = self.lifecycle.start(meeting_id, spec.stage)
         job = CloudJob(
             meeting=meeting,
             recording=recording,
             audio_path=audio_path,
             stage_run_id=stage_run_id,
             options=options,
-            _on_job_id=lambda job_id: self._record_job_id(meeting_id, stage_run_id, job_id),
+            _on_job_id=lambda job_id: self._record_job_id(meeting_id, spec.stage, stage_run_id, job_id),
         )
 
         try:
@@ -208,9 +207,11 @@ class CloudTranscriptionRun:
             outcome = await transcriber.transcribe(job)
         except TranscriptionCancelled:
             await self._release(transcriber, job.job_id)
-            return await self._fail(spec, meeting_id, stage_run_id, job.job_id, options, cancelled=True)
+            return await self._cancelled(spec, meeting_id, stage_run_id, job.job_id, options)
         except Exception as exc:
-            return await self._fail(spec, meeting_id, stage_run_id, job.job_id, options, str(exc))
+            err_msg = str(exc)
+            await self.lifecycle.fail(meeting_id, spec.stage, err_msg, on_progress=options.get("onProgress"))
+            return {"stageRunId": stage_run_id, "jobId": job.job_id, "status": "error", "error": err_msg}
 
         if isinstance(outcome, Submitted):
             return {"stageRunId": stage_run_id, "jobId": outcome.job_id, "status": "running"}
@@ -230,10 +231,8 @@ class CloudTranscriptionRun:
         opts = options or {}
         if result.usage is not None:
             self._record_usage(spec.provider, meeting_id, result)
-        res = await self._complete(
+        artifacts = await self._persist(
             meeting_id,
-            stage_run_id,
-            job_id,
             result.transcript,
             spec.provider,
             raw_payload=result.raw_payload,
@@ -241,15 +240,17 @@ class CloudTranscriptionRun:
             estimate_usage=result.usage is None,
         )
         await self._release(transcriber, job_id)
-        if res.get("status") == "cancelled":
-            return await self._fail(spec, meeting_id, stage_run_id, job_id, opts, cancelled=True)
-        await emit_progress_update(
-            opts.get("onProgress"),
-            TranscriptionProgressUpdate(
-                stage="done", percent=100, message=f"{spec.label} transcription complete!"
-            ),
+        if artifacts is None:
+            return await self._cancelled(spec, meeting_id, stage_run_id, job_id, opts)
+        await self.lifecycle.complete(
+            meeting_id,
+            spec.stage,
+            transcript_artifact_id=artifacts["transcriptArtifactId"],
+            job_id=job_id or None,
+            message=f"{spec.label} transcription complete!",
+            on_progress=opts.get("onProgress"),
         )
-        return res
+        return {"stageRunId": stage_run_id, "jobId": job_id, "status": "done", **artifacts}
 
     def _load(
         self, meeting_id: str, stage: str
@@ -300,49 +301,8 @@ class CloudTranscriptionRun:
             )
         return str(row["id"]) if row else None
 
-    def _mark_running(
-        self,
-        meeting_id: str,
-        stage: str,
-        stage_run_id: str,
-        stage_run: Mapping[str, Any] | None,
-    ) -> None:
-        now = self.now()
-        with self.db.begin() as conn:
-            if stage_run:
-                conn.execute(
-                    text(
-                        """
-                        UPDATE stage_runs
-                        SET status = 'running', provider_job_id = NULL, attempts = :attempts,
-                            last_error = NULL, started_at = :now, finished_at = NULL, updated_at = :now
-                        WHERE id = :id
-                        """
-                    ),
-                    {"attempts": int(stage_run["attempts"]) + 1, "now": now, "id": stage_run_id},
-                )
-            else:
-                conn.execute(
-                    text(
-                        """
-                        INSERT INTO stage_runs (
-                          id, meeting_id, stage, status, provider_job_id, attempts,
-                          last_error, started_at, finished_at, created_at, updated_at
-                        ) VALUES (
-                          :id, :mid, :stage, 'running', NULL, 1,
-                          NULL, :now, NULL, :now, :now
-                        )
-                        """
-                    ),
-                    {"id": stage_run_id, "mid": meeting_id, "stage": stage, "now": now},
-                )
-
-    def _record_job_id(self, meeting_id: str, stage_run_id: str, job_id: str) -> None:
-        with self.db.begin() as conn:
-            conn.execute(
-                text("UPDATE stage_runs SET provider_job_id = :jid, updated_at = :now WHERE id = :id"),
-                {"jid": job_id or None, "now": self.now(), "id": stage_run_id},
-            )
+    def _record_job_id(self, meeting_id: str, stage: str, stage_run_id: str, job_id: str) -> None:
+        self.lifecycle.record_job_id(meeting_id, stage, job_id)
         if self._on_job_id is not None:
             self._on_job_id(meeting_id, stage_run_id, job_id)
 
@@ -354,7 +314,7 @@ class CloudTranscriptionRun:
                 self.db,
                 meeting_id=meeting_id,
                 provider=provider,
-                created_at=self.now(),
+                created_at=self.lifecycle.now(),
                 **(result.usage or {}),
             )
         except Exception as exc:
@@ -374,51 +334,13 @@ class CloudTranscriptionRun:
                 {"jobId": job_id, "error": str(exc)},
             )
 
-    async def _fail(
+    async def _cancelled(
         self,
         spec: CloudProviderSpec,
         meeting_id: str,
         stage_run_id: str,
         job_id: str,
         options: Mapping[str, Any],
-        err_msg: str = CANCELLED_MESSAGE,
-        cancelled: bool = False,
     ) -> dict[str, Any]:
-        err_time = self.now()
-        with self.db.begin() as conn:
-            conn.execute(
-                text(
-                    """
-                    UPDATE stage_runs
-                    SET status = :st, last_error = :err, finished_at = :t, updated_at = :t
-                    WHERE id = :id
-                    """
-                ),
-                {
-                    "st": "cancelled" if cancelled else "error",
-                    "err": CANCELLED_ERROR if cancelled else err_msg,
-                    "t": err_time,
-                    "id": stage_run_id,
-                },
-            )
-            if not cancelled:
-                conn.execute(
-                    text("UPDATE meetings SET last_error = :err, updated_at = :t WHERE id = :id"),
-                    {"err": err_msg, "t": err_time, "id": meeting_id},
-                )
-        self.logger.error(f"{spec.label} transcription failed", {"meetingId": meeting_id, "error": err_msg})
-        await emit_progress_update(
-            options.get("onProgress"),
-            TranscriptionProgressUpdate(
-                stage="cancelled" if cancelled else "error",
-                percent=0,
-                message=CANCELLED_MESSAGE if cancelled else err_msg,
-                error=None if cancelled else err_msg,
-            ),
-        )
-        return {
-            "stageRunId": stage_run_id,
-            "jobId": job_id,
-            "status": "cancelled" if cancelled else "error",
-            "error": CANCELLED_ERROR if cancelled else err_msg,
-        }
+        await self.lifecycle.cancel(meeting_id, spec.stage, on_progress=options.get("onProgress"))
+        return {"stageRunId": stage_run_id, "jobId": job_id, "status": "cancelled", "error": CANCELLED_ERROR}
