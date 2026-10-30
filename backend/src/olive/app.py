@@ -471,6 +471,16 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             chatgpt_plan_sessions = PlaudAuthSessionStore()
         return chatgpt_plan_sessions
 
+    chatgpt_codex_sessions: Any = None
+
+    def get_chatgpt_codex_sessions() -> Any:
+        nonlocal chatgpt_codex_sessions
+        if chatgpt_codex_sessions is None:
+            from .plaud.auth import PlaudAuthSessionStore
+
+            chatgpt_codex_sessions = PlaudAuthSessionStore()
+        return chatgpt_codex_sessions
+
     def get_auth_sessions() -> Any:
         nonlocal auth_sessions
         if auth_sessions is None:
@@ -2373,6 +2383,52 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
     @app.post("/api/llm/chatgpt-plan/logout")
     async def post_chatgpt_plan_logout_route() -> JSONResponse:
         result = await get_llm_service().chatgpt_plan_auth().logout()
+        return JSONResponse({"status": "disconnected", **result})
+
+    @app.get("/api/llm/chatgpt-codex/status")
+    async def get_chatgpt_codex_status_route() -> JSONResponse:
+        return JSONResponse(get_llm_service().chatgpt_codex_auth().status())
+
+    @app.post("/api/llm/chatgpt-codex/auth/start")
+    async def post_chatgpt_codex_auth_start_route() -> JSONResponse:
+        try:
+            login = get_llm_service().chatgpt_codex_auth().start_login()
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+        session_id = get_chatgpt_codex_sessions().create({k: login[k] for k in ("verifier", "state")})
+        return JSONResponse({"authUrl": login["authUrl"], "sessionId": session_id})
+
+    @app.post("/api/llm/chatgpt-codex/auth/complete")
+    async def post_chatgpt_codex_auth_complete_route(request: Request) -> JSONResponse:
+        from .providers.chatgpt_plan import ChatGptPlanError
+
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "Request body must be valid JSON"}, status_code=400)
+        pasted = body.get("pastedUrlOrCode") if isinstance(body, dict) else None
+        session_id = body.get("sessionId") if isinstance(body, dict) else None
+        if not isinstance(pasted, str) or not pasted.strip():
+            return JSONResponse({"error": "pastedUrlOrCode is required"}, status_code=400)
+        if not isinstance(session_id, str) or not session_id:
+            return JSONResponse({"error": "sessionId is required"}, status_code=400)
+
+        sessions = get_chatgpt_codex_sessions()
+        session = sessions.get(session_id)
+        if not session:
+            return JSONResponse({"error": "This sign-in link expired. Start again."}, status_code=400)
+        try:
+            status = await get_llm_service().chatgpt_codex_auth().complete_login(session, pasted)
+        except ChatGptPlanError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except Exception as exc:
+            return JSONResponse({"error": f"Could not reach ChatGPT: {exc}"}, status_code=502)
+        sessions.delete(session_id)
+        return JSONResponse({"status": "completed", "account": status})
+
+    @app.post("/api/llm/chatgpt-codex/logout")
+    async def post_chatgpt_codex_logout_route() -> JSONResponse:
+        result = await get_llm_service().chatgpt_codex_auth().logout()
         return JSONResponse({"status": "disconnected", **result})
 
     @app.post("/api/llm/refresh-catalog")

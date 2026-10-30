@@ -10,6 +10,8 @@ import { GroupTitle, INPUT_CLASS, Panel, SectionHeader, StatusTag, errorText, re
 
 /** Provider id of the ChatGPT plan (sign-in instead of an API key). */
 export const CHATGPT_PLAN_PROVIDER = "chatgpt-plan";
+/** Provider id of the ChatGPT plan through the Codex sign-in. */
+export const CHATGPT_CODEX_PROVIDER = "chatgpt-codex";
 /** Chat provider option meaning "use the default model". */
 const SAME_AS_DEFAULT = "";
 
@@ -601,7 +603,7 @@ export function AiSection({
           <li className="px-3.5 py-6 text-center text-sm text-base-content/60">No providers match.</li>
         ) : (
           sortedProviders.map((p) =>
-            p.id === CHATGPT_PLAN_PROVIDER ? (
+            p.id === CHATGPT_PLAN_PROVIDER || p.id === CHATGPT_CODEX_PROVIDER ? (
               <ChatGptPlanRow key={p.id} provider={p} onChanged={onCatalogChanged} />
             ) : (
               <ProviderRow

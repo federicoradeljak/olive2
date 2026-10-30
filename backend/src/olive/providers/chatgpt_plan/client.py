@@ -62,8 +62,6 @@ async def stream_response(
     if instructions:
         body["instructions"] = instructions
 
-    text = ""
-    usage: dict[str, int] | None = None
     async with httpx.AsyncClient(timeout=STREAM_TIMEOUT, transport=transport) as http:
         async with http.stream(
             "POST",
@@ -71,47 +69,56 @@ async def stream_response(
             headers={"Authorization": f"Bearer {access_token}", "Accept": "text/event-stream"},
             json=body,
         ) as res:
-            request_id = res.headers.get("x-request-id")
-            if res.status_code != 200:
-                raise error_from_response(res, await res.aread())
-            async for event in _iter_sse_events(res):
-                if not isinstance(event, dict):
-                    continue
-                kind = event.get("type")
-                if kind == "response.output_text.delta":
-                    piece = event.get("delta")
-                    if isinstance(piece, str) and piece:
-                        text += piece
-                        if on_delta is not None:
-                            cb = on_delta(piece)
-                            if inspect.isawaitable(cb):
-                                await cb
-                elif kind == "response.completed":
-                    response = event.get("response") if isinstance(event.get("response"), dict) else {}
-                    raw_usage = response.get("usage") if isinstance(response, dict) else None
-                    if isinstance(raw_usage, dict):
-                        in_tok = int(raw_usage.get("input_tokens") or 0)
-                        out_tok = int(raw_usage.get("output_tokens") or 0)
-                        usage = {
-                            "input": in_tok,
-                            "output": out_tok,
-                            "total": int(raw_usage.get("total_tokens") or in_tok + out_tok),
-                        }
-                    return text, usage
-                elif kind == "response.failed":
-                    response = event.get("response") if isinstance(event.get("response"), dict) else {}
-                    raise error_from_payload(response, request_id=request_id)
-                elif kind == "response.incomplete":
-                    response = event.get("response") if isinstance(event.get("response"), dict) else {}
-                    details = response.get("incomplete_details") if isinstance(response, dict) else None
-                    reason = details.get("reason") if isinstance(details, dict) else None
-                    raise ChatGptPlanError(
-                        f"ChatGPT stopped before finishing the answer ({reason or 'incomplete'}).",
-                        code=reason if isinstance(reason, str) else None,
-                        request_id=request_id,
-                    )
-                elif kind == "error":
-                    raise error_from_payload({"error": event}, request_id=request_id)
+            return await consume_response_stream(res, on_delta)
+
+
+async def consume_response_stream(
+    res: httpx.Response, on_delta: Callable[[str], Any] | None = None
+) -> tuple[str, dict[str, int] | None]:
+    """Read a streamed Responses reply; returns the full text and token usage."""
+    request_id = res.headers.get("x-request-id")
+    if res.status_code != 200:
+        raise error_from_response(res, await res.aread())
+    text = ""
+    async for event in _iter_sse_events(res):
+        if not isinstance(event, dict):
+            continue
+        kind = event.get("type")
+        if kind == "response.output_text.delta":
+            piece = event.get("delta")
+            if isinstance(piece, str) and piece:
+                text += piece
+                if on_delta is not None:
+                    cb = on_delta(piece)
+                    if inspect.isawaitable(cb):
+                        await cb
+        elif kind in ("response.completed", "response.done"):
+            response = event.get("response") if isinstance(event.get("response"), dict) else {}
+            raw_usage = response.get("usage") if isinstance(response, dict) else None
+            usage: dict[str, int] | None = None
+            if isinstance(raw_usage, dict):
+                in_tok = int(raw_usage.get("input_tokens") or 0)
+                out_tok = int(raw_usage.get("output_tokens") or 0)
+                usage = {
+                    "input": in_tok,
+                    "output": out_tok,
+                    "total": int(raw_usage.get("total_tokens") or in_tok + out_tok),
+                }
+            return text, usage
+        elif kind == "response.failed":
+            response = event.get("response") if isinstance(event.get("response"), dict) else {}
+            raise error_from_payload(response, request_id=request_id)
+        elif kind == "response.incomplete":
+            response = event.get("response") if isinstance(event.get("response"), dict) else {}
+            details = response.get("incomplete_details") if isinstance(response, dict) else None
+            reason = details.get("reason") if isinstance(details, dict) else None
+            raise ChatGptPlanError(
+                f"ChatGPT stopped before finishing the answer ({reason or 'incomplete'}).",
+                code=reason if isinstance(reason, str) else None,
+                request_id=request_id,
+            )
+        elif kind == "error":
+            raise error_from_payload({"error": event}, request_id=request_id)
     raise ChatGptPlanError("The ChatGPT response stream ended before the answer was complete.")
 
 
@@ -123,7 +130,11 @@ async def list_models(
         res = await http.get(MODELS_URL, headers={"Authorization": f"Bearer {access_token}"})
     if res.status_code != 200:
         raise error_from_response(res, res.content)
-    payload = res.json()
+    return parse_models(res.json())
+
+
+def parse_models(payload: Any) -> list[dict[str, str]]:
+    """Listed ``models[]`` entries (``slug``, ``display_name``), in the server's order."""
     entries = payload.get("models") if isinstance(payload, dict) else None
     models: list[dict[str, str]] = []
     for entry in entries if isinstance(entries, list) else []:

@@ -16,10 +16,13 @@ from sqlalchemy.engine import Engine
 from ..db import DbHandle, close_db, get_db, reset_db_handle
 from ..logging_db import Logger
 from ..logging_db import logger as default_logger
+from ..providers.chatgpt_codex import TOKENS_FILENAME as CHATGPT_CODEX_TOKENS_FILENAME
 from ..providers.chatgpt_plan import TOKENS_FILENAME as CHATGPT_PLAN_TOKENS_FILENAME
 from ..schemas import BackupInfo, BackupManifest, BackupManifestStats, RestoreResult, RestoreStats
 from ..settings import OlivePaths, clear_app_config_cache, resolve_paths
 
+# ChatGPT sign-in credentials kept in the config dir (plan usage and Codex).
+CHATGPT_TOKENS_FILENAMES = (CHATGPT_PLAN_TOKENS_FILENAME, CHATGPT_CODEX_TOKENS_FILENAME)
 
 class BackupService:
     def __init__(
@@ -216,9 +219,10 @@ class BackupService:
             models_path = Path(self.config_dir) / "models.json"
             if models_path.exists():
                 shutil.copy2(models_path, staging_dir / "models.json")
-            chatgpt_tokens_path = Path(self.config_dir) / CHATGPT_PLAN_TOKENS_FILENAME
-            if chatgpt_tokens_path.exists():
-                shutil.copy2(chatgpt_tokens_path, staging_dir / CHATGPT_PLAN_TOKENS_FILENAME)
+            for name in CHATGPT_TOKENS_FILENAMES:
+                chatgpt_tokens_path = Path(self.config_dir) / name
+                if chatgpt_tokens_path.exists():
+                    shutil.copy2(chatgpt_tokens_path, staging_dir / name)
 
             # 4. Copy meetings directory
             staging_meetings_dir = staging_dir / "meetings"
@@ -429,9 +433,10 @@ class BackupService:
                             shutil.copy2(
                                 self.plaud_tokens_path, rollback_dir / "plaud-tokens.json"
                             )
-                        chatgpt_tokens = Path(self.config_dir) / CHATGPT_PLAN_TOKENS_FILENAME
-                        if chatgpt_tokens.exists():
-                            shutil.copy2(chatgpt_tokens, rollback_dir / CHATGPT_PLAN_TOKENS_FILENAME)
+                        for name in CHATGPT_TOKENS_FILENAMES:
+                            chatgpt_tokens = Path(self.config_dir) / name
+                            if chatgpt_tokens.exists():
+                                shutil.copy2(chatgpt_tokens, rollback_dir / name)
                     except Exception:
                         pass
 
@@ -449,7 +454,7 @@ class BackupService:
                     Path(f"{self.database_path}{suffix}").unlink(missing_ok=True)
                 shutil.copy2(extracted_db, db_target)
 
-                # 6. Restore settings.json, plaud-tokens.json, models.json, ChatGPT plan tokens
+                # 6. Restore settings.json, plaud-tokens.json, models.json, ChatGPT tokens
                 if (extract_dir / "settings.json").exists():
                     Path(self.settings_path).parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(extract_dir / "settings.json", self.settings_path)
@@ -460,11 +465,9 @@ class BackupService:
                     shutil.copy2(
                         extract_dir / "models.json", Path(self.config_dir) / "models.json"
                     )
-                if (extract_dir / CHATGPT_PLAN_TOKENS_FILENAME).exists():
-                    shutil.copy2(
-                        extract_dir / CHATGPT_PLAN_TOKENS_FILENAME,
-                        Path(self.config_dir) / CHATGPT_PLAN_TOKENS_FILENAME,
-                    )
+                for name in CHATGPT_TOKENS_FILENAMES:
+                    if (extract_dir / name).exists():
+                        shutil.copy2(extract_dir / name, Path(self.config_dir) / name)
 
                 # 7. Restore meetings folder
                 extracted_meetings = extract_dir / "meetings"
@@ -514,11 +517,9 @@ class BackupService:
                             shutil.copy2(
                                 rollback_dir / "plaud-tokens.json", self.plaud_tokens_path
                             )
-                        if (rollback_dir / CHATGPT_PLAN_TOKENS_FILENAME).exists():
-                            shutil.copy2(
-                                rollback_dir / CHATGPT_PLAN_TOKENS_FILENAME,
-                                Path(self.config_dir) / CHATGPT_PLAN_TOKENS_FILENAME,
-                            )
+                        for name in CHATGPT_TOKENS_FILENAMES:
+                            if (rollback_dir / name).exists():
+                                shutil.copy2(rollback_dir / name, Path(self.config_dir) / name)
                         reset_db_handle(self.database_path)
                     except Exception:
                         pass

@@ -232,7 +232,7 @@ export function llmProviderOptions(providers: LlmProviderLike[]): ComboboxOption
     value: p.id,
     label: p.name,
     description:
-      p.id === "chatgpt-plan"
+      p.id === "chatgpt-plan" || p.id === "chatgpt-codex"
         ? `${p.modelCount} models · ${p.isConfigured ? "Signed in" : "Connect in the providers list"}`
         : `${p.modelCount} models · ${p.isConfigured ? "Key configured" : "Needs API key"}`,
     keywords: p.isConfigured ? "configured" : "unconfigured",
