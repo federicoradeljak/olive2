@@ -5,13 +5,12 @@ from __future__ import annotations
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from ..layout import MeetingPaths, ensure_meeting_folder, meeting_paths
+from ..meeting_storage import MeetingStorage
 
 PLAUD_PROVIDER = "plaud"
 
@@ -43,7 +42,7 @@ class RecordingIntake:
 
     def __init__(self, db: Engine, meetings_dir: str, now: Callable[[], int]) -> None:
         self.db = db
-        self.meetings_dir = meetings_dir
+        self.storage = MeetingStorage(meetings_dir)
         self.now = now
 
     async def ensure(
@@ -75,8 +74,7 @@ class RecordingIntake:
                 .first()
             )
 
-        folder = Path(self._paths(meeting).folder)
-        if existing and (folder / existing["path"]).exists():
+        if existing and self.storage.audio_path(meeting, existing):
             return StoredRecording(id=existing["id"], path=existing["path"])
 
         downloaded = await download()
@@ -101,7 +99,7 @@ class RecordingIntake:
                         text("UPDATE recordings SET provider_recording_id = :fid WHERE id = :id"),
                         {"fid": plaud_file_id, "id": existing_by_hash["id"]},
                     )
-            abs_path = folder / existing_by_hash["path"]
+            abs_path = self.storage.file(meeting, existing_by_hash["path"])
             abs_path.parent.mkdir(parents=True, exist_ok=True)
             if not abs_path.exists():
                 abs_path.write_bytes(downloaded.bytes)
@@ -109,8 +107,8 @@ class RecordingIntake:
 
         rec_id = existing["id"] if existing else str(uuid.uuid4())
         rel_path = f"audio/{rec_id}.{downloaded.extension}"
-        paths = ensure_meeting_folder(self._paths(meeting))
-        (Path(paths.folder) / rel_path).write_bytes(downloaded.bytes)
+        self.storage.ensure(meeting)
+        self.storage.file(meeting, rel_path).write_bytes(downloaded.bytes)
 
         with self.db.begin() as conn:
             if existing:
@@ -160,6 +158,3 @@ class RecordingIntake:
             )
 
         return StoredRecording(id=rec_id, path=rel_path)
-
-    def _paths(self, meeting: Mapping[Any, Any]) -> MeetingPaths:
-        return meeting_paths(self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"])

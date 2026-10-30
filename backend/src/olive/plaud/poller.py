@@ -23,9 +23,9 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from ..db import DbHandle, get_db
-from ..layout import ensure_meeting_folder, meeting_paths
 from ..logging_db import Logger
 from ..logging_db import logger as default_logger
+from ..meeting_storage import MeetingStorage, first_recording
 from ..ml.opus import is_raw_plaud_opus, wrap_raw_opus_bytes
 from ..schemas import EnrolledSpeaker, Transcript, TranscriptSegment
 from ..speaker_labels import is_generic_speaker_label
@@ -310,6 +310,7 @@ class PlaudPoller:
             self.db = get_db()
 
         self.meetings_dir: str = str(opts.get("meetingsDir") or opts.get("meetings_dir") or "")
+        self.storage = MeetingStorage(self.meetings_dir)
         self.client: Any = opts.get("client")
         self.transcription_service: Any = opts.get("transcriptionService") or opts.get(
             "transcription_service"
@@ -955,9 +956,7 @@ class PlaudPoller:
         stored = await self._ensure_recording(meeting, recording, detail)
         segments = parse_transcript_segments(detail.get("source_list"))
         notes = extract_summary_notes(detail.get("note_list"))
-        paths = ensure_meeting_folder(
-            meeting_paths(self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"])
-        )
+        paths = self.storage.ensure(meeting)
 
         transcript_json_id: str | None = None
         if segments:
@@ -1429,22 +1428,11 @@ class PlaudPoller:
             )
         if not meeting:
             raise ValueError(f"Meeting not found: {meeting_id}")
-        folder = meeting_paths(
-            self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]
-        ).folder
-        if not (Path(folder) / "transcripts/plaud.json").exists():
+        if not self.storage.file(meeting, "transcripts/plaud.json").exists():
             raise ValueError(f"No Plaud transcript found for meeting {meeting_id}")
         with self.db.connect() as conn:
-            recording = (
-                conn.execute(
-                    text("SELECT * FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"),
-                    {"mid": meeting_id},
-                )
-                .mappings()
-                .first()
-            )
-        audio_path = str(Path(folder) / recording["path"]) if recording and recording.get("path") else None
-        if not audio_path or not Path(audio_path).exists():
+            audio_path = self.storage.audio(conn, meeting)
+        if audio_path is None:
             raise ValueError(f"No audio recording available for meeting {meeting_id}")
         enrolled = await self._get_enrolled_speakers_with_voiceprints()
         if not enrolled:
@@ -1491,25 +1479,16 @@ class PlaudPoller:
                 .mappings()
                 .first()
             )
-            recording = (
-                conn.execute(
-                    text("SELECT * FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"),
-                    {"mid": meeting_id},
-                )
-                .mappings()
-                .first()
-            )
+            recording = first_recording(conn, meeting_id)
         if not meeting or not recording:
             return skipped
 
-        folder = meeting_paths(
-            self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]
-        ).folder
-        audio_path = str(Path(folder) / recording["path"])
-        if not Path(audio_path).exists():
+        audio_file = self.storage.audio_path(meeting, recording)
+        if audio_file is None:
             return skipped
-        plaud_json_path = Path(folder) / "transcripts/plaud.json"
-        plaud_txt_path = Path(folder) / "transcripts/plaud.txt"
+        audio_path = str(audio_file)
+        plaud_json_path = self.storage.file(meeting, "transcripts/plaud.json")
+        plaud_txt_path = self.storage.file(meeting, "transcripts/plaud.txt")
         if not plaud_json_path.exists():
             return skipped
         try:
@@ -1653,10 +1632,7 @@ class PlaudPoller:
         if not meeting:
             return False
         try:
-            folder = meeting_paths(
-                self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]
-            ).folder
-            raw = json.loads((Path(folder) / "transcripts/plaud.json").read_text(encoding="utf-8"))
+            raw = json.loads(self.storage.file(meeting, "transcripts/plaud.json").read_text(encoding="utf-8"))
         except Exception:
             return False
         if not isinstance(raw, list) or not raw:
