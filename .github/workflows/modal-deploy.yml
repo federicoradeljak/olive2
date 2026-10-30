@@ -14,6 +14,7 @@ on:
       - "backend/src/olive/schemas.py"
       - "backend/src/olive/settings.py"
       - "backend/src/olive/layout.py"
+      - "backend/src/olive/meeting_storage.py"
       - "backend/src/olive/logging_db.py"
       - "backend/uv.lock"
       - ".github/workflows/modal-deploy.yml"
