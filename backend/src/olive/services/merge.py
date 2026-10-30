@@ -27,11 +27,11 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from ..layout import meeting_paths, sanitize_filename
+from ..layout import sanitize_filename
+from ..meeting_storage import MeetingStorage, first_recording
 from .meetings import delete_meeting, to_meeting
 from .split import (
     _codec_args,
-    _delete_stale_enhanced_files,
     _probe_duration_ms,
     _transcript_to_text,
 )
@@ -155,17 +155,10 @@ def merge_meetings(db: Engine, meetings_dir: str, meeting_ids: list[str]) -> dic
         transcript_artifacts: list[list[dict[str, Any]]] = []
         speaker_links: list[list[dict[str, Any]]] = []
         for row in rows:
-            rec = (
-                conn.execute(
-                    text("SELECT * FROM recordings WHERE meeting_id = :id ORDER BY created_at ASC LIMIT 1"),
-                    {"id": row["id"]},
-                )
-                .mappings()
-                .first()
-            )
+            rec = first_recording(conn, row["id"])
             if not rec:
                 raise ValueError(f"Meeting “{row['title']}” has no recording to merge")
-            recordings.append(dict(rec))
+            recordings.append(rec)
             artifacts = (
                 conn.execute(
                     text(
@@ -193,17 +186,15 @@ def merge_meetings(db: Engine, meetings_dir: str, meeting_ids: list[str]) -> dic
 
     target = rows[0]
     target_recording = recordings[0]
-    folders = [
-        Path(meeting_paths(meetings_dir, int(row["start_time"]), row["title"], row["id"]).folder)
-        for row in rows
-    ]
+    storage = MeetingStorage(meetings_dir)
+    folders = [storage.folder(row) for row in rows]
 
     # --- Resolve each meeting's audio path and duration (probe wins).
     audio_paths: list[Path] = []
     durations: list[int] = []
-    for row, rec, folder in zip(rows, recordings, folders, strict=True):
-        src = folder / rec["path"]
-        if not src.exists():
+    for row, rec in zip(rows, recordings, strict=True):
+        src = storage.audio_path(row, rec)
+        if src is None:
             raise ValueError(f"Audio file for “{row['title']}” is missing on disk")
         audio_paths.append(src)
         duration = _probe_duration_ms(src)
@@ -292,7 +283,7 @@ def merge_meetings(db: Engine, meetings_dir: str, meeting_ids: list[str]) -> dic
         raise RuntimeError("ffmpeg merge produced empty audio")
 
     src_audio.write_bytes(merged_bytes)
-    _delete_stale_enhanced_files(target_folder, str(target_recording["id"]))
+    storage.drop_enhanced_audio(target, str(target_recording["id"]))
     sha = hashlib.sha256(merged_bytes).hexdigest()
 
     if merged_payload is not None:

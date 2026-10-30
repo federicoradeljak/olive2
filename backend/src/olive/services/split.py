@@ -20,7 +20,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from ..layout import ensure_meeting_folder, meeting_paths
+from ..meeting_storage import MeetingStorage, first_recording
 from .meetings import to_meeting
 
 MIN_EDGE_MARGIN_MS = 5_000
@@ -39,31 +39,6 @@ _EXT_TO_CODEC: dict[str, list[str]] = {
 
 def _codec_args(ext: str) -> list[str]:
     return _EXT_TO_CODEC.get(ext.lower(), ["-c:a", "aac"])
-
-
-def _delete_stale_enhanced_files(folder: Path, recording_id: str) -> None:
-    """Remove cached voice-enhanced derivatives for a recording.
-
-    The audio route serves ``audio/{recording_id}.enhanced.mp3`` whenever it
-    exists (see ``app.get_meeting_audio_route``), and the enhancer never
-    rebuilds an existing file. Any caller that rewrites the source audio
-    in place — e.g. this split service overwriting Part A — must delete
-    the stale derivative or playback keeps serving the pre-split audio.
-    """
-    try:
-        candidates = [folder / "audio" / f"{recording_id}.enhanced.mp3"]
-        candidates += sorted((folder / "audio").glob(f"{recording_id}.enhanced.*"))
-        seen: set[Path] = set()
-        for path in candidates:
-            if path in seen:
-                continue
-            seen.add(path)
-            try:
-                path.unlink(missing_ok=True)
-            except OSError:
-                pass
-    except Exception:
-        pass
 
 
 def _probe_duration_ms(path: Path) -> int | None:
@@ -313,14 +288,7 @@ def split_meeting(db: Engine, meetings_dir: str, meeting_id: str, split_ms: int)
             raise ValueError("Meeting not found")
         if str(meeting["status"]) == "processing":
             raise ValueError("Cannot split while transcription is running")
-        recording = (
-            conn.execute(
-                text("SELECT * FROM recordings WHERE meeting_id = :id ORDER BY created_at ASC LIMIT 1"),
-                {"id": meeting_id},
-            )
-            .mappings()
-            .first()
-        )
+        recording = first_recording(conn, meeting_id)
         if not recording:
             raise ValueError("Meeting has no recording to split")
         transcript_artifacts = (
@@ -344,12 +312,10 @@ def split_meeting(db: Engine, meetings_dir: str, meeting_id: str, split_ms: int)
         )
 
     meeting = dict(meeting)
-    recording = dict(recording)
-    folder = Path(
-        meeting_paths(meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]).folder
-    )
-    src_audio = folder / recording["path"]
-    if not src_audio.exists():
+    storage = MeetingStorage(meetings_dir)
+    folder = storage.folder(meeting)
+    src_audio = storage.audio_path(meeting, recording)
+    if src_audio is None:
         raise ValueError("Audio file not found on disk")
 
     total_ms = recording.get("duration_ms")
@@ -412,14 +378,15 @@ def split_meeting(db: Engine, meetings_dir: str, meeting_id: str, split_ms: int)
         split_payloads[art["id"]] = (payload_a, payload_b, art["path"])
 
     # --- Write Part A audio + transcripts.
-    new_folder = Path(meeting_paths(meetings_dir, part_b_start, new_title, new_meeting_id).folder)
-    ensure_meeting_folder(meeting_paths(meetings_dir, part_b_start, new_title, new_meeting_id))
+    new_folder = Path(
+        storage.ensure({"id": new_meeting_id, "title": new_title, "start_time": part_b_start}).folder
+    )
     part_b_rel = f"audio/{new_recording_id}.{ext}"
     (new_folder / part_b_rel).write_bytes(bytes_b)
     src_audio.write_bytes(bytes_a)
     # The source audio was rewritten in place: drop the cached voice-enhanced
     # derivative or the audio route keeps serving the pre-split full recording.
-    _delete_stale_enhanced_files(folder, str(recording["id"]))
+    storage.drop_enhanced_audio(meeting, str(recording["id"]))
     sha_a = hashlib.sha256(bytes_a).hexdigest()
     sha_b = hashlib.sha256(bytes_b).hexdigest()
 

@@ -97,14 +97,20 @@ def test_audio_is_none_when_the_file_is_missing(db: Engine, tmp_path: Path) -> N
 def test_drop_enhanced_audio_keeps_the_source(tmp_path: Path) -> None:
     storage = MeetingStorage(tmp_path)
     storage.ensure(MEETING)
-    source = storage.file(MEETING, "audio/rec.m4a")
-    source.write_bytes(b"audio")
+    storage.file(MEETING, "audio/rec.m4a").write_bytes(b"audio")
+    storage.file(MEETING, "audio/other.enhanced.mp3").write_bytes(b"keep")
     storage.enhanced_audio_path(MEETING, "rec").write_bytes(b"mp3")
     storage.file(MEETING, "audio/rec.enhanced.wav").write_bytes(b"wav")
 
     storage.drop_enhanced_audio(MEETING, "rec")
 
-    assert [p.name for p in (storage.folder(MEETING) / "audio").iterdir()] == ["rec.m4a"]
+    remaining = sorted(p.name for p in (storage.folder(MEETING) / "audio").iterdir())
+    assert remaining == ["other.enhanced.mp3", "rec.m4a"]
+
+
+def test_drop_enhanced_audio_without_a_folder_is_a_no_op(tmp_path: Path) -> None:
+    # Split and merge must never fail on this cleanup.
+    MeetingStorage(tmp_path).drop_enhanced_audio(MEETING, "rec")
 
 
 def test_relocate_moves_the_folder_to_the_new_title(tmp_path: Path) -> None:
