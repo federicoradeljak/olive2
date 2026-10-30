@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+import pytest
+from fastapi.testclient import TestClient
+
+from olive.app import create_app
 from olive.db import create_db
 from olive.services.transcription import TranscriptionService
 from olive.settings import (
@@ -56,4 +61,28 @@ async def test_transcription_injects_vocabulary_unless_request_overrides() -> No
     vocabulary.clear()  # the live getter picks up settings changes
     await svc.transcribe_meeting("m1", {})
     assert [o.get("additionalVocab") for o in seen] == [["Olive"], ["Plaud"], None]
+    handle.engine.dispose()
+
+
+class _CapturingTranscription:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def transcribe_meeting(self, _meeting_id: str, opts: dict[str, Any]) -> dict[str, Any]:
+        self.calls.append(opts)
+        return {"status": "done"}
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_transcribe_route_forwards_request_vocabulary(tmp_path: Path, stream: bool) -> None:
+    handle = create_db(":memory:")
+    svc = _CapturingTranscription()
+    app = create_app({"db": handle.engine, "configDir": str(tmp_path), "transcriptionService": svc})
+    with TestClient(app) as client:
+        res = client.post(
+            "/api/meetings/m1/transcribe",
+            json={"provider": "assemblyai", "stream": stream, "additionalVocab": ["Plaud"]},
+        )
+    assert res.status_code == 200
+    assert [c.get("additionalVocab") for c in svc.calls] == [["Plaud"]]
     handle.engine.dispose()

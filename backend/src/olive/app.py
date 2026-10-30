@@ -1257,6 +1257,20 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         except Exception:
             pass
 
+        transcribe_opts = {
+            "provider": body.get("provider"),
+            "language": body.get("language"),
+            "poll": body.get("poll"),
+            "force": body.get("force"),
+            "pollIntervalMs": body.get("pollIntervalMs"),
+            "maxPollWaitMs": body.get("maxPollWaitMs"),
+            "similarityThreshold": similarity_threshold,
+            "clusteringThreshold": clustering_threshold,
+            "modelId": model_id,
+            "asrModel": body.get("asrModel"),
+            "additionalVocab": body.get("additionalVocab"),
+        }
+
         wants_stream = (
             body.get("stream") is True
             or request.query_params.get("stream") == "true"
@@ -1339,19 +1353,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                             get_transcription_service(),
                             ("transcribe_meeting", "transcribeMeeting"),
                             meeting_id,
-                            {
-                                "provider": body.get("provider"),
-                                "language": body.get("language"),
-                                "poll": body.get("poll"),
-                                "force": body.get("force"),
-                                "pollIntervalMs": body.get("pollIntervalMs"),
-                                "maxPollWaitMs": body.get("maxPollWaitMs"),
-                                "similarityThreshold": similarity_threshold,
-                                "clusteringThreshold": clustering_threshold,
-                                "modelId": model_id,
-                                "asrModel": body.get("asrModel"),
-                                "onProgress": on_progress,
-                            },
+                            {**transcribe_opts, "onProgress": on_progress},
                         )
                         status = res.get("status") if isinstance(res, dict) else getattr(res, "status", None)
                         err_str = res.get("error") if isinstance(res, dict) else getattr(res, "error", None)
@@ -1449,19 +1451,6 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
 
             return EventSourceResponse(sse_gen(), sep="\n")
 
-        transcribe_opts = {
-            "provider": body.get("provider"),
-            "language": body.get("language"),
-            "poll": body.get("poll"),
-            "force": body.get("force"),
-            "pollIntervalMs": body.get("pollIntervalMs"),
-            "maxPollWaitMs": body.get("maxPollWaitMs"),
-            "similarityThreshold": similarity_threshold,
-            "clusteringThreshold": clustering_threshold,
-            "modelId": model_id,
-            "asrModel": body.get("asrModel"),
-            "additionalVocab": body.get("additionalVocab"),
-        }
         wants_background = (
             body.get("background") is True
             or body.get("async") is True
