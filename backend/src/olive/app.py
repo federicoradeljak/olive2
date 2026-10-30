@@ -19,7 +19,7 @@ from sse_starlette.sse import EventSourceResponse
 from . import __version__
 from .build_info import get_build_display
 from .db import DbHandle, get_db
-from .layout import meeting_paths
+from .meeting_storage import MeetingStorage, first_recording
 from .ml.audio import enhance_audio_file_async
 from .schemas import LogItem
 from .services.ingest import IngestService
@@ -1062,29 +1062,20 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             )
             if not meeting:
                 return JSONResponse({"error": "Meeting not found"}, status_code=404)
-            recording = (
-                conn.execute(
-                    text("SELECT * FROM recordings WHERE meeting_id = :id ORDER BY created_at ASC LIMIT 1"),
-                    {"id": meeting_id},
-                )
-                .mappings()
-                .first()
-            )
+            recording = first_recording(conn, meeting_id)
             if not recording:
                 return JSONResponse({"error": "Recording not found"}, status_code=404)
 
-        folder = Path(
-            meeting_paths(meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]).folder
-        )
-        full_path = folder / recording["path"]
-        if not full_path.exists():
+        storage = MeetingStorage(meetings_dir)
+        full_path = storage.audio_path(meeting, recording)
+        if full_path is None:
             return JSONResponse({"error": "Audio file not found on disk"}, status_code=404)
 
         target_path = full_path
         target_mime = recording["mime"] or "audio/mp4"
 
         if request.query_params.get("enhanced") == "true":
-            enhanced_full = folder / "audio" / f"{recording['id']}.enhanced.mp3"
+            enhanced_full = storage.enhanced_audio_path(meeting, recording["id"])
             # Guard against a stale cache: if the source audio was rewritten
             # after the enhanced file was built (e.g. a meeting split
             # overwrote Part A in place), rebuild instead of serving it.

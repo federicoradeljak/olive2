@@ -20,9 +20,9 @@ from typing import Any, Literal
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from ..layout import ensure_meeting_folder, meeting_paths
 from ..logging_db import Logger
 from ..logging_db import logger as default_logger
+from ..meeting_storage import MeetingStorage
 from ..ml.opus import is_raw_plaud_opus, wrap_raw_opus_bytes
 from .meetings import to_meeting
 
@@ -278,9 +278,11 @@ class IngestService:
             title = f"Audio Recording {datetime.fromtimestamp(start_time / 1000.0).strftime('%Y-%m-%d')}"
 
         # 3. Write audio bytes to disk
-        paths = ensure_meeting_folder(meeting_paths(self.meetings_dir, start_time, title, meeting_id))
+        storage = MeetingStorage(self.meetings_dir)
+        new_meeting = {"id": meeting_id, "title": title, "start_time": start_time}
+        storage.ensure(new_meeting)
         relative_path = f"audio/{recording_id}.{extension}"
-        dest_path = Path(paths.folder) / relative_path
+        dest_path = storage.file(new_meeting, relative_path)
 
         self.logger.debug(
             "Writing ingested audio file to disk",

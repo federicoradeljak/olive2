@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from olive.services.split import _delete_stale_enhanced_files, split_transcript_payload
+from olive.services.split import split_transcript_payload
 
 
 def test_split_dict_shape_reanchors_part_b() -> None:
@@ -67,29 +67,3 @@ def test_split_words_divide_text() -> None:
 def test_split_rejects_unknown_shape() -> None:
     with pytest.raises(ValueError):
         split_transcript_payload({"nonsense": True}, 1000)
-
-
-def test_delete_stale_enhanced_files_removes_derivatives(tmp_path) -> None:
-    from pathlib import Path
-
-    folder = Path(tmp_path)
-    (folder / "audio").mkdir()
-    stale = folder / "audio" / "rec123.enhanced.mp3"
-    stale.write_bytes(b"stale")
-    other_variant = folder / "audio" / "rec123.enhanced.wav"
-    other_variant.write_bytes(b"stale")
-    keep = folder / "audio" / "other.enhanced.mp3"
-    keep.write_bytes(b"keep")
-
-    _delete_stale_enhanced_files(folder, "rec123")
-
-    assert not stale.exists()
-    assert not other_variant.exists()
-    assert keep.exists()
-
-
-def test_delete_stale_enhanced_files_missing_folder_ok(tmp_path) -> None:
-    from pathlib import Path
-
-    # No audio/ dir at all: must not raise (split must never fail on cleanup).
-    _delete_stale_enhanced_files(Path(tmp_path), "rec123")

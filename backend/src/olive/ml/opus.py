@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import hashlib
 import struct
-from pathlib import Path
 from typing import Any
 
 PACKET_BYTES = 80
@@ -74,14 +73,14 @@ def migrate_raw_opus_recordings(db: Any, meetings_dir: str) -> int:
     """
     from sqlalchemy import text
 
-    from ..layout import meeting_paths
+    from ..meeting_storage import MeetingStorage
 
     with db.connect() as conn:
         rows = (
             conn.execute(
                 text(
                     """
-                    SELECT r.id AS recording_id, r.path, m.start_time, m.title, m.id AS meeting_id
+                    SELECT r.id AS recording_id, r.path, m.start_time, m.title, m.id
                     FROM recordings r JOIN meetings m ON m.id = r.meeting_id
                     """
                 )
@@ -90,10 +89,10 @@ def migrate_raw_opus_recordings(db: Any, meetings_dir: str) -> int:
             .all()
         )
 
+    storage = MeetingStorage(meetings_dir)
     migrated = 0
     for row in rows:
-        folder = meeting_paths(meetings_dir, int(row["start_time"]), row["title"], row["meeting_id"]).folder
-        full_path = Path(folder) / row["path"]
+        full_path = storage.file(row, row["path"])
         if not full_path.exists():
             continue
         data = full_path.read_bytes()

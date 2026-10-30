@@ -7,7 +7,6 @@ import json
 import os
 import re
 import urllib.parse
-from pathlib import Path
 from typing import Any
 
 from fastapi import Request, Response
@@ -16,7 +15,7 @@ from mcp.server.mcpserver import MCPServer
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from .layout import meeting_paths
+from .meeting_storage import MeetingStorage
 from .services.meetings import (
     delete_meeting,
     get_meeting,
@@ -107,10 +106,8 @@ def _load_transcript_text(db: Engine, meetings_dir: str, meeting: dict[str, Any]
     if not art:
         return ""
     try:
-        folder = Path(
-            meeting_paths(meetings_dir, int(meeting["startTime"]), meeting["title"], meeting["id"]).folder
-        )
-        return (folder / art["path"]).read_text(encoding="utf-8")
+        row = {"id": meeting["id"], "title": meeting["title"], "start_time": meeting["startTime"]}
+        return MeetingStorage(meetings_dir).file(row, art["path"]).read_text(encoding="utf-8")
     except Exception:
         return ""
 

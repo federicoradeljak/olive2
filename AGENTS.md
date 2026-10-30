@@ -9,6 +9,7 @@ Olive is a two-part repository:
   - `src/olive/main.py` & `app.py`: FastAPI application factory, HTTP routes, SSE streams, and SPA static serving.
   - `src/olive/cli.py`: `typer` CLI (`olive serve`, `olive backup`, `olive restore`, `olive models download`).
   - `src/olive/settings.py` & `layout.py`: OS path resolution (`OLIVE_CONFIG_DIR`, `OLIVE_MEETINGS_DIR`, `OLIVE_MODELS_DIR`), `settings.json` persistence, and meeting folder naming (`<date>_<sanitized_title>__<id8>`).
+  - `src/olive/meeting_storage.py`: `MeetingStorage`, the one way to reach a meeting's files from its row: folder, artifact paths, audio of the first recording (`first_recording`), cached enhanced audio, and `relocate` (folder move with rollback on rename / time shift). Resolve meeting files through it instead of calling `layout.meeting_paths` directly.
   - `src/olive/schemas.py`: Pydantic v2 domain and API models (camelCase JSON serialization).
   - `src/olive/db/`: SQLAlchemy 2.0 models (`models.py`), engine/session management (`session.py`), and migrations/seeding (`migrations.py`). Alembic lives in `backend/alembic.ini` and `backend/migrations/`.
   - `src/olive/services/`: Domain services (`meetings.py`, `ingest.py`, `transcription.py`, `speakers.py`, `summaries.py`, `chat.py`, `templates.py`, `llm.py`, `backup.py`).

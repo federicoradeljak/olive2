@@ -17,9 +17,9 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from ..db import DbHandle, get_db
-from ..layout import meeting_paths
 from ..logging_db import Logger
 from ..logging_db import logger as default_logger
+from ..meeting_storage import MeetingStorage
 from ..ml import (
     WESPEAKER_MODEL_TAG,
     SpeakerEmbedder,
@@ -833,6 +833,12 @@ class SpeakerService:
 
     rebuildSpeakerProfiles = rebuild_speaker_profiles
 
+    @property
+    def storage(self) -> MeetingStorage:
+        if not self.meetings_dir:
+            raise ValueError("meetingsDir is required")
+        return MeetingStorage(self.meetings_dir)
+
     def _load_meeting_transcript_artifact(
         self, meeting_id: str, action_desc: str
     ) -> tuple[Mapping[Any, Any], Mapping[Any, Any], Path, Path, Any]:
@@ -884,11 +890,7 @@ class SpeakerService:
             if not transcript_art:
                 raise ValueError(f"No JSON transcript artifact found for meeting {meeting_id}")
 
-        folder = Path(
-            meeting_paths(
-                self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]
-            ).folder
-        )
+        folder = self.storage.folder(meeting)
         json_path = folder / transcript_art["path"]
         parsed_data = json.loads(json_path.read_text(encoding="utf-8"))
         return meeting, transcript_art, folder, json_path, parsed_data
@@ -1088,18 +1090,8 @@ class SpeakerService:
         sample_results: list[RapidEnrollSampleResult] = []
         if selected_indices:
             with self.db.connect() as conn:
-                recording = (
-                    conn.execute(
-                        text(
-                            "SELECT * FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"
-                        ),
-                        {"mid": meeting_id},
-                    )
-                    .mappings()
-                    .first()
-                )
-            audio_full = folder / recording["path"] if recording else None
-            if audio_full is not None and audio_full.exists():
+                audio_full = self.storage.audio(conn, meeting)
+            if audio_full is not None:
                 try:
                     decoded = await load_audio_samples(
                         {
@@ -1382,76 +1374,61 @@ class SpeakerService:
                 extracted_voiceprints_count += len(extracted_ids)
 
             with self.db.connect() as conn:
-                recording = (
-                    conn.execute(
-                        text(
-                            "SELECT * FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"
-                        ),
-                        {"mid": meeting_id},
-                    )
-                    .mappings()
-                    .first()
-                )
+                audio_full = self.storage.audio(conn, meeting)
 
-            if recording:
-                audio_full = folder / recording["path"]
-                if audio_full.exists():
-                    try:
-                        audio_bytes = audio_full.read_bytes()
-                        if len(audio_bytes) >= 12:
-                            decoded = await load_audio_samples(
-                                {
-                                    "audioPath": str(audio_full),
-                                    "audioBytes": audio_bytes,
-                                    "enhance": False,
-                                },
-                                16000,
-                            )
-                            full_samples = decoded.samples
-                            seg_idx_opt = options.get("segmentIndex")
-                            is_single = seg_idx_opt is not None and options.get("scope") == "single"
-                            matching_segs = (
-                                [segments[int(seg_idx_opt)]]
-                                if (
-                                    is_single
-                                    and seg_idx_opt is not None
-                                    and 0 <= int(seg_idx_opt) < len(segments)
-                                )
-                                else [
-                                    s
-                                    for s in segments
-                                    if (s.speaker or "").strip().lower() == normalized_from
-                                ]
-                            )
-                            chunks: list[np.ndarray] = []
-                            for seg in matching_segs:
-                                s_start = int((seg.startMs / 1000.0) * 16000)
-                                s_end = min(len(full_samples), int((seg.endMs / 1000.0) * 16000))
-                                if s_end > s_start:
-                                    chunks.append(full_samples[s_start:s_end])
-                            if chunks:
-                                merged_samples = np.concatenate(chunks)
-                                clip_filename = f"clip_meeting_{meeting_id}_{current_time}.wav"
-                                adopt_res = await self._adopt_voiceprint_sample(
-                                    speaker_row=target_speaker_row,
-                                    samples=merged_samples,
-                                    sample_rate=16000,
-                                    clip_filename=clip_filename,
-                                    is_anchor=False,
-                                    trusted=True,
-                                    meeting_id=meeting_id,
-                                    segment_index=seg_idx_opt,
-                                )
-                                voiceprint_status = adopt_res["status"]
-                                status_reason = adopt_res.get("statusReason")
-                                if adopt_res["voiceprintEnrolled"]:
-                                    extracted_voiceprints_count += 1
-                                    target_speaker_row = adopt_res["updatedSpeakerRow"]
-                    except Exception as exc:
-                        self.logger.warn(
-                            "Could not extract audio clip during speaker reassignment",
-                            {"meetingId": meeting_id, "error": str(exc)},
+            if audio_full is not None:
+                try:
+                    audio_bytes = audio_full.read_bytes()
+                    if len(audio_bytes) >= 12:
+                        decoded = await load_audio_samples(
+                            {
+                                "audioPath": str(audio_full),
+                                "audioBytes": audio_bytes,
+                                "enhance": False,
+                            },
+                            16000,
                         )
+                        full_samples = decoded.samples
+                        seg_idx_opt = options.get("segmentIndex")
+                        is_single = seg_idx_opt is not None and options.get("scope") == "single"
+                        matching_segs = (
+                            [segments[int(seg_idx_opt)]]
+                            if (
+                                is_single
+                                and seg_idx_opt is not None
+                                and 0 <= int(seg_idx_opt) < len(segments)
+                            )
+                            else [s for s in segments if (s.speaker or "").strip().lower() == normalized_from]
+                        )
+                        chunks: list[np.ndarray] = []
+                        for seg in matching_segs:
+                            s_start = int((seg.startMs / 1000.0) * 16000)
+                            s_end = min(len(full_samples), int((seg.endMs / 1000.0) * 16000))
+                            if s_end > s_start:
+                                chunks.append(full_samples[s_start:s_end])
+                        if chunks:
+                            merged_samples = np.concatenate(chunks)
+                            clip_filename = f"clip_meeting_{meeting_id}_{current_time}.wav"
+                            adopt_res = await self._adopt_voiceprint_sample(
+                                speaker_row=target_speaker_row,
+                                samples=merged_samples,
+                                sample_rate=16000,
+                                clip_filename=clip_filename,
+                                is_anchor=False,
+                                trusted=True,
+                                meeting_id=meeting_id,
+                                segment_index=seg_idx_opt,
+                            )
+                            voiceprint_status = adopt_res["status"]
+                            status_reason = adopt_res.get("statusReason")
+                            if adopt_res["voiceprintEnrolled"]:
+                                extracted_voiceprints_count += 1
+                                target_speaker_row = adopt_res["updatedSpeakerRow"]
+                except Exception as exc:
+                    self.logger.warn(
+                        "Could not extract audio clip during speaker reassignment",
+                        {"meetingId": meeting_id, "error": str(exc)},
+                    )
 
             if extracted_ids:
                 with self.db.begin() as conn:
@@ -1640,58 +1617,49 @@ class SpeakerService:
         similarity: float | None = None
 
         with self.db.connect() as conn:
-            recording = (
-                conn.execute(
-                    text("SELECT * FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"),
-                    {"mid": meeting_id},
-                )
-                .mappings()
-                .first()
-            )
+            audio_full = self.storage.audio(conn, meeting)
 
-        if recording and target_speaker_row is not None:
-            audio_full = folder / recording["path"]
-            if audio_full.exists():
-                try:
-                    audio_bytes = audio_full.read_bytes()
-                    if len(audio_bytes) >= 12:
-                        decoded = await load_audio_samples(
-                            {
-                                "audioPath": str(audio_full),
-                                "audioBytes": audio_bytes,
-                                "enhance": False,
-                            },
-                            16000,
-                        )
-                        full_samples = decoded.samples
-                        s_start = int((segment.startMs / 1000.0) * 16000)
-                        s_end = min(len(full_samples), int((segment.endMs / 1000.0) * 16000))
-                        if s_end > s_start:
-                            seg_samples = full_samples[s_start:s_end]
-                            clip_filename = (
-                                f"clip_confirmed_meeting_{meeting_id}_{segment_index}_{current_time}.wav"
-                            )
-                            adopt_res = await self._adopt_voiceprint_sample(
-                                speaker_row=target_speaker_row,
-                                samples=seg_samples,
-                                sample_rate=16000,
-                                clip_filename=clip_filename,
-                                is_anchor=False,
-                                trusted=True,
-                                meeting_id=meeting_id,
-                                segment_index=segment_index,
-                            )
-                            voiceprint_enrolled = adopt_res["voiceprintEnrolled"]
-                            voiceprint_status = adopt_res["status"]
-                            status_reason = adopt_res.get("statusReason")
-                            similarity = adopt_res.get("similarity")
-                            if voiceprint_enrolled:
-                                target_speaker_row = adopt_res["updatedSpeakerRow"]
-                except Exception as exc:
-                    self.logger.warn(
-                        "Could not extract audio clip during segment confirmation",
-                        {"meetingId": meeting_id, "segmentIndex": segment_index, "error": str(exc)},
+        if audio_full is not None and target_speaker_row is not None:
+            try:
+                audio_bytes = audio_full.read_bytes()
+                if len(audio_bytes) >= 12:
+                    decoded = await load_audio_samples(
+                        {
+                            "audioPath": str(audio_full),
+                            "audioBytes": audio_bytes,
+                            "enhance": False,
+                        },
+                        16000,
                     )
+                    full_samples = decoded.samples
+                    s_start = int((segment.startMs / 1000.0) * 16000)
+                    s_end = min(len(full_samples), int((segment.endMs / 1000.0) * 16000))
+                    if s_end > s_start:
+                        seg_samples = full_samples[s_start:s_end]
+                        clip_filename = (
+                            f"clip_confirmed_meeting_{meeting_id}_{segment_index}_{current_time}.wav"
+                        )
+                        adopt_res = await self._adopt_voiceprint_sample(
+                            speaker_row=target_speaker_row,
+                            samples=seg_samples,
+                            sample_rate=16000,
+                            clip_filename=clip_filename,
+                            is_anchor=False,
+                            trusted=True,
+                            meeting_id=meeting_id,
+                            segment_index=segment_index,
+                        )
+                        voiceprint_enrolled = adopt_res["voiceprintEnrolled"]
+                        voiceprint_status = adopt_res["status"]
+                        status_reason = adopt_res.get("statusReason")
+                        similarity = adopt_res.get("similarity")
+                        if voiceprint_enrolled:
+                            target_speaker_row = adopt_res["updatedSpeakerRow"]
+            except Exception as exc:
+                self.logger.warn(
+                    "Could not extract audio clip during segment confirmation",
+                    {"meetingId": meeting_id, "segmentIndex": segment_index, "error": str(exc)},
+                )
 
         updated_transcript = Transcript(
             segments=segments,
@@ -2350,14 +2318,7 @@ class SpeakerService:
             )
 
             if speechmatics_label and self.meetings_dir:
-                folder = Path(
-                    meeting_paths(
-                        self.meetings_dir,
-                        int(meeting_row["start_time"]),
-                        meeting_row["title"],
-                        meeting_row["id"],
-                    ).folder
-                )
+                folder = self.storage.folder(meeting_row)
                 t_art = (
                     conn.execute(
                         text(
@@ -2853,14 +2814,7 @@ class SpeakerService:
                 if not primary_t or primary_t["format"] != "json":
                     continue
 
-                folder = Path(
-                    meeting_paths(
-                        self.meetings_dir,
-                        int(meeting["start_time"]),
-                        meeting["title"],
-                        meeting["id"],
-                    ).folder
-                )
+                folder = self.storage.folder(meeting)
                 json_path = folder / primary_t["path"]
                 if not json_path.exists():
                     continue
