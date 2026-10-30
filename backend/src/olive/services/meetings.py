@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 import json
-import shutil
 import time
 from collections.abc import Mapping
-from pathlib import Path
+from contextlib import nullcontext
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from ..layout import meeting_paths
+from ..meeting_storage import MeetingStorage
 from ..schemas import (
     Artifact,
     MeetingDetailAggregate,
@@ -133,21 +132,12 @@ def resolve_audio_status(
         return "missing", False
 
     if meetings_dir:
+        storage = MeetingStorage(meetings_dir)
         try:
-            folder = Path(
-                meeting_paths(
-                    meetings_dir,
-                    int(meeting_row["start_time"]),
-                    meeting_row["title"],
-                    meeting_row["id"],
-                ).folder
-            )
+            if any(storage.audio_path(meeting_row, rec) for rec in recording_rows):
+                return "ready", False
         except Exception:
             return "ready", False
-        for rec in recording_rows:
-            rel = rec.get("path")
-            if rel and (folder / rel).exists():
-                return "ready", False
         return "missing", can_retry
 
     return "ready", False
@@ -243,7 +233,7 @@ def list_meetings(
                         text(
                             """
                         SELECT artifacts.meeting_id, artifacts.path, meetings.start_time,
-                               meetings.title, meetings.id AS m_id
+                               meetings.title, meetings.id
                         FROM artifacts
                         INNER JOIN meetings ON meetings.id = artifacts.meeting_id
                         WHERE artifacts.kind IN ('transcript', 'summary')
@@ -254,14 +244,12 @@ def list_meetings(
                     .all()
                 )
                 search_lower = search.lower()
+                storage = MeetingStorage(meetings_dir)
                 for a in content_artifacts:
                     if a["meeting_id"] in matching_ids:
                         continue
                     try:
-                        folder = meeting_paths(
-                            meetings_dir, int(a["start_time"]), a["title"], a["m_id"]
-                        ).folder
-                        full_path = Path(folder) / a["path"]
+                        full_path = storage.file(a, a["path"])
                         if full_path.exists():
                             txt = full_path.read_text(encoding="utf-8", errors="ignore")
                             if search_lower in txt.lower():
@@ -463,24 +451,10 @@ def update_meeting_title(
     if meeting["title"] == normalized:
         return to_meeting(meeting)
 
-    old_folder = (
-        Path(meeting_paths(meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]).folder)
-        if meetings_dir
-        else None
+    relocation = (
+        MeetingStorage(meetings_dir).relocate(meeting, title=normalized) if meetings_dir else nullcontext()
     )
-    new_folder = (
-        Path(meeting_paths(meetings_dir, int(meeting["start_time"]), normalized, meeting["id"]).folder)
-        if meetings_dir
-        else None
-    )
-    moved_folder = bool(old_folder and new_folder and old_folder != new_folder and old_folder.exists())
-
-    if moved_folder and old_folder and new_folder:
-        if new_folder.exists():
-            raise RuntimeError("Meeting folder already exists")
-        old_folder.rename(new_folder)
-
-    try:
+    with relocation:
         now = int(time.time() * 1000)
         with db.begin() as conn:
             res = conn.execute(
@@ -505,13 +479,6 @@ def update_meeting_title(
                 .mappings()
                 .first()
             )
-    except Exception:
-        if moved_folder and old_folder and new_folder and new_folder.exists():
-            try:
-                new_folder.rename(old_folder)
-            except Exception:
-                pass
-        raise
 
     return to_meeting(updated_row) if updated_row else None
 
@@ -554,24 +521,12 @@ def update_meeting_start_time(
     duration_ms = int(meeting["end_time"]) - int(meeting["start_time"])
     new_end = start_time_ms + duration_ms
 
-    old_folder = (
-        Path(meeting_paths(meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]).folder)
+    relocation = (
+        MeetingStorage(meetings_dir).relocate(meeting, start_time=start_time_ms)
         if meetings_dir
-        else None
+        else nullcontext()
     )
-    new_folder = (
-        Path(meeting_paths(meetings_dir, start_time_ms, meeting["title"], meeting["id"]).folder)
-        if meetings_dir
-        else None
-    )
-    moved_folder = bool(old_folder and new_folder and old_folder != new_folder and old_folder.exists())
-
-    if moved_folder and old_folder and new_folder:
-        if new_folder.exists():
-            raise RuntimeError("Meeting folder already exists")
-        old_folder.rename(new_folder)
-
-    try:
+    with relocation:
         now = int(time.time() * 1000)
         with db.begin() as conn:
             res = conn.execute(
@@ -597,13 +552,6 @@ def update_meeting_start_time(
                 .mappings()
                 .first()
             )
-    except Exception:
-        if moved_folder and old_folder and new_folder and new_folder.exists():
-            try:
-                new_folder.rename(old_folder)
-            except Exception:
-                pass
-        raise
 
     return to_meeting(updated_row) if updated_row else None
 
@@ -725,14 +673,7 @@ def get_meeting(
     summaries: list[MeetingSummaryItem] = []
 
     if meetings_dir:
-        folder = Path(
-            meeting_paths(
-                meetings_dir,
-                int(meeting_row["start_time"]),
-                meeting_row["title"],
-                meeting_row["id"],
-            ).folder
-        )
+        folder = MeetingStorage(meetings_dir).folder(meeting_row)
         primary_t_id = meeting_row.get("primary_transcript_artifact_id")
         primary_transcript = next((a for a in artifact_rows if a["id"] == primary_t_id), None)
         if primary_transcript and include_transcript:
@@ -910,14 +851,6 @@ def delete_meeting(db: Engine, meeting_id: str, meetings_dir: str | None = None)
         conn.execute(text("DELETE FROM meetings WHERE id = :id"), {"id": meeting_id})
 
     if meetings_dir:
-        folder = Path(
-            meeting_paths(
-                meetings_dir,
-                int(meeting_row["start_time"]),
-                meeting_row["title"],
-                meeting_row["id"],
-            ).folder
-        )
-        shutil.rmtree(folder, ignore_errors=True)
+        MeetingStorage(meetings_dir).delete(meeting_row)
 
     return True
