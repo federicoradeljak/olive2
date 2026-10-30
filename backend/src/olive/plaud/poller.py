@@ -393,7 +393,7 @@ class PlaudPoller:
             },
         )
 
-    def start(self, interval_minutes: int) -> None:
+    def start(self, interval_minutes: int, *, run_now: bool = True) -> None:
         self.stop()
         try:
             self._scheduler = AsyncIOScheduler()
@@ -421,6 +421,8 @@ class PlaudPoller:
             self._scheduler.start()
         except Exception:
             self._scheduler = None
+        if not run_now:
+            return
         try:
             asyncio.get_running_loop().create_task(self.trigger())
             # Boot backfill: already-ingested Plaud meetings predate speaker

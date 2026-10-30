@@ -130,6 +130,8 @@ def resolve_paths(
 class AppConfig(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
+    # Off: Plaud recordings are only imported by a manual "Sync now".
+    plaudAutoSync: bool = Field(default=True)
     pollIntervalMinutes: int = Field(default=15, gt=0)
     retranscribePlaudWhenUnnamed: bool = Field(default=False)
     alwaysRetranscribePlaud: bool = Field(default=False)

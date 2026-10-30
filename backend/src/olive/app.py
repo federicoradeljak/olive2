@@ -247,6 +247,8 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
     plaud_client = opts.get("plaudClient") or opts.get("plaud_client")
     oauth_manager = opts.get("oauthManager") or opts.get("oauth_manager")
     auth_sessions = opts.get("authSessions") or opts.get("auth_sessions")
+    # Only the real server schedules Plaud polls; tests and `get_app()` don't.
+    start_plaud_poller = bool(opts.get("startPlaudPoller") or opts.get("start_plaud_poller"))
 
     def _current_app_config() -> Any:
         try:
@@ -549,7 +551,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         # AsyncIOScheduler bound to a loop that never runs, so interval
         # polls (and the boot backfill/trigger) silently never fire and only
         # manual "Sync Now" works.
-        if opts.get("startPlaudPoller") or opts.get("start_plaud_poller"):
+        if start_plaud_poller and opts.get("plaudAutoSync", True):
             try:
                 poll_interval = int(
                     opts.get("pollIntervalMinutes") or opts.get("poll_interval_minutes") or 15
@@ -2518,6 +2520,20 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=500)
 
+    def _reschedule_plaud_poller(previous: Any, updated: Any) -> None:
+        """Applies auto-sync and interval changes without a restart."""
+        if (
+            previous.plaudAutoSync == updated.plaudAutoSync
+            and previous.pollIntervalMinutes == updated.pollIntervalMinutes
+        ):
+            return
+        poller = get_plaud_poller()
+        if updated.plaudAutoSync:
+            # Turning auto-sync back on syncs right away; an interval change only reschedules.
+            poller.start(updated.pollIntervalMinutes, run_now=not previous.plaudAutoSync)
+        else:
+            poller.stop()
+
     @app.post("/api/config")
     async def post_config_route(request: Request) -> JSONResponse:
         try:
@@ -2537,6 +2553,8 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                     merged[secret_field] = getattr(current, secret_field)
             updated = save_app_config(merged, app_config_paths)
             _apply_stored_transcription_keys(updated)
+            if start_plaud_poller:
+                _reschedule_plaud_poller(current, updated)
             if transcription_service is not None:
                 _call_sync(
                     transcription_service,

@@ -33,6 +33,7 @@ from olive.plaud import (
     resolve_retry_policy,
     summary_to_markdown,
 )
+from olive.settings import clear_app_config_cache
 
 AUDIO_BYTES = b"fake plaud audio"
 FIXTURE_FILE: dict[str, Any] = {
@@ -1006,6 +1007,86 @@ def test_poller_does_not_start_without_flag(tmp_path: Path) -> None:
     )
     with TestClient(app):
         pass
+    handle.engine.dispose()
+
+
+class _RecordingPoller:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, Any]] = []
+
+    def start(self, interval_minutes: int, *, run_now: bool = True) -> None:
+        self.calls.append(("start", (interval_minutes, run_now)))
+
+    def stop(self) -> None:
+        self.calls.append(("stop", None))
+
+
+def test_poller_does_not_start_when_auto_sync_is_off(tmp_path: Path) -> None:
+    handle = create_db(":memory:")
+    poller = _RecordingPoller()
+    app = create_app(
+        {
+            "db": handle.engine,
+            "configDir": str(tmp_path),
+            "meetingsDir": str(tmp_path / "meetings"),
+            "plaudPoller": poller,
+            "startPlaudPoller": True,
+            "plaudAutoSync": False,
+        }
+    )
+    with TestClient(app):
+        assert poller.calls == []
+    handle.engine.dispose()
+
+
+def test_config_route_toggles_plaud_auto_sync_live(tmp_path: Path) -> None:
+    clear_app_config_cache()
+    handle = create_db(":memory:")
+    poller = _RecordingPoller()
+    app = create_app(
+        {
+            "db": handle.engine,
+            "configDir": str(tmp_path),
+            "meetingsDir": str(tmp_path / "meetings"),
+            "plaudPoller": poller,
+            "startPlaudPoller": True,
+            "pollIntervalMinutes": 15,
+        }
+    )
+    with TestClient(app) as client:
+        poller.calls.clear()
+
+        res = client.post("/api/config", json={"plaudAutoSync": False})
+        assert res.status_code == 200
+        assert res.json()["config"]["plaudAutoSync"] is False
+        assert poller.calls == [("stop", None)]
+
+        client.post("/api/config", json={"plaudAutoSync": True})
+        client.post("/api/config", json={"pollIntervalMinutes": 30})
+        client.post("/api/config", json={"defaultSummaryLanguage": "es"})
+        assert poller.calls == [
+            ("stop", None),
+            ("start", (15, True)),
+            ("start", (30, False)),
+        ]
+    handle.engine.dispose()
+
+
+def test_config_route_leaves_poller_alone_when_server_does_not_poll(tmp_path: Path) -> None:
+    clear_app_config_cache()
+    handle = create_db(":memory:")
+    poller = _RecordingPoller()
+    app = create_app(
+        {
+            "db": handle.engine,
+            "configDir": str(tmp_path),
+            "meetingsDir": str(tmp_path / "meetings"),
+            "plaudPoller": poller,
+        }
+    )
+    with TestClient(app) as client:
+        assert client.post("/api/config", json={"plaudAutoSync": False}).status_code == 200
+    assert poller.calls == [("stop", None)]  # lifespan shutdown only
     handle.engine.dispose()
 
 
