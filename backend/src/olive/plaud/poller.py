@@ -11,7 +11,7 @@ import re
 import time
 import urllib.parse
 import uuid
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -46,6 +46,11 @@ from .sdk import (
 
 DEFAULT_PAGE_SIZE = 100
 DEFAULT_PCS_WAIT_MS = 5 * 60 * 1000
+#: How often recordings still waiting on Plaud are re-checked between full polls.
+PENDING_CHECK_INTERVAL_SECONDS = 60
+#: APScheduler 3 skips a run that starts more than 1 s late by default; a busy
+#: event loop at fire time would otherwise silently drop the poll.
+SCHEDULER_MISFIRE_GRACE_SECONDS = 60
 DEFAULT_AUDIO_EXTENSION = "m4a"
 PLAUD_PROVIDER = "plaud"
 
@@ -398,6 +403,20 @@ class PlaudPoller:
                 minutes=max(1, int(interval_minutes)),
                 id="plaud_poll",
                 replace_existing=True,
+                coalesce=True,
+                misfire_grace_time=SCHEDULER_MISFIRE_GRACE_SECONDS,
+            )
+            # Discovery only creates the meeting; the audio is fetched once
+            # Plaud's transcript is ready or the PCS wait expires. Re-check
+            # those recordings every minute instead of waiting a full poll.
+            self._scheduler.add_job(
+                self.check_pending,
+                "interval",
+                seconds=PENDING_CHECK_INTERVAL_SECONDS,
+                id="plaud_pending",
+                replace_existing=True,
+                coalesce=True,
+                misfire_grace_time=SCHEDULER_MISFIRE_GRACE_SECONDS,
             )
             self._scheduler.start()
         except Exception:
@@ -433,14 +452,48 @@ class PlaudPoller:
         Returns ``False`` when a cycle is already running so callers can avoid
         queueing duplicate work.
         """
-        if self._in_flight is not None and not self._in_flight.done():
-            return False
-        task = asyncio.create_task(self._run_poll())
-        self._in_flight = task
-        task.add_done_callback(self._clear_in_flight)
-        return True
+        return self._start_cycle(self._run_poll) is not None
 
     triggerBackground = trigger_background
+
+    async def check_pending(self) -> dict[str, Any] | None:
+        """Fetch recordings still waiting on Plaud without a full discovery pass.
+
+        Runs only when no cycle is in flight and some meeting is still
+        ``processing`` (failed ones are left to the regular poll so a broken
+        recording is not retried every minute). Returns ``None`` when skipped.
+        """
+        if self._in_flight is not None and not self._in_flight.done():
+            return None
+        if not self._has_waiting_recordings():
+            return None
+        task = self._start_cycle(self._run_pending_pass)
+        return await task if task is not None else None
+
+    checkPending = check_pending
+
+    def _start_cycle(
+        self, run: Callable[[], Coroutine[Any, Any, dict[str, Any]]]
+    ) -> asyncio.Task[dict[str, Any]] | None:
+        # Full polls and pending passes share one in-flight slot so they never
+        # fetch the same recording concurrently.
+        if self._in_flight is not None and not self._in_flight.done():
+            return None
+        task = asyncio.create_task(run())
+        self._in_flight = task
+        task.add_done_callback(self._clear_in_flight)
+        return task
+
+    def _has_waiting_recordings(self) -> bool:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT 1 FROM plaud_ingest_state p JOIN meetings m ON m.id = p.meeting_id "
+                    "WHERE p.pcs_resolved = 0 AND p.duplicate_of_meeting_id IS NULL "
+                    "AND m.status = 'processing' LIMIT 1"
+                )
+            ).first()
+        return row is not None
 
     def _clear_in_flight(self, task: asyncio.Task[Any]) -> None:
         if self._in_flight is task:
@@ -551,6 +604,37 @@ class PlaudPoller:
             "pcsPending": pcs_pending,
             "startedAt": started_at,
             "completedAt": completed_at,
+            "error": error,
+        }
+
+    async def _run_pending_pass(self) -> dict[str, Any]:
+        started_at = self.now()
+        resolved = 0
+        error: str | None = None
+        try:
+            get_user = getattr(self.client, "get_current_user", None) or getattr(
+                self.client, "getCurrentUser", None
+            )
+            # Same auth gate as a full poll: an expired session must not mark
+            # every waiting meeting as failed.
+            if callable(get_user):
+                await self._with_plaud_retry(get_user)
+            resolution_res = await self._fetch_pending_assets(waiting_only=True)
+            resolved = resolution_res["resolved"]
+            error = resolution_res["error"]
+        except Exception as pass_err:
+            error = str(pass_err)
+            self.logger.warn("Plaud pending check failed", {"category": "plaud", "error": error})
+        if resolved:
+            self.logger.debug(
+                "Plaud pending check finished",
+                {"category": "plaud", "resolved": resolved, "durationMs": self.now() - started_at},
+            )
+        return {
+            "resolved": resolved,
+            "pcsPending": await self._pending_count(),
+            "startedAt": started_at,
+            "completedAt": self.now(),
             "error": error,
         }
 
@@ -684,7 +768,7 @@ class PlaudPoller:
                 else:
                     await asyncio.sleep(max(0.0, delay_ms / 1000.0))
 
-    async def _fetch_pending_assets(self) -> dict[str, Any]:
+    async def _fetch_pending_assets(self, *, waiting_only: bool = False) -> dict[str, Any]:
         with self.db.connect() as conn:
             states = (
                 conn.execute(text("SELECT * FROM plaud_ingest_state WHERE pcs_resolved = 0")).mappings().all()
@@ -707,6 +791,8 @@ class PlaudPoller:
                     .first()
                 )
             if not meeting:
+                continue
+            if waiting_only and meeting.get("status") != "processing":
                 continue
 
             try:
