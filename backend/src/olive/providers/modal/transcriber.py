@@ -48,7 +48,9 @@ class ModalTranscriber:
     async def transcribe(self, job: CloudJob) -> CloudTranscript:
         opts = job.options
         job.set_job_id(f"modal-{job.meeting_id[:8]}-{uuid.uuid4().hex[:8]}")
-        asr_model = normalize_asr_model(opts.get("asrModel") or opts.get("asr_model") or self.default_asr_model())
+        asr_model = normalize_asr_model(
+            opts.get("asrModel") or opts.get("asr_model") or self.default_asr_model()
+        )
 
         await job.progress("uploading", 10, "Converting audio for the Modal GPU worker (16 kHz FLAC)...")
         audio_bytes = await asyncio.to_thread(prepare_modal_flac, job.audio_path)

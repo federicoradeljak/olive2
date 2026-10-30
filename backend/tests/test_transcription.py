@@ -48,7 +48,11 @@ SAMPLE_JSON_V2: dict[str, Any] = {
 }
 
 
-def _create_mock_speechmatics_client(json_v2: dict[str, Any] = SAMPLE_JSON_V2):
+def _create_mock_speechmatics_client(
+    json_v2: dict[str, Any] = SAMPLE_JSON_V2,
+    job_status: str = "done",
+    job_errors: list[dict[str, str]] | None = None,
+):
     delete_calls: list[str] = []
 
     class _MockBatch:
@@ -59,7 +63,8 @@ def _create_mock_speechmatics_client(json_v2: dict[str, Any] = SAMPLE_JSON_V2):
             return {
                 "job": {
                     "id": jid,
-                    "status": "done",
+                    "status": job_status,
+                    "errors": job_errors,
                     "created_at": "2026-08-16T12:00:00Z",
                     "data_name": "test.m4a",
                     "duration": 5.0,
@@ -308,4 +313,70 @@ async def test_late_in_progress_updates_do_not_overwrite_cancelled(tmp_path: Pat
     progress = service.get_transcription_progress(meeting_id)
     assert progress is not None
     assert progress.stage == "cancelled"  # type: ignore[union-attr]
+    handle.engine.dispose()
+
+
+async def test_rejected_speechmatics_job_marks_error_and_reports_it(tmp_path: Path) -> None:
+    handle = create_db(":memory:")
+    meetings_dir = str(tmp_path / "meetings")
+    now = 1_700_000_000_000
+    meeting_id = "m-rejected"
+    paths = meeting_paths(meetings_dir, now, "Rejected Meeting", meeting_id)
+    Path(paths.audio_dir).mkdir(parents=True, exist_ok=True)
+    (Path(paths.folder) / "audio/test.m4a").write_bytes(AUDIO_BYTES)
+    with handle.engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO meetings (id, title, start_time, end_time, source, status, tags,
+                  primary_transcript_artifact_id, primary_summary_artifact_id, last_error, created_at, updated_at)
+                VALUES (:id, 'Rejected Meeting', :now, :now, 'upload', 'ready', '[]', NULL, NULL, NULL, :now, :now)
+                """
+            ),
+            {"id": meeting_id, "now": now},
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO recordings (id, meeting_id, path, mime, duration_ms, size_bytes, sha256,
+                  provider, provider_recording_id, created_at)
+                VALUES ('rec-rej', :mid, 'audio/test.m4a', 'audio/mp4', 5000, 16, 'sha-rej', 'upload', NULL, :now)
+                """
+            ),
+            {"mid": meeting_id, "now": now},
+        )
+
+    sm_client, _ = _create_mock_speechmatics_client(
+        job_status="rejected", job_errors=[{"message": "Audio too short"}]
+    )
+    service = TranscriptionService(
+        {"db": handle.engine, "meetingsDir": meetings_dir, "speechmaticsClient": sm_client, "now": lambda: now}
+    )
+    updates: list[tuple[str, str]] = []
+    result = await service.transcribe_meeting(
+        meeting_id,
+        {
+            "provider": "speechmatics",
+            "poll": True,
+            "pollIntervalMs": 10,
+            "onProgress": lambda u: updates.append((u.stage, u.message)),
+        },
+    )
+
+    assert (result["status"], result["error"], result["jobId"]) == ("error", "Audio too short", "sm-job-456")
+    assert updates[-1] == ("error", "Audio too short")
+    with handle.engine.connect() as conn:
+        run = (
+            conn.execute(
+                text("SELECT status, provider_job_id FROM stage_runs WHERE stage = :st"),
+                {"st": STAGE_SPEECHMATICS_TRANSCRIBE},
+            )
+            .mappings()
+            .one()
+        )
+        last_error = conn.execute(
+            text("SELECT last_error FROM meetings WHERE id = :id"), {"id": meeting_id}
+        ).scalar()
+    assert (run["status"], run["provider_job_id"]) == ("error", "sm-job-456")
+    assert last_error == "Audio too short"
     handle.engine.dispose()

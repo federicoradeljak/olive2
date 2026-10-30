@@ -101,21 +101,24 @@ def _service(handle: Any, meetings_dir: str, transcriber: _FakeTranscriber) -> T
 
 def _stage_run(handle: Any) -> dict[str, Any]:
     with handle.engine.connect() as conn:
-        row = (
-            conn.execute(text("SELECT * FROM stage_runs WHERE stage = :s"), {"s": STAGE}).mappings().first()
-        )
+        row = conn.execute(text("SELECT * FROM stage_runs WHERE stage = :s"), {"s": STAGE}).mappings().first()
     assert row is not None
     return dict(row)
 
 
 def _meeting_error(handle: Any) -> str | None:
     with handle.engine.connect() as conn:
-        return conn.execute(text("SELECT last_error FROM meetings WHERE id = :id"), {"id": MEETING_ID}).scalar()
+        return conn.execute(
+            text("SELECT last_error FROM meetings WHERE id = :id"), {"id": MEETING_ID}
+        ).scalar()
 
 
 def _usage_sources(handle: Any) -> list[str]:
     with handle.engine.connect() as conn:
-        return [str(r[0]) for r in conn.execute(text("SELECT source FROM usage_events WHERE kind = 'transcription'"))]
+        return [
+            str(r[0])
+            for r in conn.execute(text("SELECT source FROM usage_events WHERE kind = 'transcription'"))
+        ]
 
 
 async def _transcribe(svc: TranscriptionService, **opts: Any) -> tuple[dict[str, Any], list[tuple[str, str]]]:

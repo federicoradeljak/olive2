@@ -8,7 +8,6 @@ import json
 import os
 import re
 import time
-import urllib.parse
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -38,9 +37,9 @@ from ..providers.muse import (
 from ..providers.muse.transcriber import MuseTranscriber
 from ..providers.speechmatics import (
     SpeechmaticsClient,
-    parse_speechmatics_json_v2,
     transcript_to_text,
 )
+from ..providers.speechmatics.transcriber import SpeechmaticsTranscriber
 from ..schemas import (
     EnrolledSpeaker,
     SpeakerReidentificationStatus,
@@ -327,7 +326,14 @@ class TranscriptionService:
         self._progress_listeners: dict[str, set[Callable[[TranscriptionProgressUpdate], Any]]] = {}
         self._reidentify_statuses: dict[str, SpeakerReidentificationStatus] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._speechmatics = SpeechmaticsTranscriber(
+            self.client,
+            webhook_url=self.webhook_url,
+            webhook_secret=self.webhook_secret,
+            now=lambda: self.now(),
+        )
         self.cloud_transcribers: dict[str, CloudTranscriber] = {
+            PROVIDER_SPEECHMATICS: self._speechmatics,
             PROVIDER_ASSEMBLYAI: AssemblyAITranscriber(self.assemblyai_client, now=lambda: self.now()),
             PROVIDER_MUSE: MuseTranscriber(self.muse_client),
             PROVIDER_MODAL: ModalTranscriber(
@@ -1975,403 +1981,9 @@ class TranscriptionService:
         meeting_id: str,
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        opts = options or {}
-        on_progress = opts.get("onProgress")
-
-        with self.db.connect() as conn:
-            meeting = (
-                conn.execute(
-                    text("SELECT * FROM meetings WHERE id = :id"),
-                    {"id": meeting_id},
-                )
-                .mappings()
-                .first()
-            )
-            if not meeting:
-                raise ValueError(f"Meeting not found: {meeting_id}")
-
-            recording = (
-                conn.execute(
-                    text("SELECT * FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"),
-                    {"mid": meeting_id},
-                )
-                .mappings()
-                .first()
-            )
-            if not recording:
-                raise ValueError(f"No recording found for meeting {meeting_id}")
-
-            stage_run = (
-                conn.execute(
-                    text("SELECT * FROM stage_runs WHERE meeting_id = :mid AND stage = :stage LIMIT 1"),
-                    {"mid": meeting_id, "stage": STAGE_SPEECHMATICS_TRANSCRIBE},
-                )
-                .mappings()
-                .first()
-            )
-
-        folder = meeting_paths(
-            self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]
-        ).folder
-        audio_full_path = str(Path(folder) / recording["path"])
-        if not Path(audio_full_path).exists():
-            raise FileNotFoundError(f"Audio file not found on disk at {audio_full_path}")
-
-        if stage_run and stage_run["status"] == "done" and not opts.get("force"):
-            with self.db.connect() as conn:
-                existing_art = (
-                    conn.execute(
-                        text(
-                            """
-                        SELECT id FROM artifacts
-                        WHERE meeting_id = :mid AND provider = :prov AND kind = 'transcript' AND format = 'json'
-                        LIMIT 1
-                        """
-                        ),
-                        {"mid": meeting_id, "prov": PROVIDER_SPEECHMATICS},
-                    )
-                    .mappings()
-                    .first()
-                )
-            return {
-                "stageRunId": stage_run["id"],
-                "jobId": stage_run.get("provider_job_id") or "",
-                "status": "done",
-                "transcriptArtifactId": existing_art["id"] if existing_art else None,
-            }
-
-        if callable(on_progress):
-            r = on_progress(
-                TranscriptionProgressUpdate(
-                    stage="decoding",
-                    percent=5,
-                    message="Preparing audio and speaker profiles for Speechmatics...",
-                )
-            )
-            if inspect.isawaitable(r):
-                await r
-
-        stage_run_id = stage_run["id"] if stage_run else str(uuid.uuid4())
-        current_time = self.now()
-
-        # Speaker identity is resolved locally from voiceprints after ASR
-        # (see _maybe_identify_cloud_speakers); Speechmatics is only asked
-        # for diarized labels, not its native speaker_identifiers.
-        webhook_url = (
-            f"{self.webhook_url}?meetingId={urllib.parse.quote(meeting_id)}"
-            f"&stageRunId={urllib.parse.quote(stage_run_id)}"
-            if self.webhook_url
-            else None
-        )
-
-        if callable(on_progress):
-            r = on_progress(
-                TranscriptionProgressUpdate(
-                    stage="uploading",
-                    percent=15,
-                    message="Uploading audio to Speechmatics Cloud API...",
-                )
-            )
-            if inspect.isawaitable(r):
-                await r
-
-        try:
-            submit_res = await self.client.submit_job(
-                {
-                    "audio": {"path": audio_full_path},
-                    "filename": Path(recording["path"]).name,
-                    "mime": recording["mime"],
-                    "language": opts.get("language") or "en",
-                    "getSpeakers": True,
-                    "webhookUrl": webhook_url,
-                    "webhookSecret": self.webhook_secret,
-                    "additionalVocab": opts.get("additionalVocab") or opts.get("additional_vocab"),
-                }
-            )
-        except Exception as exc:
-            err_msg = str(exc)
-            self.logger.error(
-                "Failed to submit Speechmatics job", {"meetingId": meeting_id, "error": err_msg}
-            )
-            with self.db.begin() as conn:
-                if stage_run:
-                    conn.execute(
-                        text(
-                            """
-                            UPDATE stage_runs
-                            SET status = 'error', last_error = :err,
-                                attempts = :attempts, updated_at = :now
-                            WHERE id = :id
-                            """
-                        ),
-                        {
-                            "err": err_msg,
-                            "attempts": int(stage_run["attempts"]) + 1,
-                            "now": current_time,
-                            "id": stage_run["id"],
-                        },
-                    )
-                else:
-                    conn.execute(
-                        text(
-                            """
-                            INSERT INTO stage_runs (
-                              id, meeting_id, stage, status, provider_job_id, attempts,
-                              last_error, started_at, finished_at, created_at, updated_at
-                            ) VALUES (
-                              :id, :mid, :stage, 'error', NULL, 1,
-                              :err, :now, :now, :now, :now
-                            )
-                            """
-                        ),
-                        {
-                            "id": stage_run_id,
-                            "mid": meeting_id,
-                            "stage": STAGE_SPEECHMATICS_TRANSCRIBE,
-                            "err": err_msg,
-                            "now": current_time,
-                        },
-                    )
-                conn.execute(
-                    text("UPDATE meetings SET last_error = :err, updated_at = :now WHERE id = :id"),
-                    {"err": err_msg, "now": current_time, "id": meeting_id},
-                )
-            if callable(on_progress):
-                r = on_progress(
-                    TranscriptionProgressUpdate(
-                        stage="error",
-                        percent=0,
-                        message=err_msg,
-                        error=err_msg,
-                    )
-                )
-                if inspect.isawaitable(r):
-                    await r
-            return {
-                "stageRunId": stage_run_id,
-                "jobId": "",
-                "status": "error",
-                "error": err_msg,
-            }
-
-        job_id = str(submit_res["id"])
-        with self.db.begin() as conn:
-            if stage_run:
-                conn.execute(
-                    text(
-                        """
-                        UPDATE stage_runs
-                        SET status = 'running', provider_job_id = :jid,
-                            attempts = :attempts, last_error = NULL,
-                            started_at = :now, updated_at = :now
-                        WHERE id = :id
-                        """
-                    ),
-                    {
-                        "jid": job_id,
-                        "attempts": int(stage_run["attempts"]) + 1,
-                        "now": current_time,
-                        "id": stage_run["id"],
-                    },
-                )
-            else:
-                conn.execute(
-                    text(
-                        """
-                        INSERT INTO stage_runs (
-                          id, meeting_id, stage, status, provider_job_id, attempts,
-                          last_error, started_at, finished_at, created_at, updated_at
-                        ) VALUES (
-                          :id, :mid, :stage, 'running', :jid, 1,
-                          NULL, :now, NULL, :now, :now
-                        )
-                        """
-                    ),
-                    {
-                        "id": stage_run_id,
-                        "mid": meeting_id,
-                        "stage": STAGE_SPEECHMATICS_TRANSCRIBE,
-                        "jid": job_id,
-                        "now": current_time,
-                    },
-                )
-
-        if callable(on_progress):
-            r = on_progress(
-                TranscriptionProgressUpdate(
-                    stage="transcribing",
-                    percent=25,
-                    message=f"Job {job_id[:10]}... accepted by Speechmatics. Cloud processing...",
-                )
-            )
-            if inspect.isawaitable(r):
-                await r
-
-        cur_active = self._active_jobs.get(meeting_id)
-        if cur_active:
-            cur_active.stage_run_id = stage_run_id
-            cur_active.job_id = job_id
-
-        if opts.get("poll"):
-            return await self.poll_until_complete(
-                meeting_id,
-                stage_run_id,
-                job_id,
-                int(opts.get("pollIntervalMs") or 2000),
-                int(opts.get("maxPollWaitMs") or 180_000),
-                on_progress,
-                opts.get("signal"),
-            )
-
-        return {
-            "stageRunId": stage_run_id,
-            "jobId": job_id,
-            "status": "running",
-        }
+        return await self._cloud_run().run(self._speechmatics, meeting_id, options or {})
 
     transcribeMeetingSpeechmatics = transcribe_meeting_speechmatics
-
-    async def poll_until_complete(
-        self,
-        meeting_id: str,
-        stage_run_id: str,
-        job_id: str,
-        interval_ms: int = 2000,
-        max_wait_ms: int = 180_000,
-        on_progress: Callable[[TranscriptionProgressUpdate], Any] | None = None,
-        signal: Any = None,
-    ) -> dict[str, Any]:
-        start_time = self.now()
-        poll_count = 0
-
-        while self.now() - start_time < max_wait_ms:
-            if getattr(signal, "aborted", False) or (hasattr(signal, "is_set") and signal.is_set()):
-                try:
-                    await self.client.delete_job(job_id)
-                except Exception:
-                    pass
-                cancel_time = self.now()
-                with self.db.begin() as conn:
-                    conn.execute(
-                        text(
-                            """
-                            UPDATE stage_runs
-                            SET status = 'cancelled', last_error = 'Cancelled by user',
-                                finished_at = :t, updated_at = :t
-                            WHERE id = :id
-                            """
-                        ),
-                        {"t": cancel_time, "id": stage_run_id},
-                    )
-                return {
-                    "stageRunId": stage_run_id,
-                    "jobId": job_id,
-                    "status": "cancelled",
-                    "error": "Cancelled by user",
-                }
-
-            poll_count += 1
-            elapsed_ms = self.now() - start_time
-            elapsed_sec = int(round(elapsed_ms / 1000.0))
-            pct = min(70, int(round(20 + min(50.0, (elapsed_sec / 45.0) * 50.0))))
-
-            if callable(on_progress):
-                r = on_progress(
-                    TranscriptionProgressUpdate(
-                        stage="transcribing",
-                        percent=pct,
-                        currentMs=elapsed_ms,
-                        message=f"Speechmatics cloud processing (poll #{poll_count}, {elapsed_sec}s elapsed)...",
-                    )
-                )
-                if inspect.isawaitable(r):
-                    await r
-
-            status = await self.client.get_job(job_id)
-            if status.get("status") == "done":
-                if callable(on_progress):
-                    r = on_progress(
-                        TranscriptionProgressUpdate(
-                            stage="finalizing",
-                            percent=72,
-                            message="Downloading transcript JSON & identifying speakers...",
-                        )
-                    )
-                    if inspect.isawaitable(r):
-                        await r
-
-                json_v2 = await self.client.get_transcript(job_id, "json-v2")
-                res = await self.complete_transcription(meeting_id, stage_run_id, job_id, json_v2)
-
-                if callable(on_progress):
-                    r = on_progress(
-                        TranscriptionProgressUpdate(
-                            stage="done",
-                            percent=100,
-                            message="Speechmatics transcription complete!",
-                        )
-                    )
-                    if inspect.isawaitable(r):
-                        await r
-                return res
-
-            if status.get("status") in ("rejected", "deleted"):
-                errors = status.get("errors") or []
-                err_msg = (
-                    "; ".join(e.get("message", "") for e in errors)
-                    if errors
-                    else f"Speechmatics job {status.get('status')}"
-                )
-                err_time = self.now()
-                with self.db.begin() as conn:
-                    conn.execute(
-                        text(
-                            """
-                            UPDATE stage_runs
-                            SET status = 'error', last_error = :err, finished_at = :t, updated_at = :t
-                            WHERE id = :id
-                            """
-                        ),
-                        {"err": err_msg, "t": err_time, "id": stage_run_id},
-                    )
-                    conn.execute(
-                        text("UPDATE meetings SET last_error = :err, updated_at = :t WHERE id = :id"),
-                        {"err": err_msg, "t": err_time, "id": meeting_id},
-                    )
-                return {
-                    "stageRunId": stage_run_id,
-                    "jobId": job_id,
-                    "status": "error",
-                    "error": err_msg,
-                }
-
-            await asyncio.sleep(interval_ms / 1000.0)
-
-        timeout_err = f"Speechmatics job timed out after {max_wait_ms}ms"
-        timeout_at = self.now()
-        with self.db.begin() as conn:
-            conn.execute(
-                text(
-                    """
-                    UPDATE stage_runs
-                    SET status = 'error', last_error = :err, finished_at = :t, updated_at = :t
-                    WHERE id = :id
-                    """
-                ),
-                {"err": timeout_err, "t": timeout_at, "id": stage_run_id},
-            )
-            conn.execute(
-                text("UPDATE meetings SET last_error = :err, updated_at = :t WHERE id = :id"),
-                {"err": timeout_err, "t": timeout_at, "id": meeting_id},
-            )
-        return {
-            "stageRunId": stage_run_id,
-            "jobId": job_id,
-            "status": "error",
-            "error": timeout_err,
-        }
-
-    pollUntilComplete = poll_until_complete
 
     def _configured_similarity_threshold(self) -> float | None:
         if not self.config_dir:
@@ -2665,27 +2277,10 @@ class TranscriptionService:
         json_v2: dict[str, Any],
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        canonical = parse_speechmatics_json_v2(json_v2)
-        res = await self._complete_cloud_transcription(
-            meeting_id,
-            stage_run_id,
-            job_id,
-            canonical,
-            PROVIDER_SPEECHMATICS,
-            raw_payload=json_v2,
-            options=options,
+        """Speechmatics webhook: persist the finished job's json-v2 transcript."""
+        return await self._cloud_run().finish(
+            self._speechmatics, meeting_id, stage_run_id, job_id, self._speechmatics.parse(json_v2), options
         )
-
-        try:
-            if job_id:
-                await self.client.delete_job(job_id)
-        except Exception as cleanup_err:
-            self.logger.warn(
-                "Failed to delete Speechmatics job after completion",
-                {"jobId": job_id, "error": str(cleanup_err)},
-            )
-
-        return res
 
     completeTranscription = complete_transcription
 

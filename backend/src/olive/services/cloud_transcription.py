@@ -406,9 +406,7 @@ class CloudTranscriptionRun:
                     text("UPDATE meetings SET last_error = :err, updated_at = :t WHERE id = :id"),
                     {"err": err_msg, "t": err_time, "id": meeting_id},
                 )
-        self.logger.error(
-            f"{spec.label} transcription failed", {"meetingId": meeting_id, "error": err_msg}
-        )
+        self.logger.error(f"{spec.label} transcription failed", {"meetingId": meeting_id, "error": err_msg})
         await emit_progress_update(
             options.get("onProgress"),
             TranscriptionProgressUpdate(
