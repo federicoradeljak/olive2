@@ -12,6 +12,7 @@ import time
 import urllib.parse
 import uuid
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,7 @@ from ..logging_db import logger as default_logger
 from ..ml.opus import is_raw_plaud_opus, wrap_raw_opus_bytes
 from ..schemas import EnrolledSpeaker, Transcript, TranscriptSegment
 from ..speaker_labels import is_generic_speaker_label
+from .pending import PendingDecision, PendingRecording, decide, is_waiting, should_fetch
 from .retry import (
     compute_retry_delay_ms,
     is_rate_limit_error,
@@ -187,10 +189,6 @@ def summary_to_markdown(notes: list[dict[str, str]]) -> str:
 
 
 summaryToMarkdown = summary_to_markdown
-
-
-def _content_is_ready(detail: Mapping[str, Any]) -> bool:
-    return bool(detail.get("source_list") or detail.get("note_list"))
 
 
 def _is_placeholder_speaker_name(name: str) -> bool:
@@ -515,15 +513,27 @@ class PlaudPoller:
         return task
 
     def _has_waiting_recordings(self) -> bool:
+        return any(is_waiting(recording) for recording, _meeting in self._load_pending())
+
+    def _load_pending(self) -> list[tuple[PendingRecording, Mapping[Any, Any]]]:
+        """Unresolved Plaud recordings with their meeting rows."""
         with self.db.connect() as conn:
-            row = conn.execute(
-                text(
-                    "SELECT 1 FROM plaud_ingest_state p JOIN meetings m ON m.id = p.meeting_id "
-                    "WHERE p.pcs_resolved = 0 AND p.duplicate_of_meeting_id IS NULL "
-                    "AND m.status = 'processing' LIMIT 1"
+            states = (
+                conn.execute(text("SELECT * FROM plaud_ingest_state WHERE pcs_resolved = 0")).mappings().all()
+            )
+            pending: list[tuple[PendingRecording, Mapping[Any, Any]]] = []
+            for state in states:
+                meeting = (
+                    conn.execute(
+                        text("SELECT * FROM meetings WHERE id = :id"),
+                        {"id": state["meeting_id"]},
+                    )
+                    .mappings()
+                    .first()
                 )
-            ).first()
-        return row is not None
+                if meeting:
+                    pending.append((PendingRecording.from_rows(state, meeting), meeting))
+        return pending
 
     def _clear_in_flight(self, task: asyncio.Task[Any]) -> None:
         if self._in_flight is task:
@@ -801,30 +811,11 @@ class PlaudPoller:
                     await asyncio.sleep(max(0.0, delay_ms / 1000.0))
 
     async def _fetch_pending_assets(self, *, waiting_only: bool = False) -> dict[str, Any]:
-        with self.db.connect() as conn:
-            states = (
-                conn.execute(text("SELECT * FROM plaud_ingest_state WHERE pcs_resolved = 0")).mappings().all()
-            )
-
         resolved = 0
         errors: list[str] = []
 
-        for state in states:
-            if state.get("duplicate_of_meeting_id"):
-                continue
-
-            with self.db.connect() as conn:
-                meeting = (
-                    conn.execute(
-                        text("SELECT * FROM meetings WHERE id = :id"),
-                        {"id": state["meeting_id"]},
-                    )
-                    .mappings()
-                    .first()
-                )
-            if not meeting:
-                continue
-            if waiting_only and meeting.get("status") != "processing":
+        for recording, meeting in self._load_pending():
+            if not should_fetch(recording, waiting_only=waiting_only):
                 continue
 
             try:
@@ -833,29 +824,25 @@ class PlaudPoller:
                     continue
                 try:
                     detail, effective_file_id = await self._fetch_plaud_detail(
-                        get_file_fn, state["plaud_file_id"]
+                        get_file_fn, recording.plaud_file_id
                     )
                 except NotFoundError as missing:
-                    await self._mark_file_missing(meeting, state, missing)
+                    await self._mark_file_missing(meeting, recording, missing)
                     continue
-                state = {**state, "plaud_file_id": effective_file_id}
-                has_content = _content_is_ready(detail)
-                deadline_expired = (
-                    self.now() >= int(state["pcs_deadline_at"])
-                    or (self.now() - int(state["first_seen_at"])) >= self.pcs_wait_ms
-                )
-                if has_content:
-                    await self._ingest_ready_meeting(meeting, state, detail)
+                recording = replace(recording, plaud_file_id=effective_file_id)
+                decision = decide(recording, detail, now=self.now(), pcs_wait_ms=self.pcs_wait_ms)
+                if decision is PendingDecision.READY:
+                    await self._ingest_ready_meeting(meeting, recording, detail)
                     resolved += 1
-                elif deadline_expired:
-                    await self._ingest_audio_only_meeting(meeting, state, detail)
+                elif decision is PendingDecision.EXPIRED:
+                    await self._ingest_audio_only_meeting(meeting, recording, detail)
                     resolved += 1
             except DuplicateAudioError as dup_err:
-                await self._mark_duplicate(meeting, state, dup_err.duplicate_of_meeting_id)
+                await self._mark_duplicate(meeting, recording, dup_err.duplicate_of_meeting_id)
                 resolved += 1
             except Exception as exc:
                 msg = str(exc)
-                errors.append(f"{state['plaud_file_id']}: {msg}")
+                errors.append(f"{recording.plaud_file_id}: {msg}")
                 with self.db.begin() as conn:
                     conn.execute(
                         text(
@@ -869,7 +856,7 @@ class PlaudPoller:
                     {
                         "error": msg,
                         "meetingId": meeting["id"],
-                        "plaudFileId": state["plaud_file_id"],
+                        "plaudFileId": recording.plaud_file_id,
                     },
                 )
 
@@ -900,7 +887,7 @@ class PlaudPoller:
     async def _mark_file_missing(
         self,
         meeting: Mapping[Any, Any],
-        state: Mapping[Any, Any],
+        recording: PendingRecording,
         error: Exception,
     ) -> None:
         """Stop retrying a recording Plaud no longer serves under any ID form."""
@@ -923,7 +910,7 @@ class PlaudPoller:
             {
                 "category": "plaud",
                 "meetingId": meeting["id"],
-                "plaudFileId": state["plaud_file_id"],
+                "plaudFileId": recording.plaud_file_id,
                 "error": str(error),
             },
         )
@@ -962,10 +949,10 @@ class PlaudPoller:
     async def _ingest_ready_meeting(
         self,
         meeting: Mapping[Any, Any],
-        state: Mapping[Any, Any],
+        recording: PendingRecording,
         detail: Mapping[Any, Any],
     ) -> None:
-        recording = await self._ensure_recording(meeting, state, detail)
+        stored = await self._ensure_recording(meeting, recording, detail)
         segments = parse_transcript_segments(detail.get("source_list"))
         notes = extract_summary_notes(detail.get("note_list"))
         paths = ensure_meeting_folder(
@@ -978,7 +965,7 @@ class PlaudPoller:
             t_text = f"{segments_to_text(segments)}\n"
             transcript_json_id = await self._ensure_artifact(
                 meeting["id"],
-                recording["id"],
+                stored["id"],
                 "transcript",
                 "json",
                 "transcripts/plaud.json",
@@ -987,7 +974,7 @@ class PlaudPoller:
             )
             await self._ensure_artifact(
                 meeting["id"],
-                recording["id"],
+                stored["id"],
                 "transcript",
                 "txt",
                 "transcripts/plaud.txt",
@@ -1001,7 +988,7 @@ class PlaudPoller:
             summary_md = summary_to_markdown(notes)
             summary_art_id = await self._ensure_artifact(
                 meeting["id"],
-                recording["id"],
+                stored["id"],
                 "summary",
                 "md",
                 "summaries/plaud.md",
@@ -1058,10 +1045,10 @@ class PlaudPoller:
     async def _ingest_audio_only_meeting(
         self,
         meeting: Mapping[Any, Any],
-        state: Mapping[Any, Any],
+        recording: PendingRecording,
         detail: Mapping[Any, Any],
     ) -> None:
-        await self._ensure_recording(meeting, state, detail)
+        await self._ensure_recording(meeting, recording, detail)
         resolved_at = self.now()
         with self.db.begin() as conn:
             conn.execute(
@@ -1081,7 +1068,7 @@ class PlaudPoller:
     async def _ensure_recording(
         self,
         meeting: Mapping[Any, Any],
-        state: Mapping[Any, Any],
+        recording: PendingRecording,
         detail: Mapping[Any, Any],
     ) -> dict[str, str]:
         with self.db.connect() as conn:
@@ -1091,7 +1078,7 @@ class PlaudPoller:
                         "SELECT id, path FROM recordings "
                         "WHERE provider = :prov AND provider_recording_id = :fid LIMIT 1"
                     ),
-                    {"prov": PLAUD_PROVIDER, "fid": state["plaud_file_id"]},
+                    {"prov": PLAUD_PROVIDER, "fid": recording.plaud_file_id},
                 )
                 .mappings()
                 .first()
@@ -1132,7 +1119,7 @@ class PlaudPoller:
                 with self.db.begin() as conn:
                     conn.execute(
                         text("UPDATE recordings SET provider_recording_id = :fid WHERE id = :id"),
-                        {"fid": state["plaud_file_id"], "id": existing_by_hash["id"]},
+                        {"fid": recording.plaud_file_id, "id": existing_by_hash["id"]},
                     )
             m_folder = Path(
                 meeting_paths(
@@ -1200,7 +1187,7 @@ class PlaudPoller:
                     "dur": dur_ms,
                     "sz": len(downloaded["bytes"]),
                     "sha": downloaded["sha256"],
-                    "fid": state["plaud_file_id"],
+                    "fid": recording.plaud_file_id,
                     "now": self.now(),
                 },
             )
@@ -1210,7 +1197,7 @@ class PlaudPoller:
     async def _mark_duplicate(
         self,
         meeting: Mapping[Any, Any],
-        state: Mapping[Any, Any],
+        recording: PendingRecording,
         duplicate_of_meeting_id: str,
     ) -> None:
         resolved_at = self.now()
@@ -1246,7 +1233,7 @@ class PlaudPoller:
             {
                 "category": "plaud",
                 "meetingId": meeting["id"],
-                "plaudFileId": state["plaud_file_id"],
+                "plaudFileId": recording.plaud_file_id,
                 "duplicateOfMeetingId": duplicate_of_meeting_id,
             },
         )
