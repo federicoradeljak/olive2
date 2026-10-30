@@ -8,6 +8,12 @@ day its changes merged (`## [YYYY-MM-DD]`), with entries grouped under
 `Added` / `Changed` / `Fixed` — pushing a tag publishes the image and turns
 every section newer than the previous tag into the GitHub release notes.
 
+## [2026-10-30]
+
+### Fixed
+
+- **Faster Plaud downloads** — new Plaud recordings now download within a few minutes instead of waiting for the next scheduled sync, and one Sync Now is enough. A scheduled sync no longer gets skipped when the server is busy at that moment.
+
 ## [2026-10-29]
 
 ### Added

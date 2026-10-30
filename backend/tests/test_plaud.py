@@ -287,6 +287,115 @@ async def test_falls_back_to_audio_only_once_pcs_deadline_passes(tmp_path: Path)
     handle.engine.dispose()
 
 
+class _CountingListClient(_FakePlaudClient):
+    def __init__(self, detail: dict[str, Any] | Callable[[], dict[str, Any]]) -> None:
+        super().__init__(detail)
+        self.list_calls = 0
+
+    async def listFilesIterator(self, _opts: Any = None) -> AsyncIterator[dict[str, Any]]:
+        self.list_calls += 1
+        yield FIXTURE_FILE
+
+
+def _pending_check_poller(tmp_path: Path, client: _FakePlaudClient, clock: dict[str, int]) -> Any:
+    handle = create_db(":memory:")
+    poller = PlaudPoller(
+        {
+            "db": handle.engine,
+            "meetingsDir": str(tmp_path / "meetings"),
+            "client": client,
+            "fetchImpl": _fake_fetch(),
+            "now": lambda: clock["now"],
+            "pcsWaitMs": 1_000,
+        }
+    )
+    return handle, poller
+
+
+async def test_pending_check_downloads_after_deadline_without_rediscovery(tmp_path: Path) -> None:
+    client = _CountingListClient(_pending_detail())
+    clock = {"now": 10_000}
+    handle, poller = _pending_check_poller(tmp_path, client, clock)
+
+    await poller.trigger()
+    waiting = await poller.check_pending()
+    assert waiting is not None and waiting["resolved"] == 0
+    assert waiting["pcsPending"] == 1
+
+    clock["now"] = 11_000
+    fetched = await poller.check_pending()
+    assert fetched is not None and fetched["resolved"] == 1
+    assert fetched["pcsPending"] == 0
+    # Nothing left waiting: the next check is skipped without any API call.
+    assert await poller.check_pending() is None
+    assert client.list_calls == 1
+    assert client.get_file_calls == 3
+
+    with handle.engine.connect() as conn:
+        meeting = conn.execute(text("SELECT * FROM meetings")).mappings().one()
+        recordings = conn.execute(text("SELECT COUNT(*) FROM recordings")).scalar()
+    assert meeting["status"] == "ready"
+    assert recordings == 1
+    handle.engine.dispose()
+
+
+async def test_pending_check_ingests_once_plaud_transcript_is_ready(tmp_path: Path) -> None:
+    detail = {"value": _pending_detail()}
+    client = _CountingListClient(lambda: detail["value"])
+    clock = {"now": 10_000}
+    handle, poller = _pending_check_poller(tmp_path, client, clock)
+
+    await poller.trigger()
+    detail["value"] = _ready_detail()
+    result = await poller.check_pending()
+
+    assert result is not None and result["resolved"] == 1
+    assert client.list_calls == 1
+    with handle.engine.connect() as conn:
+        meeting = conn.execute(text("SELECT * FROM meetings")).mappings().one()
+    assert meeting["status"] == "ready"
+    assert meeting["primary_transcript_artifact_id"] is not None
+    handle.engine.dispose()
+
+
+async def test_pending_check_leaves_failed_meetings_to_the_full_poll(tmp_path: Path) -> None:
+    client = _CountingListClient(_pending_detail())
+    clock = {"now": 10_000}
+    handle, poller = _pending_check_poller(tmp_path, client, clock)
+
+    await poller.trigger()
+    with handle.engine.begin() as conn:
+        conn.execute(text("UPDATE meetings SET status = 'error'"))
+    clock["now"] = 11_000
+
+    assert await poller.check_pending() is None
+    assert client.get_file_calls == 1
+    handle.engine.dispose()
+
+
+async def test_pending_check_skips_while_a_poll_is_in_flight(tmp_path: Path) -> None:
+    client = _CountingListClient(_pending_detail())
+    clock = {"now": 10_000}
+    handle, poller = _pending_check_poller(tmp_path, client, clock)
+
+    await poller.trigger()
+    clock["now"] = 11_000
+    release = asyncio.Event()
+
+    async def _blocked_cycle() -> dict[str, Any]:
+        await release.wait()
+        return {}
+
+    in_flight = asyncio.create_task(_blocked_cycle())
+    poller._in_flight = in_flight
+    assert await poller.check_pending() is None
+    assert poller.trigger_background() is False
+    release.set()
+    await in_flight
+    assert client.get_file_calls == 1
+    handle.engine.dispose()
+
+
 async def test_permanently_skips_duplicate_audio_meeting_instead_of_redownloading(
     tmp_path: Path,
 ) -> None:
