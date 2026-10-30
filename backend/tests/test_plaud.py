@@ -431,18 +431,25 @@ async def test_pending_check_skips_while_a_poll_is_in_flight(tmp_path: Path) -> 
     await poller.trigger()
     clock["now"] = 11_000
     release = asyncio.Event()
+    entered = asyncio.Event()
 
-    async def _blocked_cycle() -> dict[str, Any]:
+    async def _blocked_auth_check() -> dict[str, str]:
+        entered.set()
         await release.wait()
-        return {}
+        return {"id": "fake-user"}
 
-    in_flight = asyncio.create_task(_blocked_cycle())
-    poller._in_flight = in_flight
+    client.getCurrentUser = _blocked_auth_check
+    assert poller.trigger_background() is True
+    await entered.wait()
+
     assert await poller.check_pending() is None
     assert poller.trigger_background() is False
-    release.set()
-    await in_flight
     assert client.get_file_calls == 1
+    release.set()
+    # trigger() joins the running cycle instead of starting a second one.
+    joined = await poller.trigger()
+    assert joined["resolved"] == 1
+    assert client.get_file_calls == 2
     handle.engine.dispose()
 
 
