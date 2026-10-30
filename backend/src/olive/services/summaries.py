@@ -17,8 +17,8 @@ from sqlalchemy.engine import Engine
 
 from ..db import DbHandle, get_db
 from ..languages import is_auto_language, language_name
-from ..layout import meeting_paths
 from ..logging_db import logger
+from ..meeting_storage import MeetingStorage
 from ..schemas import LlmGenerateResult, SummaryGenerationStatus, Template
 from ..settings import normalize_vocabulary, resolve_paths
 from ..speaker_labels import is_generic_speaker_label
@@ -182,7 +182,7 @@ class SummaryService:
 
     async def _load_meeting_with_transcript(
         self, meeting_id: str
-    ) -> tuple[Mapping[Any, Any], str, Mapping[Any, Any]]:
+    ) -> tuple[Mapping[Any, Any], Path, Mapping[Any, Any]]:
         with self.db.connect() as conn:
             meeting = (
                 conn.execute(
@@ -204,9 +204,7 @@ class SummaryService:
                 .all()
             )
 
-        folder = meeting_paths(
-            self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]
-        ).folder
+        folder = MeetingStorage(self.meetings_dir).folder(meeting)
 
         primary_tid = meeting.get("primary_transcript_artifact_id")
         transcript_artifact = next((a for a in artifacts if a["id"] == primary_tid), None)
@@ -216,7 +214,7 @@ class SummaryService:
         if not transcript_artifact:
             raise ValueError("No transcript found for meeting. Please transcribe the recording first.")
 
-        full_path = Path(folder) / transcript_artifact["path"]
+        full_path = folder / transcript_artifact["path"]
         if not full_path.exists():
             raise ValueError(f"Transcript artifact not found on disk at: {transcript_artifact['path']}")
 
@@ -226,7 +224,7 @@ class SummaryService:
         meeting_id = str(options.get("meetingId") or options.get("meeting_id") or "")
         meeting, folder, transcript_artifact = await self._load_meeting_with_transcript(meeting_id)
 
-        transcript_full_path = Path(folder) / transcript_artifact["path"]
+        transcript_full_path = folder / transcript_artifact["path"]
         raw_transcript = transcript_full_path.read_text(encoding="utf-8")
 
         if transcript_artifact["format"] == "json":
@@ -385,7 +383,7 @@ class SummaryService:
             raise
 
         # 6. Save summary markdown file to disk
-        summaries_dir = Path(folder) / "summaries"
+        summaries_dir = folder / "summaries"
         summaries_dir.mkdir(parents=True, exist_ok=True)
         artifact_id = str(uuid.uuid4())
         filename = f"summary_{now}_{artifact_id[:8]}.md"
@@ -503,12 +501,7 @@ class SummaryService:
             if not artifact:
                 raise ValueError(f"Summary artifact not found: {artifact_id}")
 
-        folder = Path(
-            meeting_paths(
-                self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]
-            ).folder
-        )
-        full_path = folder / artifact["path"]
+        full_path = MeetingStorage(self.meetings_dir).file(meeting, artifact["path"])
         try:
             full_path.unlink(missing_ok=True)
         except Exception:

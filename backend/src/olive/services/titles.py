@@ -12,15 +12,14 @@ import re
 import time
 from collections.abc import Mapping
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from ..db import DbHandle, get_db
-from ..layout import meeting_paths
 from ..logging_db import logger
+from ..meeting_storage import MeetingStorage
 from ..schemas import LlmGenerateResult
 from ..settings import resolve_paths
 from .llm import LlmService
@@ -152,10 +151,6 @@ class TitleService:
                 .all()
             )
 
-        folder = meeting_paths(
-            self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]
-        ).folder
-
         primary_tid = meeting.get("primary_transcript_artifact_id")
         transcript_artifact = next((a for a in artifacts if a["id"] == primary_tid), None)
         if not transcript_artifact:
@@ -163,7 +158,7 @@ class TitleService:
         if not transcript_artifact:
             raise ValueError("No transcript found for meeting. Please transcribe the recording first.")
 
-        full_path = Path(folder) / transcript_artifact["path"]
+        full_path = MeetingStorage(self.meetings_dir).file(meeting, transcript_artifact["path"])
         if not full_path.exists():
             raise ValueError(f"Transcript artifact not found on disk at: {transcript_artifact['path']}")
 

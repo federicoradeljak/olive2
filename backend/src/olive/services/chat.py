@@ -8,14 +8,13 @@ import time
 import uuid
 from collections.abc import Callable, Mapping
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from ..db import DbHandle, get_db
-from ..layout import meeting_paths
+from ..meeting_storage import MeetingStorage
 from ..schemas import ChatMessage, ChatUsage, LlmGenerateResult
 from ..settings import resolve_paths
 from ..speaker_labels import is_generic_speaker_label
@@ -341,15 +340,10 @@ class ChatService:
                 .all()
             )
 
-        folder = Path(
-            meeting_paths(
-                self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]
-            ).folder
-        )
+        storage = MeetingStorage(self.meetings_dir)
 
         def read_artifact(rel_path: str) -> str | None:
-            fp = folder / rel_path
-            return fp.read_text(encoding="utf-8") if fp.exists() else None
+            return storage.read_text(meeting, rel_path)
 
         primary_tid = meeting.get("primary_transcript_artifact_id")
         transcript_art = next(
