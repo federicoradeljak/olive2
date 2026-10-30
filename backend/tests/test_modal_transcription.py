@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 from sqlalchemy import text
 
+import olive.providers.modal.transcriber as modal_transcriber
 import olive.services.transcription as transcription_module
 from olive.db import create_db
 from olive.layout import meeting_paths
@@ -123,7 +124,7 @@ def _stage_status(handle: Any, meeting_id: str) -> dict[str, Any]:
 
 @pytest.fixture(autouse=True)
 def _fake_flac(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(transcription_module, "prepare_modal_flac", lambda _path: b"flac-bytes")
+    monkeypatch.setattr(modal_transcriber, "prepare_modal_flac", lambda _path: b"flac-bytes")
 
 
 def test_provider_routing_helpers() -> None:
@@ -242,8 +243,13 @@ async def test_modal_worker_failure_marks_error(tmp_path: Path) -> None:
     async def _boom(_audio: bytes, _options: dict[str, Any]) -> Any:
         raise RuntimeError("App 'olive-gpu' not found")
 
-    service = _service(handle, str(tmp_path / "meetings"), [], _FakeHandle(WORKER_RESULT))
-    service.modal_client = ModalClient({"spawn": _boom})
+    service = _service(
+        handle,
+        str(tmp_path / "meetings"),
+        [],
+        _FakeHandle(WORKER_RESULT),
+        modalClient=ModalClient({"spawn": _boom}),
+    )
     result = await service.transcribe_meeting(meeting_id, {"provider": "modal"})
     assert result["status"] == "error"
     assert "olive-gpu" in str(result["error"])

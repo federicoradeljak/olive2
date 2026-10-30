@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from sqlalchemy import text
 
-import olive.services.transcription as transcription_module
+import olive.providers.muse.transcriber as muse_transcriber
 from olive.db import create_db
 from olive.layout import meeting_paths
 from olive.providers.muse import MuseClient
@@ -116,7 +116,7 @@ async def test_muse_chunked_flow_merges_offsets_and_artifacts(
     service = _service(handle, str(tmp_path / "meetings"), calls)
 
     monkeypatch.setattr(
-        transcription_module,
+        muse_transcriber,
         "prepare_muse_wav_chunks",
         lambda _path: [(b"wav-0", 0), (b"wav-1", 5000)],
     )
@@ -178,13 +178,17 @@ async def test_muse_chunked_flow_merges_offsets_and_artifacts(
 async def test_muse_chunk_failure_marks_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     handle, meeting_id, _paths = _seed_meeting(tmp_path)
     calls: list[dict[str, Any]] = []
-    service = _service(handle, str(tmp_path / "meetings"), calls)
 
     async def _boom(_url: str, _h: dict, _r: dict, _a: bytes, _f: str, _s: str, _t: float) -> dict[str, Any]:
         raise RuntimeError("Muse transcription failed (HTTP 500): boom")
 
-    service.muse_client = MuseClient({"apiKey": "test-key", "sender": _boom})
-    monkeypatch.setattr(transcription_module, "prepare_muse_wav_chunks", lambda _path: [(b"wav-0", 0)])
+    service = _service(
+        handle,
+        str(tmp_path / "meetings"),
+        calls,
+        museClient=MuseClient({"apiKey": "test-key", "sender": _boom}),
+    )
+    monkeypatch.setattr(muse_transcriber, "prepare_muse_wav_chunks", lambda _path: [(b"wav-0", 0)])
 
     result = await service.transcribe_meeting(meeting_id, {"provider": "muse"})
     assert result["status"] == "error"

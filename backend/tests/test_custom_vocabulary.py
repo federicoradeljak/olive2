@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from cloud_transcription_helpers import FakeTranscriber, seed_cloud_meeting
 from olive.app import create_app
 from olive.db import create_db
 from olive.services.transcription import TranscriptionService
@@ -43,23 +44,25 @@ def test_custom_vocabulary_is_normalized_and_persisted(tmp_path) -> None:
     clear_app_config_cache()
 
 
-async def test_transcription_injects_vocabulary_unless_request_overrides() -> None:
+async def test_transcription_injects_vocabulary_unless_request_overrides(tmp_path: Path) -> None:
     handle = create_db(":memory:")
+    meetings_dir = str(tmp_path / "meetings")
+    seed_cloud_meeting(handle.engine, meetings_dir, "m1")
     vocabulary = ["Olive"]
+    fake = FakeTranscriber()
     svc = TranscriptionService(
-        db=handle.engine, default_provider="assemblyai", custom_vocabulary=lambda: vocabulary
+        {"cloudTranscribers": {"assemblyai": fake}, "cloudSpeakerIdentifier": lambda *_args: None},
+        db=handle.engine,
+        meetings_dir=meetings_dir,
+        default_provider="assemblyai",
+        custom_vocabulary=lambda: vocabulary,
     )
-    seen: list[dict[str, Any]] = []
 
-    async def _capture(_meeting_id: str, opts: dict[str, Any]) -> dict[str, Any]:
-        seen.append(opts)
-        return {"status": "done"}
-
-    svc.transcribe_meeting_assemblyai = _capture  # type: ignore[method-assign]
-    await svc.transcribe_meeting("m1", {})
-    await svc.transcribe_meeting("m1", {"additionalVocab": ["Plaud"]})
+    await svc.transcribe_meeting("m1", {"force": True})
+    await svc.transcribe_meeting("m1", {"force": True, "additionalVocab": ["Plaud"]})
     vocabulary.clear()  # the live getter picks up settings changes
-    await svc.transcribe_meeting("m1", {})
+    await svc.transcribe_meeting("m1", {"force": True})
+    seen = fake.options
     assert [o.get("additionalVocab") for o in seen] == [["Olive"], ["Plaud"], None]
     handle.engine.dispose()
 

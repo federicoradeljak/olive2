@@ -14,6 +14,7 @@ every section newer than the previous tag into the GitHub release notes.
 
 - **Faster Plaud downloads** — new Plaud recordings now download within a few minutes instead of waiting for the next scheduled sync, and one Sync Now is enough. A scheduled sync no longer gets skipped when the server is busy at that moment.
 - **Custom vocabulary with streamed transcription** — a custom vocabulary sent with a transcription request is now used when the request streams its progress; before, it was silently ignored.
+- **Speechmatics failures show up right away** — when Speechmatics rejects a job, times out, or a transcription is cancelled while waiting for it, the meeting's progress now shows the error or cancellation immediately, the same as with the other cloud providers. A Speechmatics run is also listed as running while its audio uploads.
 
 ## [2026-10-29]
 
