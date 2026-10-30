@@ -2532,7 +2532,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
             # Turning auto-sync back on syncs right away; an interval change only reschedules.
             poller.start(updated.pollIntervalMinutes, run_now=not previous.plaudAutoSync)
         else:
-            poller.stop()
+            poller.stop(keep_pending_check=True)
 
     @app.post("/api/config")
     async def post_config_route(request: Request) -> JSONResponse:
