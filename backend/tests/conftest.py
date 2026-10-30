@@ -3,8 +3,17 @@
 from __future__ import annotations
 
 import os
+import tempfile
 
 import pytest
+
+from olive.settings import resolve_paths
+
+# Never touch ~/.config/olive (AGENTS.md rule 1): anything resolving the
+# default paths — e.g. the DB logger before a test installs its own handle —
+# lands in a throwaway dir. Models stay where they are so live tests find them.
+os.environ.setdefault("OLIVE_MODELS_DIR", resolve_paths().models_dir)
+os.environ.setdefault("OLIVE_CONFIG_DIR", tempfile.mkdtemp(prefix="olive-tests-"))
 
 os.environ.setdefault("OTEL_SDK_DISABLED", "true")
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
