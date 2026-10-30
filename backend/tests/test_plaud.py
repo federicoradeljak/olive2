@@ -17,7 +17,9 @@ from olive.db import create_db, run_migrations
 from olive.layout import meeting_folder_name
 from olive.plaud import (
     FileTokenStore,
+    MemoryTokenStore,
     NotFoundError,
+    OAuthManager,
     PlaudPoller,
     RateLimitError,
     alternate_plaud_file_id,
@@ -1219,3 +1221,52 @@ async def test_retranscribe_flags_resolve_live_from_settings_without_restart(
     settings_path.write_text(json.dumps({}), encoding="utf-8")
     assert poller._resolve_plaud_retranscribe_flags() == (False, False)
     handle.engine.dispose()
+
+
+def _expiring_tokens(expires_in_ms: int) -> dict[str, Any]:
+    return {
+        "access_token": "old-access",
+        "refresh_token": "old-refresh",
+        "token_type": "Bearer",
+        "expires_at": int(time.time() * 1000) + expires_in_ms,
+    }
+
+
+def _counting_oauth(expires_in_ms: int, new_lifetime_ms: int) -> tuple[OAuthManager, list[str]]:
+    oauth = OAuthManager({"tokenStore": MemoryTokenStore(_expiring_tokens(expires_in_ms))})
+    calls: list[str] = []
+
+    async def _fake_refresh(refresh_token: str) -> dict[str, Any]:
+        calls.append(refresh_token)
+        await asyncio.sleep(0.01)
+        token_set = {
+            "access_token": f"access-{len(calls)}",
+            "refresh_token": f"refresh-{len(calls)}",
+            "token_type": "Bearer",
+            "expires_at": int(time.time() * 1000) + new_lifetime_ms,
+        }
+        oauth._last_refresh_at = int(time.time() * 1000)  # pyright: ignore[reportPrivateUsage]
+        await oauth.tokenStore.save(token_set)
+        return token_set
+
+    oauth.refresh = _fake_refresh  # type: ignore[method-assign]
+    return oauth, calls
+
+
+async def test_concurrent_access_token_requests_refresh_once() -> None:
+    oauth, calls = _counting_oauth(expires_in_ms=3_600_000, new_lifetime_ms=30 * 24 * 3_600_000)
+
+    tokens = await asyncio.gather(*(oauth.get_access_token() for _ in range(5)))
+
+    assert calls == ["old-refresh"]
+    assert set(tokens) == {"access-1"}
+
+
+async def test_short_lived_token_is_not_refreshed_on_every_call() -> None:
+    # Lifetime inside the 48h refresh window: without the guard every call refreshes.
+    oauth, calls = _counting_oauth(expires_in_ms=3_600_000, new_lifetime_ms=24 * 3_600_000)
+
+    for _ in range(3):
+        assert await oauth.get_access_token() == "access-1"
+
+    assert calls == ["old-refresh"]
