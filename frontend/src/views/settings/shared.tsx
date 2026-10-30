@@ -12,6 +12,7 @@ export function isMaskedSecret(value: string | null | undefined): boolean {
 
 /** AppConfig as served (masked) by GET /api/config; see backend olive/settings.py. */
 export interface AppConfigDto {
+  plaudAutoSync: boolean;
   pollIntervalMinutes: number;
   retranscribePlaudWhenUnnamed: boolean;
   alwaysRetranscribePlaud: boolean;

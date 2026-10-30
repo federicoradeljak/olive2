@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { ReactElement } from "react";
 import { RefreshCw } from "lucide-react";
-import { Button, notify } from "../../components/ui";
+import { Button, Toggle, notify } from "../../components/ui";
 import { formatDate, type PlaudStatus } from "../../lib/common";
 import { PlaudConnect } from "./PlaudConnect";
 import { CopyField, INPUT_CLASS, Panel, SectionHeader, StatusTag, errorText, readError, type AppConfigDto } from "./shared";
@@ -45,7 +45,8 @@ function PlaudCard({
     setLastDraftPoll(draft.pollIntervalMinutes);
     if (Number(pollText) !== draft.pollIntervalMinutes) setPollText(String(draft.pollIntervalMinutes));
   }
-  const pollError = pollIntervalError(draft.pollIntervalMinutes);
+  const autoSync = draft.plaudAutoSync;
+  const pollError = autoSync ? pollIntervalError(draft.pollIntervalMinutes) : null;
 
   const sync = async () => {
     setSyncing(true);
@@ -106,7 +107,11 @@ function PlaudCard({
       )}
 
       <div className="flex flex-col gap-1 border-t border-divider pt-3">
-        <div className="flex flex-wrap items-center gap-2 text-[13px]">
+        <label className="flex items-center gap-2 text-[13px] font-medium">
+          <Toggle checked={autoSync} onChange={(e) => onChange("plaudAutoSync", e.target.checked)} />
+          Sync automatically
+        </label>
+        <div className={`flex flex-wrap items-center gap-2 text-[13px] ${autoSync ? "" : "opacity-50"}`}>
           <label htmlFor="plaud-poll" className="font-medium">
             Check for new recordings every
           </label>
@@ -118,6 +123,7 @@ function PlaudCard({
             max={1440}
             step={1}
             value={pollText}
+            disabled={!autoSync}
             onChange={(e) => {
               setPollText(e.target.value);
               onChange("pollIntervalMinutes", e.target.value.trim() === "" ? Number.NaN : Number(e.target.value));
@@ -134,7 +140,7 @@ function PlaudCard({
           </span>
         ) : (
           <span id="plaud-poll-hint" className="text-xs text-base-content/60">
-            Applies after Olive restarts. Use Sync now to check right away.
+            {autoSync ? "Use Sync now to check right away." : "New recordings are only imported when you press Sync now."}
           </span>
         )}
       </div>

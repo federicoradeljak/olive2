@@ -52,7 +52,7 @@ const SECTION_KEYS: Record<SettingsSection, AppConfigKey[]> = {
   ],
   ai: [],
   speakers: ["hfToken", "localClusteringThreshold", "localSimilarityThreshold"],
-  integrations: ["pollIntervalMinutes"],
+  integrations: ["plaudAutoSync", "pollIntervalMinutes"],
   data: [],
 };
 
@@ -175,7 +175,7 @@ export function SettingsView({
 
   const validationError = (s: SettingsSection): string | null => {
     if (!draft) return null;
-    if (s === "integrations") return pollIntervalError(draft.pollIntervalMinutes) ? "Fix the check interval before saving." : null;
+    if (s === "integrations") return draft.plaudAutoSync && pollIntervalError(draft.pollIntervalMinutes) ? "Fix the check interval before saving." : null;
     if (s === "ai" && llmDraft) return llmDraftErrors(llmDraft);
     return null;
   };
