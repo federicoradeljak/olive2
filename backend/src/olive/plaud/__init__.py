@@ -2,8 +2,8 @@
 
 from .auth import PlaudAuthSessionStore
 from .client import create_plaud_client, createPlaudClient, resolve_plaud_token_path, resolvePlaudTokenPath
+from .intake import DuplicateAudioError
 from .poller import (
-    DuplicateAudioError,
     PlaudPoller,
     clean_plaud_summary_markdown,
     cleanPlaudSummaryMarkdown,

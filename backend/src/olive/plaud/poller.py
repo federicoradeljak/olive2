@@ -29,6 +29,13 @@ from ..logging_db import logger as default_logger
 from ..ml.opus import is_raw_plaud_opus, wrap_raw_opus_bytes
 from ..schemas import EnrolledSpeaker, Transcript, TranscriptSegment
 from ..speaker_labels import is_generic_speaker_label
+from .intake import (
+    PLAUD_PROVIDER,
+    DownloadedAudio,
+    DuplicateAudioError,
+    RecordingIntake,
+    StoredRecording,
+)
 from .pending import PendingDecision, PendingRecording, decide, is_waiting, should_fetch
 from .retry import (
     compute_retry_delay_ms,
@@ -54,14 +61,6 @@ PENDING_CHECK_INTERVAL_SECONDS = 60
 #: event loop at fire time would otherwise silently drop the poll.
 SCHEDULER_MISFIRE_GRACE_SECONDS = 60
 DEFAULT_AUDIO_EXTENSION = "m4a"
-PLAUD_PROVIDER = "plaud"
-
-
-class DuplicateAudioError(Exception):
-    def __init__(self, duplicate_of_meeting_id: str) -> None:
-        super().__init__(f"Audio hash already belongs to meeting {duplicate_of_meeting_id}")
-        self.duplicateOfMeetingId = duplicate_of_meeting_id
-        self.duplicate_of_meeting_id = duplicate_of_meeting_id
 
 
 def _parse_timestamp(value: str | int | float | None, fallback: int) -> int:
@@ -356,6 +355,7 @@ class PlaudPoller:
         self.page_size: int = int(opts.get("pageSize") or DEFAULT_PAGE_SIZE)
         self.pcs_wait_ms: int = int(opts.get("pcsWaitMs") or DEFAULT_PCS_WAIT_MS)
         self.retry_options: dict[str, Any] = dict(opts.get("retryOptions") or {})
+        self.intake = RecordingIntake(self.db, self.meetings_dir, lambda: self.now())
 
         self._scheduler: AsyncIOScheduler | None = None
         self._pending_scheduler: AsyncIOScheduler | None = None
@@ -965,7 +965,7 @@ class PlaudPoller:
             t_text = f"{segments_to_text(segments)}\n"
             transcript_json_id = await self._ensure_artifact(
                 meeting["id"],
-                stored["id"],
+                stored.id,
                 "transcript",
                 "json",
                 "transcripts/plaud.json",
@@ -974,7 +974,7 @@ class PlaudPoller:
             )
             await self._ensure_artifact(
                 meeting["id"],
-                stored["id"],
+                stored.id,
                 "transcript",
                 "txt",
                 "transcripts/plaud.txt",
@@ -988,7 +988,7 @@ class PlaudPoller:
             summary_md = summary_to_markdown(notes)
             summary_art_id = await self._ensure_artifact(
                 meeting["id"],
-                stored["id"],
+                stored.id,
                 "summary",
                 "md",
                 "summaries/plaud.md",
@@ -1070,129 +1070,16 @@ class PlaudPoller:
         meeting: Mapping[Any, Any],
         recording: PendingRecording,
         detail: Mapping[Any, Any],
-    ) -> dict[str, str]:
-        with self.db.connect() as conn:
-            existing = (
-                conn.execute(
-                    text(
-                        "SELECT id, path FROM recordings "
-                        "WHERE provider = :prov AND provider_recording_id = :fid LIMIT 1"
-                    ),
-                    {"prov": PLAUD_PROVIDER, "fid": recording.plaud_file_id},
-                )
-                .mappings()
-                .first()
-            )
-
-        if existing:
-            existing_abs = (
-                Path(
-                    meeting_paths(
-                        self.meetings_dir,
-                        int(meeting["start_time"]),
-                        meeting["title"],
-                        meeting["id"],
-                    ).folder
-                )
-                / existing["path"]
-            )
-            if existing_abs.exists():
-                return {"id": existing["id"], "path": existing["path"]}
-
-        downloaded = await self._download_audio(detail)
-
-        with self.db.connect() as conn:
-            existing_by_hash = (
-                conn.execute(
-                    text("SELECT id, meeting_id, path FROM recordings WHERE sha256 = :sha LIMIT 1"),
-                    {"sha": downloaded["sha256"]},
-                )
-                .mappings()
-                .first()
-            )
-
-        if existing_by_hash:
-            if existing_by_hash["meeting_id"] != meeting["id"]:
-                raise DuplicateAudioError(existing_by_hash["meeting_id"])
-
-            if not existing:
-                with self.db.begin() as conn:
-                    conn.execute(
-                        text("UPDATE recordings SET provider_recording_id = :fid WHERE id = :id"),
-                        {"fid": recording.plaud_file_id, "id": existing_by_hash["id"]},
-                    )
-            m_folder = Path(
-                meeting_paths(
-                    self.meetings_dir,
-                    int(meeting["start_time"]),
-                    meeting["title"],
-                    meeting["id"],
-                ).folder
-            )
-            abs_path = m_folder / existing_by_hash["path"]
-            abs_path.parent.mkdir(parents=True, exist_ok=True)
-            if not abs_path.exists():
-                abs_path.write_bytes(downloaded["bytes"])
-            return {"id": existing_by_hash["id"], "path": existing_by_hash["path"]}
-
-        rec_id = existing["id"] if existing else str(uuid.uuid4())
-        rel_path = f"audio/{rec_id}.{downloaded['extension']}"
-        paths = ensure_meeting_folder(
-            meeting_paths(self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"])
-        )
-        (Path(paths.folder) / rel_path).write_bytes(downloaded["bytes"])
-        dur_ms = duration_to_ms(detail.get("duration")) or (
+    ) -> StoredRecording:
+        duration_ms = duration_to_ms(detail.get("duration")) or (
             int(meeting["end_time"]) - int(meeting["start_time"])
         )
-
-        with self.db.begin() as conn:
-            if existing:
-                conn.execute(
-                    text(
-                        """
-                        UPDATE recordings
-                        SET path = :path, mime = :mime, duration_ms = :dur,
-                            size_bytes = :sz, sha256 = :sha
-                        WHERE id = :id
-                        """
-                    ),
-                    {
-                        "path": rel_path,
-                        "mime": downloaded["mime"],
-                        "dur": dur_ms,
-                        "sz": len(downloaded["bytes"]),
-                        "sha": downloaded["sha256"],
-                        "id": existing["id"],
-                    },
-                )
-                return {"id": existing["id"], "path": rel_path}
-
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO recordings (
-                      id, meeting_id, path, mime, duration_ms, size_bytes, sha256,
-                      provider, provider_recording_id, created_at
-                    ) VALUES (
-                      :id, :mid, :path, :mime, :dur, :sz, :sha,
-                      'plaud', :fid, :now
-                    )
-                    """
-                ),
-                {
-                    "id": rec_id,
-                    "mid": meeting["id"],
-                    "path": rel_path,
-                    "mime": downloaded["mime"],
-                    "dur": dur_ms,
-                    "sz": len(downloaded["bytes"]),
-                    "sha": downloaded["sha256"],
-                    "fid": recording.plaud_file_id,
-                    "now": self.now(),
-                },
-            )
-
-        return {"id": rec_id, "path": rel_path}
+        return await self.intake.ensure(
+            meeting,
+            recording.plaud_file_id,
+            duration_ms,
+            lambda: self._download_audio(detail),
+        )
 
     async def _mark_duplicate(
         self,
@@ -1238,7 +1125,7 @@ class PlaudPoller:
             },
         )
 
-    async def _download_audio(self, detail: Mapping[str, Any]) -> dict[str, Any]:
+    async def _download_audio(self, detail: Mapping[str, Any]) -> DownloadedAudio:
         presigned_url = detail.get("presigned_url")
         if not presigned_url:
             raise ValueError("Plaud recording has no presigned audio URL")
@@ -1288,12 +1175,7 @@ class PlaudPoller:
             if resp_mime.lower().startswith("audio/")
             else _mime_for_extension(extension)
         )
-        return {
-            "bytes": audio_bytes,
-            "extension": extension,
-            "mime": mime,
-            "sha256": sha256,
-        }
+        return DownloadedAudio(bytes=audio_bytes, extension=extension, mime=mime, sha256=sha256)
 
     async def _ensure_artifact(
         self,
