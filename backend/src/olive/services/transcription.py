@@ -27,17 +27,15 @@ from ..ml import (
     AbortController,
     DiscoveredSpeakerVoiceprint,
 )
-from ..ml.asr_registry import normalize_asr_model
 from ..ml.identify import identify_cloud_transcript_speakers
 from ..providers.assemblyai import AssemblyAIClient
 from ..providers.assemblyai.transcriber import AssemblyAITranscriber
-from ..providers.modal import ModalCancelledError, ModalClient, prepare_modal_flac
+from ..providers.modal import ModalClient
+from ..providers.modal.transcriber import ModalTranscriber
 from ..providers.muse import (
     MuseClient,
-    MuseTranscribeResponse,
-    merge_muse_chunk_transcripts,
-    prepare_muse_wav_chunks,
 )
+from ..providers.muse.transcriber import MuseTranscriber
 from ..providers.speechmatics import (
     SpeechmaticsClient,
     parse_speechmatics_json_v2,
@@ -75,7 +73,7 @@ from ..workflows import (
     local_stage_workflow_id,
     register_task_context,
 )
-from .cloud_transcription import CloudTranscriber, CloudTranscriptionRun
+from .cloud_transcription import CloudTranscriber, CloudTranscriptionRun, title_implies_two_speakers
 
 STAGE_SPEECHMATICS_TRANSCRIBE = "speechmatics_transcribe"
 STAGE_ASSEMBLYAI_TRANSCRIBE = "assemblyai_transcribe"
@@ -136,9 +134,6 @@ def is_known_transcription_provider(value: Any) -> bool:
         PROVIDER_MODAL,
     )
 
-
-def _title_implies_two_speakers(title: str | None) -> bool:
-    return bool(re.search(r"1[:\-_/]?1|1-on-1|one-on-one|interview", title or "", re.I))
 
 
 def _parse_json_field(value: str | None, fallback: Any) -> Any:
@@ -334,6 +329,12 @@ class TranscriptionService:
         self._loop: asyncio.AbstractEventLoop | None = None
         self.cloud_transcribers: dict[str, CloudTranscriber] = {
             PROVIDER_ASSEMBLYAI: AssemblyAITranscriber(self.assemblyai_client, now=lambda: self.now()),
+            PROVIDER_MUSE: MuseTranscriber(self.muse_client),
+            PROVIDER_MODAL: ModalTranscriber(
+                self.modal_client,
+                default_asr_model=self._default_modal_asr_model,
+                fixed_language=self._fixed_language,
+            ),
             **dict(opts.get("cloudTranscribers") or opts.get("cloud_transcribers") or {}),
         }
 
@@ -1718,7 +1719,7 @@ class TranscriptionService:
 
         expected_speaker_count = opts.get("expectedSpeakerCount")
         if not expected_speaker_count:
-            if _title_implies_two_speakers(meeting["title"]):
+            if title_implies_two_speakers(meeting["title"]):
                 expected_speaker_count = 2
             elif candidate_speakers:
                 expected_speaker_count = len(candidate_speakers)
@@ -2704,282 +2705,13 @@ class TranscriptionService:
         meeting_id: str,
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        opts = options or {}
-        on_progress = opts.get("onProgress")
-
-        with self.db.connect() as conn:
-            meeting = (
-                conn.execute(
-                    text("SELECT * FROM meetings WHERE id = :id"),
-                    {"id": meeting_id},
-                )
-                .mappings()
-                .first()
-            )
-            if not meeting:
-                raise ValueError(f"Meeting not found: {meeting_id}")
-
-            recording = (
-                conn.execute(
-                    text("SELECT * FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"),
-                    {"mid": meeting_id},
-                )
-                .mappings()
-                .first()
-            )
-            if not recording:
-                raise ValueError(f"No recording found for meeting {meeting_id}")
-
-            stage_run = (
-                conn.execute(
-                    text("SELECT * FROM stage_runs WHERE meeting_id = :mid AND stage = :stage LIMIT 1"),
-                    {"mid": meeting_id, "stage": STAGE_MUSE_TRANSCRIBE},
-                )
-                .mappings()
-                .first()
-            )
-
-        folder = meeting_paths(
-            self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]
-        ).folder
-        audio_full_path = str(Path(folder) / recording["path"])
-        if not Path(audio_full_path).exists():
-            raise FileNotFoundError(f"Audio file not found on disk at {audio_full_path}")
-
-        if stage_run and stage_run["status"] == "done" and not opts.get("force"):
-            with self.db.connect() as conn:
-                existing_art = (
-                    conn.execute(
-                        text(
-                            """
-                        SELECT id FROM artifacts
-                        WHERE meeting_id = :mid AND provider = :prov AND kind = 'transcript' AND format = 'json'
-                        LIMIT 1
-                        """
-                        ),
-                        {"mid": meeting_id, "prov": PROVIDER_MUSE},
-                    )
-                    .mappings()
-                    .first()
-                )
-            return {
-                "stageRunId": stage_run["id"],
-                "jobId": stage_run.get("provider_job_id") or "",
-                "status": "done",
-                "transcriptArtifactId": existing_art["id"] if existing_art else None,
-            }
-
-        stage_run_id = stage_run["id"] if stage_run else str(uuid.uuid4())
-        session_id = f"muse-{meeting_id[:8]}-{uuid.uuid4().hex[:8]}"
-        current_time = self.now()
-
-        async def _emit_muse(stage: str, percent: float, message: str) -> None:
-            if callable(on_progress):
-                r = on_progress(
-                    TranscriptionProgressUpdate(
-                        stage=stage,  # type: ignore[arg-type]
-                        percent=float(round(percent)),
-                        message=message,
-                    )
-                )
-                if inspect.isawaitable(r):
-                    await r
-
-        with self.db.begin() as conn:
-            if stage_run:
-                conn.execute(
-                    text(
-                        """
-                        UPDATE stage_runs
-                        SET status = 'running', attempts = :attempts, last_error = NULL,
-                            started_at = :now, updated_at = :now
-                        WHERE id = :id
-                        """
-                    ),
-                    {
-                        "attempts": int(stage_run["attempts"]) + 1,
-                        "now": current_time,
-                        "id": stage_run["id"],
-                    },
-                )
-            else:
-                conn.execute(
-                    text(
-                        """
-                        INSERT INTO stage_runs (
-                          id, meeting_id, stage, status, provider_job_id, attempts,
-                          last_error, started_at, finished_at, created_at, updated_at
-                        ) VALUES (
-                          :id, :mid, :stage, 'running', :jid, 1,
-                          NULL, :now, NULL, :now, :now
-                        )
-                        """
-                    ),
-                    {
-                        "id": stage_run_id,
-                        "mid": meeting_id,
-                        "stage": STAGE_MUSE_TRANSCRIBE,
-                        "jid": session_id,
-                        "now": current_time,
-                    },
-                )
-
-        sig = opts.get("signal")
-        if _signal_aborted(sig):
-            return await self._fail_muse(
-                meeting_id,
-                stage_run_id,
-                session_id,
-                "Transcription was cancelled.",
-                cancelled=True,
-                on_progress=on_progress,
-            )
-
-        await _emit_muse("uploading", 12, "Converting audio for Muse Voice (24 kHz WAV)...")
-        try:
-            chunks = await asyncio.to_thread(prepare_muse_wav_chunks, audio_full_path)
-        except Exception as exc:
-            return await self._fail_muse(
-                meeting_id, stage_run_id, session_id, str(exc), on_progress=on_progress
-            )
-
-        if _signal_aborted(sig):
-            return await self._fail_muse(
-                meeting_id,
-                stage_run_id,
-                session_id,
-                "Transcription was cancelled.",
-                cancelled=True,
-                on_progress=on_progress,
-            )
-
-        mode = str(opts.get("mode") or "DIARIZATION")
-        raw_responses: list[MuseTranscribeResponse | dict[str, Any]] = []
-        chunk_offsets: list[int] = []
-        try:
-            for index, (wav_bytes, offset_ms) in enumerate(chunks):
-                if _signal_aborted(sig):
-                    return await self._fail_muse(
-                        meeting_id,
-                        stage_run_id,
-                        session_id,
-                        "Transcription was cancelled.",
-                        cancelled=True,
-                        on_progress=on_progress,
-                    )
-                pct = 15.0 + 55.0 * (index / max(1, len(chunks)))
-                await _emit_muse(
-                    "transcribing",
-                    pct,
-                    f"Transcribing with Muse Voice (chunk {index + 1}/{len(chunks)})...",
-                )
-                raw = await self.muse_client.transcribe_wav(
-                    wav_bytes,
-                    {
-                        "mode": mode,
-                        "language": opts.get("language"),
-                        "additionalVocab": opts.get("additionalVocab") or opts.get("additional_vocab"),
-                        "sessionId": f"{session_id}-{index}",
-                        "filename": f"muse-chunk-{index}.wav",
-                    },
-                )
-                raw_responses.append(raw)
-                chunk_offsets.append(offset_ms)
-        except Exception as exc:
-            return await self._fail_muse(
-                meeting_id, stage_run_id, session_id, str(exc), on_progress=on_progress
-            )
-
-        await _emit_muse("finalizing", 72, "Muse transcription complete. Identifying speakers...")
-
-        # Labels are request-scoped: the same letter in two chunks may be
-        # different people, so merge assigns globally unique Speaker N
-        # clusters and lets voiceprint matching reconcile identities.
-        canonical = merge_muse_chunk_transcripts(raw_responses, chunk_offsets)
-        res = await self._complete_cloud_transcription(
-            meeting_id,
-            stage_run_id,
-            session_id,
-            canonical,
-            PROVIDER_MUSE,
-            raw_payload=None,
-            options=opts,
-        )
-        if res.get("status") == "cancelled":
-            return await self._fail_muse(
-                meeting_id,
-                stage_run_id,
-                session_id,
-                "Transcription was cancelled.",
-                cancelled=True,
-                on_progress=on_progress,
-            )
-        if callable(on_progress):
-            r = on_progress(
-                TranscriptionProgressUpdate(
-                    stage="done",
-                    percent=100,
-                    message="Muse transcription complete!",
-                )
-            )
-            if inspect.isawaitable(r):
-                await r
-        return res
+        return await self._cloud_run().run(self.cloud_transcribers[PROVIDER_MUSE], meeting_id, options or {})
 
     transcribeMeetingMuse = transcribe_meeting_muse
 
-    async def _fail_muse(
-        self,
-        meeting_id: str,
-        stage_run_id: str,
-        job_id: str,
-        err_msg: str,
-        cancelled: bool = False,
-        on_progress: Callable[[TranscriptionProgressUpdate], Any] | None = None,
-        provider_label: str = "Muse",
-    ) -> dict[str, Any]:
-        err_time = self.now()
-        with self.db.begin() as conn:
-            conn.execute(
-                text(
-                    """
-                    UPDATE stage_runs
-                    SET status = :st, last_error = :err, finished_at = :t, updated_at = :t
-                    WHERE id = :id
-                    """
-                ),
-                {
-                    "st": "cancelled" if cancelled else "error",
-                    "err": "Cancelled by user" if cancelled else err_msg,
-                    "t": err_time,
-                    "id": stage_run_id,
-                },
-            )
-            if not cancelled:
-                conn.execute(
-                    text("UPDATE meetings SET last_error = :err, updated_at = :t WHERE id = :id"),
-                    {"err": err_msg, "t": err_time, "id": meeting_id},
-                )
-        self.logger.error(
-            f"{provider_label} transcription failed", {"meetingId": meeting_id, "error": err_msg}
-        )
-        if callable(on_progress):
-            r = on_progress(
-                TranscriptionProgressUpdate(
-                    stage="cancelled" if cancelled else "error",
-                    percent=0,
-                    message="Transcription was cancelled." if cancelled else err_msg,
-                    error=None if cancelled else err_msg,
-                )
-            )
-            if inspect.isawaitable(r):
-                await r
-        return {
-            "stageRunId": stage_run_id,
-            "jobId": job_id,
-            "status": "cancelled" if cancelled else "error",
-            "error": "Cancelled by user" if cancelled else err_msg,
-        }
+    def _default_modal_asr_model(self) -> str | None:
+        source = self.modal_asr_model
+        return source() if callable(source) else source
 
     def _fixed_language(self, language: Any, meeting_id: str, engine: str) -> Any:
         """Engines that need a fixed language (Cohere ASR, CTC aligner) can't
@@ -2992,260 +2724,12 @@ class TranscriptionService:
         )
         return "en"
 
-    def _resolve_modal_asr_model(self, opts: dict[str, Any]) -> str:
-        raw = opts.get("asrModel") or opts.get("asr_model")
-        if not raw:
-            source = self.modal_asr_model
-            raw = source() if callable(source) else source
-        return normalize_asr_model(raw)
-
     async def transcribe_meeting_modal(
         self,
         meeting_id: str,
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Runs the local ML pipeline on a Modal GPU worker (``modal_app/olive_gpu.py``).
-
-        The worker returns a transcript with generic ``Speaker N`` clusters;
-        voiceprint matching stays local via ``_complete_cloud_transcription``.
-        Spend is recorded from the measured worker GPU seconds.
-        """
-        opts = options or {}
-        on_progress = opts.get("onProgress")
-        sig = opts.get("signal")
-
-        with self.db.connect() as conn:
-            meeting = (
-                conn.execute(text("SELECT * FROM meetings WHERE id = :id"), {"id": meeting_id})
-                .mappings()
-                .first()
-            )
-            if not meeting:
-                raise ValueError(f"Meeting not found: {meeting_id}")
-            recording = (
-                conn.execute(
-                    text("SELECT * FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"),
-                    {"mid": meeting_id},
-                )
-                .mappings()
-                .first()
-            )
-            if not recording:
-                raise ValueError(f"No recording found for meeting {meeting_id}")
-            stage_run = (
-                conn.execute(
-                    text("SELECT * FROM stage_runs WHERE meeting_id = :mid AND stage = :stage LIMIT 1"),
-                    {"mid": meeting_id, "stage": STAGE_MODAL_TRANSCRIBE},
-                )
-                .mappings()
-                .first()
-            )
-
-        folder = meeting_paths(
-            self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]
-        ).folder
-        audio_full_path = str(Path(folder) / recording["path"])
-        if not Path(audio_full_path).exists():
-            raise FileNotFoundError(f"Audio file not found on disk at {audio_full_path}")
-
-        if stage_run and stage_run["status"] == "done" and not opts.get("force"):
-            with self.db.connect() as conn:
-                existing_art = (
-                    conn.execute(
-                        text(
-                            """
-                        SELECT id FROM artifacts
-                        WHERE meeting_id = :mid AND provider = :prov AND kind = 'transcript' AND format = 'json'
-                        LIMIT 1
-                        """
-                        ),
-                        {"mid": meeting_id, "prov": PROVIDER_MODAL},
-                    )
-                    .mappings()
-                    .first()
-                )
-            return {
-                "stageRunId": stage_run["id"],
-                "jobId": stage_run.get("provider_job_id") or "",
-                "status": "done",
-                "transcriptArtifactId": existing_art["id"] if existing_art else None,
-            }
-
-        stage_run_id = stage_run["id"] if stage_run else str(uuid.uuid4())
-        job_id = f"modal-{meeting_id[:8]}-{uuid.uuid4().hex[:8]}"
-        current_time = self.now()
-
-        async def _emit(stage: str, percent: float, message: str) -> None:
-            if callable(on_progress):
-                r = on_progress(
-                    TranscriptionProgressUpdate(
-                        stage=stage,  # type: ignore[arg-type]
-                        percent=float(round(percent)),
-                        message=message,
-                    )
-                )
-                if inspect.isawaitable(r):
-                    await r
-
-        async def _fail(err_msg: str, cancelled: bool = False) -> dict[str, Any]:
-            return await self._fail_muse(
-                meeting_id,
-                stage_run_id,
-                job_id,
-                err_msg,
-                cancelled=cancelled,
-                on_progress=on_progress,
-                provider_label="Modal",
-            )
-
-        with self.db.begin() as conn:
-            if stage_run:
-                conn.execute(
-                    text(
-                        """
-                        UPDATE stage_runs
-                        SET status = 'running', attempts = :attempts, last_error = NULL,
-                            provider_job_id = :jid, started_at = :now, updated_at = :now
-                        WHERE id = :id
-                        """
-                    ),
-                    {
-                        "attempts": int(stage_run["attempts"]) + 1,
-                        "jid": job_id,
-                        "now": current_time,
-                        "id": stage_run["id"],
-                    },
-                )
-            else:
-                conn.execute(
-                    text(
-                        """
-                        INSERT INTO stage_runs (
-                          id, meeting_id, stage, status, provider_job_id, attempts,
-                          last_error, started_at, finished_at, created_at, updated_at
-                        ) VALUES (
-                          :id, :mid, :stage, 'running', :jid, 1,
-                          NULL, :now, NULL, :now, :now
-                        )
-                        """
-                    ),
-                    {
-                        "id": stage_run_id,
-                        "mid": meeting_id,
-                        "stage": STAGE_MODAL_TRANSCRIBE,
-                        "jid": job_id,
-                        "now": current_time,
-                    },
-                )
-
-        if _signal_aborted(sig):
-            return await _fail("Transcription was cancelled.", cancelled=True)
-
-        try:
-            asr_model = self._resolve_modal_asr_model(opts)
-        except ValueError as exc:
-            return await _fail(str(exc))
-
-        await _emit("uploading", 10, "Converting audio for the Modal GPU worker (16 kHz FLAC)...")
-        try:
-            audio_bytes = await asyncio.to_thread(prepare_modal_flac, audio_full_path)
-        except Exception as exc:
-            return await _fail(str(exc))
-
-        if _signal_aborted(sig):
-            return await _fail("Transcription was cancelled.", cancelled=True)
-
-        def _record_call_id(call_id: str) -> None:
-            nonlocal job_id
-            job_id = call_id
-            with self.db.begin() as conn:
-                conn.execute(
-                    text("UPDATE stage_runs SET provider_job_id = :jid, updated_at = :now WHERE id = :id"),
-                    {"jid": call_id, "now": self.now(), "id": stage_run_id},
-                )
-
-        expected_speaker_count = opts.get("expectedSpeakerCount") or (
-            2 if _title_implies_two_speakers(meeting["title"]) else None
-        )
-        await _emit("transcribing", 20, f"Transcribing on Modal GPU ({asr_model})...")
-        try:
-            result = await self.modal_client.transcribe(
-                audio_bytes,
-                {
-                    "asrModel": asr_model,
-                    "language": (
-                        self._fixed_language(opts.get("language"), meeting_id, "modal:cohere")
-                        if asr_model == "cohere"
-                        else opts.get("language")
-                    ),
-                    "modelId": opts.get("modelId"),
-                    "wholeFileAsr": bool(opts.get("wholeFileAsr")),
-                    "expectedSpeakerCount": expected_speaker_count,
-                    "clusteringThreshold": opts.get("clusteringThreshold"),
-                    # Only Whisper can be biased; Cohere has no prompt hook.
-                    "additionalVocab": (
-                        None
-                        if asr_model == "cohere"
-                        else opts.get("additionalVocab") or opts.get("additional_vocab")
-                    ),
-                },
-                signal=sig,
-                on_spawned=_record_call_id,
-            )
-        except ModalCancelledError:
-            return await _fail("Transcription was cancelled.", cancelled=True)
-        except Exception as exc:
-            return await _fail(f"Modal transcription failed: {exc}")
-
-        try:
-            canonical = Transcript.model_validate(result.get("transcript") or {})
-        except Exception as exc:
-            return await _fail(f"Modal returned an invalid transcript: {exc}")
-
-        timings: dict[str, float] = {
-            str(k): float(v)
-            for k, v in dict(result.get("timings") or {}).items()
-            if isinstance(v, int | float)
-        }
-        gpu = str(result.get("gpu") or "")
-        gpu_seconds = float(timings.get("loadSec") or 0.0) + float(timings.get("runSec") or 0.0)
-        try:
-            from .usage import estimate_modal_gpu_cost, record_transcription_usage
-
-            record_transcription_usage(
-                self.db,
-                meeting_id=meeting_id,
-                provider=PROVIDER_MODAL,
-                recording_id=recording["id"],
-                audio_seconds=(canonical.durationMs / 1000.0) if canonical.durationMs else None,
-                created_at=self.now(),
-                source=f"modal:{job_id}",
-                model=str(result.get("asrModel") or asr_model),
-                cost_usd=estimate_modal_gpu_cost(gpu, gpu_seconds),
-                detail={
-                    "gpu": gpu,
-                    "gpuSeconds": round(gpu_seconds, 3),
-                    "timings": timings,
-                    "functionCallId": job_id,
-                },
-            )
-        except Exception as exc:
-            self.logger.warn("Could not record Modal usage", {"meetingId": meeting_id, "error": str(exc)})
-
-        await _emit("finalizing", 75, "Modal transcription complete. Identifying speakers...")
-        res = await self._complete_cloud_transcription(
-            meeting_id,
-            stage_run_id,
-            job_id,
-            canonical,
-            PROVIDER_MODAL,
-            raw_payload=None,
-            options=opts,
-        )
-        if res.get("status") == "cancelled":
-            return await _fail("Transcription was cancelled.", cancelled=True)
-        await _emit("done", 100, "Modal transcription complete!")
-        return res
+        return await self._cloud_run().run(self.cloud_transcribers[PROVIDER_MODAL], meeting_id, options or {})
 
     transcribeMeetingModal = transcribe_meeting_modal
 
