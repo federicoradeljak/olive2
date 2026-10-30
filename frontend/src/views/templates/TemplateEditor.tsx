@@ -6,7 +6,7 @@ import { ActionMenu } from "../people/ActionMenu";
 import { TemplatePreview } from "./TemplatePreview";
 
 /* Variables substituted by backend/src/olive/services/summaries.py. */
-export const TEMPLATE_VARIABLES = ["{{title}}", "{{date}}", "{{speakers}}", "{{language}}", "{{transcript}}"] as const;
+export const TEMPLATE_VARIABLES = ["{{title}}", "{{date}}", "{{speakers}}", "{{language}}", "{{glossary}}", "{{transcript}}"] as const;
 
 export const NEW_TEMPLATE_PROMPT = `# Meeting Summary: {{title}}\n**Date:** {{date}}\n**Participants:** {{speakers}}\n\n## Summary\n\n## Action Items\n- [ ] \n\n---\n### Transcript\n{{transcript}}`;
 
@@ -283,7 +283,7 @@ export function TemplateEditor({
             className="textarea w-full resize-y bg-base-200 font-mono text-[13px] leading-relaxed"
           />
           <p className="text-xs text-base-content/60">
-            {"{{transcript}}"} is replaced by the full dialogue, {"{{language}}"} by the summary language. Without {"{{language}}"}, Olive asks the model to answer in that language.
+            {"{{transcript}}"} is replaced by the full dialogue, {"{{language}}"} by the summary language. Without {"{{language}}"}, Olive asks the model to answer in that language. {"{{glossary}}"} lists your custom vocabulary; without it, Olive appends the list as a spelling glossary.
           </p>
         </div>
 

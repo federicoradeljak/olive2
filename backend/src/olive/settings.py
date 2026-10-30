@@ -15,6 +15,32 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 DEFAULT_LOCAL_ASR_MODEL = "onnx-community/cohere-transcribe-03-2026-ONNX"
 MASK_PREFIX = "••••••••"
+# Speechmatics caps additional_vocab at 1000 entries; AssemblyAI keyterms
+# share the same ceiling, so one limit fits every provider.
+MAX_VOCABULARY_TERMS = 1000
+MAX_VOCABULARY_TERM_LENGTH = 100
+
+
+def normalize_vocabulary(value: Any) -> list[str]:
+    """Strips, drops blanks and case-insensitive duplicates (first spelling wins)."""
+    if isinstance(value, str):
+        value = value.splitlines()
+    if not isinstance(value, list | tuple):
+        return []
+    terms: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        term = " ".join(item.split())[:MAX_VOCABULARY_TERM_LENGTH].strip()
+        key = term.casefold()
+        if not term or key in seen:
+            continue
+        seen.add(key)
+        terms.append(term)
+        if len(terms) >= MAX_VOCABULARY_TERMS:
+            break
+    return terms
 
 
 @dataclass(frozen=True)
@@ -117,6 +143,9 @@ class AppConfig(BaseModel):
     # template's own language (summaries). Requests can still override them.
     defaultTranscriptionLanguage: str = Field(default="")
     defaultSummaryLanguage: str = Field(default="")
+    # Names and jargon biased into transcription (providers that support it)
+    # and passed to summaries as a spelling glossary.
+    customVocabulary: list[str] = Field(default_factory=list)
     primaryArtifactPreference: list[str] = Field(
         default_factory=lambda: ["speechmatics-with-named-speakers", "local", "plaud"]
     )
@@ -146,6 +175,11 @@ class AppConfig(BaseModel):
         if not isinstance(value, str):
             return ""
         return value.strip().lower()
+
+    @field_validator("customVocabulary", mode="before")
+    @classmethod
+    def _normalize_vocabulary(cls, value: Any) -> list[str]:
+        return normalize_vocabulary(value)
 
     @field_validator("primaryArtifactPreference")
     @classmethod

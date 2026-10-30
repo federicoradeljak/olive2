@@ -183,6 +183,7 @@ class OliveGpu:
                     "wholeFileAsr": bool(options.get("wholeFileAsr")),
                     "expectedSpeakerCount": options.get("expectedSpeakerCount"),
                     "clusteringThreshold": options.get("clusteringThreshold"),
+                    "additionalVocab": options.get("additionalVocab"),
                     "enrolledSpeakers": [],
                 }
             )

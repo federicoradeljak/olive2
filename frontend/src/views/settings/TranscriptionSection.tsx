@@ -1,5 +1,5 @@
 import type { ReactElement, ReactNode } from "react";
-import { Cloud, Cpu, Zap } from "lucide-react";
+import { BookA, Cloud, Cpu, Zap } from "lucide-react";
 import { Combobox } from "../../components/Combobox";
 import { MODAL_ASR_MODEL_OPTIONS, PLAUD_RETRANSCRIBE_OPTIONS, type ModalAsrModel } from "../../components/OptionComboboxes";
 import { GroupTitle, INPUT_CLASS, Panel, SecretField, SectionHeader, SettingsRow, SettingsRows, type AppConfigDto } from "./shared";
@@ -63,6 +63,59 @@ const ENGINES: EngineInfo[] = [
     ready: (cfg) => (cfg.hasMuseApiKey ? { ok: true, text: "API key configured" } : { ok: false, text: "Needs an API key" }),
   },
 ];
+
+/** Whether an engine can be biased with the custom vocabulary (Cohere has no prompt hook). */
+export function supportsCustomVocabulary(engine: Engine, modalAsrModel: AppConfigDto["modalAsrModel"]): boolean {
+  if (engine === "local") return false;
+  if (engine === "modal") return modalAsrModel !== "cohere";
+  return true;
+}
+
+function CustomVocabulary({
+  draft,
+  onChange,
+}: {
+  draft: AppConfigDto;
+  onChange: <K extends keyof AppConfigDto>(key: K, value: AppConfigDto[K]) => void;
+}): ReactElement {
+  const terms = draft.customVocabulary ?? [];
+  const count = terms.filter((t) => t.trim()).length;
+  const supported = supportsCustomVocabulary(draft.transcriptionProvider, draft.modalAsrModel);
+  const engineName = ENGINES.find((e) => e.value === draft.transcriptionProvider)?.name ?? draft.transcriptionProvider;
+
+  return (
+    <>
+      <GroupTitle>Custom vocabulary</GroupTitle>
+      <Panel>
+        <p className="text-[13px] text-base-content/65">
+          Names, acronyms and jargon to spell correctly, one per line. Used by Speechmatics, AssemblyAI, Muse Voice and Modal GPU with a Whisper
+          model. <strong className="font-semibold text-base-content/80">Not supported</strong> by the Local pipeline or Modal GPU with Cohere. Summaries
+          also receive the list as a spelling glossary.
+        </p>
+        {!supported && (
+          <p role="status" className="flex items-center gap-2 text-[13px] text-[color:var(--tag-orange)]">
+            <BookA className="h-4 w-4 shrink-0" aria-hidden="true" />
+            {draft.transcriptionProvider === "modal" ? "Modal GPU with Cohere" : engineName} ignores this vocabulary; only summaries will use it.
+          </p>
+        )}
+        <label className="flex min-w-0 flex-col gap-1.5">
+          <span className="sr-only">Custom vocabulary, one term per line</span>
+          <textarea
+            value={terms.join("\n")}
+            onChange={(e) => onChange("customVocabulary", e.target.value.split("\n"))}
+            rows={6}
+            placeholder={"Olive\nPlaud NotePin\nKubernetes"}
+            spellCheck={false}
+            className="textarea min-h-[8rem] w-full rounded-md border-base-content/15 bg-base-100 font-mono text-sm shadow-none focus:border-primary/60 focus:outline-2 focus:outline-offset-0 focus:outline-primary/20"
+          />
+          <span className="text-xs text-base-content/60">
+            {count} {count === 1 ? "term" : "terms"} · up to 1000
+          </span>
+        </label>
+      </Panel>
+    </>
+  );
+}
 
 export function TranscriptionSection({
   draft,
@@ -146,6 +199,8 @@ export function TranscriptionSection({
           </SettingsRow>
         </SettingsRows>
       </div>
+
+      <CustomVocabulary draft={draft} onChange={onChange} />
 
       <GroupTitle>Cloud API keys</GroupTitle>
       <p className="mb-1 text-[13px] text-base-content/65">

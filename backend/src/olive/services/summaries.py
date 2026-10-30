@@ -7,7 +7,7 @@ import inspect
 import json
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -20,7 +20,7 @@ from ..languages import is_auto_language, language_name
 from ..layout import meeting_paths
 from ..logging_db import logger
 from ..schemas import LlmGenerateResult, SummaryGenerationStatus, Template
-from ..settings import resolve_paths
+from ..settings import normalize_vocabulary, resolve_paths
 from ..speaker_labels import is_generic_speaker_label
 from ..workflows import QUEUE_SUMMARIZE, enqueue_stage_job, ensure_dbos_launched_async
 from .llm import LlmService
@@ -56,6 +56,7 @@ class SummaryService:
         llm_service: LlmService | Any | None = None,
         template_service: TemplateService | None = None,
         default_language: str | None = None,
+        custom_vocabulary: list[str] | Callable[[], list[str] | None] | None = None,
     ) -> None:
         opts = options or {}
         raw_db = db or opts.get("db")
@@ -85,6 +86,10 @@ class SummaryService:
         # leaves the output language to the template.
         self.default_language: str = str(
             default_language or opts.get("defaultLanguage") or opts.get("default_language") or ""
+        )
+        # Settings vocabulary (or a live getter), injected as a spelling glossary.
+        self.custom_vocabulary: list[str] | Callable[[], list[str] | None] | None = (
+            custom_vocabulary or opts.get("customVocabulary")
         )
         self._generation_statuses: dict[str, SummaryGenerationStatus] = {}
 
@@ -287,12 +292,18 @@ class SummaryService:
         else:
             language = language_name(raw_language) if raw_language else ""
 
+        vocab_source = self.custom_vocabulary
+        glossary = ", ".join(
+            normalize_vocabulary(vocab_source() if callable(vocab_source) else vocab_source)
+        )
+
         def replace_vars(s: str) -> str:
             return (
                 s.replace("{{title}}", meeting["title"])
                 .replace("{{date}}", date_formatted)
                 .replace("{{speakers}}", speaker_names)
                 .replace("{{language}}", language)
+                .replace("{{glossary}}", glossary)
                 .replace("{{transcript}}", formatted_dialogue)
             )
 
@@ -301,6 +312,13 @@ class SummaryService:
         uses_language_var = "{{language}}" in f"{template.systemPrompt or ''}{template.userPrompt}"
         if language and not uses_language_var:
             instruction = f"Write the entire response in {language}."
+            system_prompt = f"{system_prompt}\n\n{instruction}" if system_prompt else instruction
+        uses_glossary_var = "{{glossary}}" in f"{template.systemPrompt or ''}{template.userPrompt}"
+        if glossary and not uses_glossary_var:
+            instruction = (
+                "Glossary of correct spellings for names and terms that may appear "
+                f"(possibly misspelled) in the transcript: {glossary}."
+            )
             system_prompt = f"{system_prompt}\n\n{instruction}" if system_prompt else instruction
 
         # 5. Stage run

@@ -49,6 +49,7 @@ from ..schemas import (
     TranscriptionProgressUpdate,
     TranscriptSegment,
 )
+from ..settings import normalize_vocabulary
 from ..speaker_labels import is_generic_speaker_label
 from ..workflows import (
     QUEUE_ASSEMBLYAI,
@@ -248,6 +249,7 @@ class TranscriptionService:
         local_pipeline: Any = None,
         default_provider: TranscriptionProviderName | None = None,
         default_language: str | None = None,
+        custom_vocabulary: list[str] | Callable[[], list[str] | None] | None = None,
         logger: Logger | None = None,
         webhook_url: str | None = None,
         webhook_secret: str | None = None,
@@ -309,6 +311,11 @@ class TranscriptionService:
         # Settings default; a per-request ``language`` always wins.
         self.default_language: str = str(
             default_language or opts.get("defaultLanguage") or opts.get("default_language") or ""
+        )
+        # Settings vocabulary (or a live getter); a per-request
+        # ``additionalVocab`` always wins.
+        self.custom_vocabulary: list[str] | Callable[[], list[str] | None] | None = (
+            custom_vocabulary or opts.get("customVocabulary")
         )
         self.logger: Logger = logger or opts.get("logger") or default_logger
         self.webhook_url: str | None = webhook_url or opts.get("webhookUrl") or opts.get("webhook_url")
@@ -457,10 +464,15 @@ class TranscriptionService:
 
     setDefaultLanguage = set_default_language
 
-    def _with_default_language(self, options: dict[str, Any] | None) -> dict[str, Any]:
+    def _with_settings_defaults(self, options: dict[str, Any] | None) -> dict[str, Any]:
         opts = dict(options or {})
         if not opts.get("language") and self.default_language:
             opts["language"] = self.default_language
+        if not (opts.get("additionalVocab") or opts.get("additional_vocab")):
+            source = self.custom_vocabulary
+            vocabulary = normalize_vocabulary(source() if callable(source) else source)
+            if vocabulary:
+                opts["additionalVocab"] = vocabulary
         return opts
 
     def stop(self) -> None:
@@ -615,7 +627,7 @@ class TranscriptionService:
         meeting_id: str,
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        opts = self._with_default_language(options)
+        opts = self._with_settings_defaults(options)
         with self.db.connect() as conn:
             meeting = (
                 conn.execute(
@@ -1336,6 +1348,7 @@ class TranscriptionService:
             "clusteringThreshold",
             "modelId",
             "asrModel",
+            "additionalVocab",
         ):
             if opts.get(key) is not None:
                 per_meeting_opts[key] = opts[key]
@@ -1514,7 +1527,7 @@ class TranscriptionService:
         meeting_id: str,
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        opts = self._with_default_language(options)
+        opts = self._with_settings_defaults(options)
         provider: TranscriptionProviderName = opts.get("provider") or self.default_provider
 
         self.logger.debug(
@@ -2049,6 +2062,7 @@ class TranscriptionService:
                     "getSpeakers": True,
                     "webhookUrl": webhook_url,
                     "webhookSecret": self.webhook_secret,
+                    "additionalVocab": opts.get("additionalVocab") or opts.get("additional_vocab"),
                 }
             )
         except Exception as exc:
@@ -3479,6 +3493,12 @@ class TranscriptionService:
                     "wholeFileAsr": bool(opts.get("wholeFileAsr")),
                     "expectedSpeakerCount": expected_speaker_count,
                     "clusteringThreshold": opts.get("clusteringThreshold"),
+                    # Only Whisper can be biased; Cohere has no prompt hook.
+                    "additionalVocab": (
+                        None
+                        if asr_model == "cohere"
+                        else opts.get("additionalVocab") or opts.get("additional_vocab")
+                    ),
                 },
                 signal=sig,
                 on_spawned=_record_call_id,

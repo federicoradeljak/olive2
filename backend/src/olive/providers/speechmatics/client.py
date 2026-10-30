@@ -56,6 +56,18 @@ def _to_job_config(job_config: dict[str, Any], fetch_data: FetchData | None) -> 
     )
 
 
+def _additional_vocab(raw: Any) -> list[dict[str, Any]]:
+    """Plain strings become ``{"content": s}``; dicts (with ``sounds_like``) pass through."""
+    entries: list[dict[str, Any]] = []
+    for item in raw or []:
+        if isinstance(item, dict):
+            if str(item.get("content") or "").strip():
+                entries.append(item)
+        elif str(item).strip():
+            entries.append({"content": str(item).strip()})
+    return entries
+
+
 class _SdkBatchClient:
     """Adapts speechmatics.batch.AsyncClient to the internal camelCase batch interface."""
 
@@ -184,7 +196,9 @@ class SpeechmaticsClient:
         if speaker_diarization_config:
             transcription_config["speaker_diarization_config"] = speaker_diarization_config
 
-        additional_vocab = options.get("additionalVocab") or options.get("additional_vocab")
+        additional_vocab = _additional_vocab(
+            options.get("additionalVocab") or options.get("additional_vocab")
+        )
         if additional_vocab:
             transcription_config["additional_vocab"] = additional_vocab
 

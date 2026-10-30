@@ -48,6 +48,7 @@ const SECTION_KEYS: Record<SettingsSection, AppConfigKey[]> = {
     "modalTokenSecret",
     "modalAppName",
     "modalAsrModel",
+    "customVocabulary",
   ],
   ai: [],
   speakers: ["hfToken", "localClusteringThreshold", "localSimilarityThreshold"],
@@ -55,8 +56,17 @@ const SECTION_KEYS: Record<SettingsSection, AppConfigKey[]> = {
   data: [],
 };
 
+/** Lists (the vocabulary textarea keeps blank lines while typing) compare by their non-blank items. */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (Array.isArray(a) && Array.isArray(b)) {
+    const clean = (xs: unknown[]) => JSON.stringify(xs.map((x) => (typeof x === "string" ? x.trim() : x)).filter((x) => x !== ""));
+    return clean(a) === clean(b);
+  }
+  return Object.is(a, b);
+}
+
 function changedKeys(saved: AppConfigDto, draft: AppConfigDto, keys: AppConfigKey[]): AppConfigKey[] {
-  return keys.filter((k) => !Object.is(saved[k], draft[k]));
+  return keys.filter((k) => !sameValue(saved[k], draft[k]));
 }
 
 function defaultTemplateIdOf(templates: Template[] | null): string {

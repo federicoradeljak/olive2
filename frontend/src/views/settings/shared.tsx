@@ -21,6 +21,7 @@ export interface AppConfigDto {
   localSimilarityThreshold: number;
   defaultTranscriptionLanguage: string;
   defaultSummaryLanguage: string;
+  customVocabulary: string[];
   hfToken: string;
   speechmaticsApiKey: string;
   assemblyaiApiKey: string;

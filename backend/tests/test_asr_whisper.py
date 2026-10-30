@@ -80,6 +80,18 @@ async def test_whisper_engine_offsets_words_and_auto_detects_language(
     assert model.kwargs["compute_type"] == "float16"
     assert model.calls[0]["language"] is None
     assert model.calls[0]["word_timestamps"] is True
+    assert model.calls[0]["hotwords"] is None
+
+
+async def test_whisper_engine_passes_custom_vocabulary_as_hotwords(
+    fake_whisper: type[_FakeWhisperModel],
+) -> None:
+    engine = FasterWhisperAsrEngine("whisper-large-v3-turbo", {"device": "cpu"})
+    await engine.transcribe_segment(
+        np.zeros(16000, dtype=np.float32), 16000, {"additionalVocab": ["Olive", " ", "Plaud"]}
+    )
+
+    assert fake_whisper.instances[0].calls[0]["hotwords"] == "Olive, Plaud"
 
 
 class _FakeDiarizer:
@@ -143,10 +155,16 @@ async def test_pipeline_uses_native_word_timestamps_without_aligner(monkeypatch:
         custom_aligner=_ExplodingAligner(),
     )
     result = await pipeline.transcribe(
-        {"audioPath": "unused.flac", "language": "auto", "enrolledSpeakers": []}
+        {
+            "audioPath": "unused.flac",
+            "language": "auto",
+            "enrolledSpeakers": [],
+            "additionalVocab": ["Olive"],
+        }
     )
 
     assert len(asr.calls) == 1  # one whole-file pass, not one per turn
+    assert asr.calls[0]["additionalVocab"] == ["Olive"]
     assert [(s.speaker, s.text) for s in result.transcript.segments] == [
         ("Speaker 1", "hola"),
         ("Speaker 2", "chau"),
