@@ -2,9 +2,7 @@
 
 from .auth import TOKENS_FILENAME, ChatGptCodexAuth, get_chatgpt_codex_auth
 from .client import FALLBACK_MODELS, list_models, stream_response
-
-PROVIDER_ID = "chatgpt-codex"
-PROVIDER_NAME = "ChatGPT plan (Codex)"
+from .provider import PROVIDER_ID, PROVIDER_NAME, ChatGptCodexProvider, build_provider
 
 __all__ = [
     "FALLBACK_MODELS",
@@ -12,6 +10,8 @@ __all__ = [
     "PROVIDER_NAME",
     "TOKENS_FILENAME",
     "ChatGptCodexAuth",
+    "ChatGptCodexProvider",
+    "build_provider",
     "get_chatgpt_codex_auth",
     "list_models",
     "stream_response",

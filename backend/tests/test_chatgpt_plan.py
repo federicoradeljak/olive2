@@ -409,7 +409,7 @@ async def test_llm_service_uses_plan_without_api_key(tmp_path: Path, monkeypatch
     handle = create_db(":memory:")
     service = LlmService(db=handle.engine, config_dir=str(tmp_path))
     seen: list[dict[str, Any]] = []
-    service.chatgpt_plan_auth().transport = _plan_api(seen)
+    service.account_provider("chatgpt-plan").auth.transport = _plan_api(seen)
 
     providers = {p.id: p for p in await service.list_providers()}
     assert providers["chatgpt-plan"].isConfigured
@@ -458,6 +458,20 @@ async def test_plan_provider_is_listed_but_unusable_until_connected(tmp_path: Pa
     handle.engine.dispose()
 
 
+def test_llm_services_share_one_account_auth_per_credential_file(tmp_path: Path) -> None:
+    """Separate auths would refresh in parallel and burn the refresh token (refresh_token_reused)."""
+    from olive.db import create_db
+    from olive.services.llm import LlmService
+
+    handle = create_db(":memory:")
+    first = LlmService(db=handle.engine, config_dir=str(tmp_path))
+    second = LlmService(db=handle.engine, config_dir=str(tmp_path))
+
+    for provider in ("chatgpt-plan", "chatgpt-codex"):
+        assert first.account_provider(provider).auth is second.account_provider(provider).auth
+    handle.engine.dispose()
+
+
 async def test_chat_model_setting_round_trips_and_clears(tmp_path: Path) -> None:
     from olive.db import create_db
     from olive.services.llm import LlmService
@@ -499,7 +513,7 @@ async def test_meeting_chat_uses_the_chat_model(tmp_path: Path) -> None:
         )
     llm = LlmService(db=handle.engine, config_dir=str(tmp_path / "config"))
     seen: list[dict[str, Any]] = []
-    llm.chatgpt_plan_auth().transport = _plan_api(seen)
+    llm.account_provider("chatgpt-plan").auth.transport = _plan_api(seen)
     await llm.update_settings(
         {
             "defaultProvider": "anthropic",

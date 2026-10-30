@@ -2328,12 +2328,12 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
 
     @app.get("/api/llm/chatgpt-plan/status")
     async def get_chatgpt_plan_status_route() -> JSONResponse:
-        return JSONResponse(get_llm_service().chatgpt_plan_auth().status())
+        return JSONResponse(get_llm_service().account_provider("chatgpt-plan").auth.status())
 
     @app.post("/api/llm/chatgpt-plan/auth/start")
     async def post_chatgpt_plan_auth_start_route() -> JSONResponse:
         try:
-            login = get_llm_service().chatgpt_plan_auth().start_login()
+            login = get_llm_service().account_provider("chatgpt-plan").auth.start_login()
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=500)
         session_id = get_chatgpt_plan_sessions().create(
@@ -2361,7 +2361,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         if not session:
             return JSONResponse({"error": "This sign-in link expired. Start again."}, status_code=400)
         try:
-            status = await get_llm_service().chatgpt_plan_auth().complete_login(session, pasted)
+            status = await get_llm_service().account_provider("chatgpt-plan").auth.complete_login(session, pasted)
         except ChatGptPlanError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         except Exception as exc:
@@ -2380,17 +2380,17 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
 
     @app.post("/api/llm/chatgpt-plan/logout")
     async def post_chatgpt_plan_logout_route() -> JSONResponse:
-        result = await get_llm_service().chatgpt_plan_auth().logout()
+        result = await get_llm_service().account_provider("chatgpt-plan").auth.logout()
         return JSONResponse({"status": "disconnected", **result})
 
     @app.get("/api/llm/chatgpt-codex/status")
     async def get_chatgpt_codex_status_route() -> JSONResponse:
-        return JSONResponse(get_llm_service().chatgpt_codex_auth().status())
+        return JSONResponse(get_llm_service().account_provider("chatgpt-codex").auth.status())
 
     @app.post("/api/llm/chatgpt-codex/auth/start")
     async def post_chatgpt_codex_auth_start_route() -> JSONResponse:
         try:
-            login = get_llm_service().chatgpt_codex_auth().start_login()
+            login = get_llm_service().account_provider("chatgpt-codex").auth.start_login()
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=500)
         session_id = get_chatgpt_codex_sessions().create({k: login[k] for k in ("verifier", "state")})
@@ -2416,7 +2416,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
         if not session:
             return JSONResponse({"error": "This sign-in link expired. Start again."}, status_code=400)
         try:
-            status = await get_llm_service().chatgpt_codex_auth().complete_login(session, pasted)
+            status = await get_llm_service().account_provider("chatgpt-codex").auth.complete_login(session, pasted)
         except ChatGptPlanError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         except Exception as exc:
@@ -2426,7 +2426,7 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
 
     @app.post("/api/llm/chatgpt-codex/logout")
     async def post_chatgpt_codex_logout_route() -> JSONResponse:
-        result = await get_llm_service().chatgpt_codex_auth().logout()
+        result = await get_llm_service().account_provider("chatgpt-codex").auth.logout()
         return JSONResponse({"status": "disconnected", **result})
 
     @app.post("/api/llm/refresh-catalog")
