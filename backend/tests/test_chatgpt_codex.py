@@ -246,7 +246,7 @@ async def test_llm_service_routes_codex_without_api_key(tmp_path: Path, monkeypa
     handle = create_db(":memory:")
     service = LlmService(db=handle.engine, config_dir=str(tmp_path))
     seen: list[httpx.Request] = []
-    service.chatgpt_codex_auth().transport = _codex_api(seen)
+    service.account_provider("chatgpt-codex").auth.transport = _codex_api(seen)
 
     providers = {p.id: p for p in await service.list_providers()}
     assert providers["chatgpt-codex"].isConfigured
@@ -281,7 +281,7 @@ async def test_codex_models_fall_back_when_the_catalog_fails(tmp_path: Path) -> 
     await _signed_in(tmp_path)
     handle = create_db(":memory:")
     service = LlmService(db=handle.engine, config_dir=str(tmp_path))
-    service.chatgpt_codex_auth().transport = _codex_api([], models=httpx.Response(500, json={"detail": "down"}))
+    service.account_provider("chatgpt-codex").auth.transport = _codex_api([], models=httpx.Response(500, json={"detail": "down"}))
 
     models = await service.list_models({"provider": "chatgpt-codex"})
     assert {m.id for m in models} == {m["slug"] for m in FALLBACK_MODELS}

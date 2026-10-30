@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -235,4 +237,69 @@ def test_llm_models_endpoint_configured_filter(tmp_path: Path, monkeypatch: pyte
     res = client.get("/api/llm/models?configured=1")
     assert res.status_code == 200
     assert {m["provider"] for m in res.json()["models"]} == {"google"}
+    handle.engine.dispose()
+
+
+def _ns(**kwargs: Any) -> SimpleNamespace:
+    return SimpleNamespace(**kwargs)
+
+
+async def test_generate_and_stream_share_one_any_llm_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import any_llm
+
+    calls: list[dict[str, Any]] = []
+
+    async def fake_stream():
+        yield _ns(choices=[_ns(delta=_ns(content="Hel"))], usage=None)
+        yield _ns(choices=[_ns(delta=_ns(content="lo"))], usage=_ns(prompt_tokens=4, completion_tokens=2, total_tokens=6))
+
+    async def fake_acompletion(**kwargs: Any) -> Any:
+        calls.append(kwargs)
+        if kwargs.get("stream"):
+            return fake_stream()
+        return _ns(
+            choices=[_ns(message=_ns(content="Hello"))],
+            usage=_ns(prompt_tokens=4, completion_tokens=2, total_tokens=6),
+        )
+
+    monkeypatch.setattr(any_llm, "acompletion", fake_acompletion)
+    handle = create_db(":memory:")
+    service = LlmService(db=handle.engine, config_dir=str(tmp_path))
+    options = {
+        "provider": "openai",
+        "model": "gpt-4o",
+        "apiKeyOverride": "sk-test",
+        "systemPrompt": "Be brief.",
+        "prompt": "Hi",
+        "temperature": 0.3,
+        "maxTokens": 50,
+    }
+
+    generated = await service.generate_text(options)
+    deltas: list[str] = []
+    streamed = await service.stream_text(options, deltas.append)
+
+    assert generated.text == streamed.text == "Hello"
+    assert deltas == ["Hel", "lo"]
+    assert generated.usage.totalTokens == streamed.usage.totalTokens == 6
+    assert calls[1].pop("stream") is True
+    assert calls[0] == calls[1]
+    handle.engine.dispose()
+
+
+async def test_generate_and_stream_wrap_provider_errors_alike(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import any_llm
+
+    async def failing_acompletion(**_kwargs: Any) -> Any:
+        raise ValueError("quota exceeded")
+
+    monkeypatch.setattr(any_llm, "acompletion", failing_acompletion)
+    handle = create_db(":memory:")
+    service = LlmService(db=handle.engine, config_dir=str(tmp_path))
+    options = {"provider": "openai", "model": "gpt-4o", "apiKeyOverride": "sk-test", "prompt": "Hi"}
+
+    with pytest.raises(RuntimeError, match=r"LLM call failed \(openai/gpt-4o\): quota exceeded"):
+        await service.generate_text(options)
+    with pytest.raises(RuntimeError, match=r"LLM call failed \(openai/gpt-4o\): quota exceeded"):
+        await service.stream_text(options, lambda _piece: None)
     handle.engine.dispose()

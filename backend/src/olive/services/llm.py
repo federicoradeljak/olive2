@@ -7,7 +7,7 @@ import json
 import os
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -72,11 +72,6 @@ DEFAULT_PROVIDER_BASE_URL: dict[str, str] = {
     "xai": "https://api.x.ai/v1",
 }
 
-# Providers signed in with a ChatGPT account instead of an API key.
-ACCOUNT_PROVIDER_NAMES: dict[str, str] = {
-    chatgpt_plan.PROVIDER_ID: chatgpt_plan.PROVIDER_NAME,
-    chatgpt_codex.PROVIDER_ID: chatgpt_codex.PROVIDER_NAME,
-}
 # Account model lists (ChatGPT plan) are fetched live; reuse them this long.
 ACCOUNT_MODELS_TTL_SECONDS = 10 * 60
 
@@ -661,6 +656,7 @@ class LlmService:
         *,
         db: Engine | DbHandle | None = None,
         config_dir: str | None = None,
+        account_providers: Sequence[chatgpt_plan.ChatGptPlanProvider] | None = None,
     ) -> None:
         opts = options or {}
         raw_db = db or opts.get("db")
@@ -674,6 +670,13 @@ class LlmService:
         self.config_dir = str(
             config_dir or opts.get("configDir") or opts.get("config_dir") or resolve_paths().config_dir
         )
+        # Providers signed in with a ChatGPT account instead of an API key.
+        if account_providers is None:
+            account_providers = [
+                chatgpt_plan.build_provider(self.config_dir),
+                chatgpt_codex.build_provider(self.config_dir),
+            ]
+        self.account_providers = {p.id: p for p in account_providers}
         self.web_catalog: dict[str, LlmModelCatalogItem] = {}
         self._load_cached_web_catalog()
 
@@ -990,8 +993,8 @@ class LlmService:
             )
 
         # 4. Models the signed-in ChatGPT accounts may use
-        for provider in ACCOUNT_PROVIDER_NAMES:
-            for item in await self._account_models(provider):
+        for account in self.account_providers.values():
+            for item in await self._account_models(account):
                 catalog_map.setdefault(f"{item.provider}:{item.id}", item)
 
         items = list(catalog_map.values())
@@ -1059,61 +1062,48 @@ class LlmService:
                 )
             )
 
-        for account_id, account_name in ACCOUNT_PROVIDER_NAMES.items():
-            if account_id not in provider_counts:
+        for account in self.account_providers.values():
+            if account.id not in provider_counts:
                 summaries.append(
                     LlmProviderSummary(
-                        id=account_id,
-                        name=account_name,
-                        isConfigured=self._is_provider_configured(account_id, settings),
+                        id=account.id,
+                        name=account.name,
+                        isConfigured=account.is_usable(),
                         hasCustomBaseUrl=False,
                         modelCount=0,
                     )
                 )
             else:
-                summary = next(s for s in summaries if s.id == account_id)
-                summary.name = account_name
+                summary = next(s for s in summaries if s.id == account.id)
+                summary.name = account.name
 
         summaries.sort(key=lambda s: (PROVIDER_PRIORITY.get(s.id, 99), s.name))
         return summaries
 
     listProviders = list_providers
 
-    def chatgpt_plan_auth(self) -> chatgpt_plan.ChatGptPlanAuth:
-        return chatgpt_plan.get_chatgpt_plan_auth(self.config_dir)
+    def account_provider(self, provider: str) -> chatgpt_plan.ChatGptPlanProvider:
+        return self.account_providers[provider]
 
-    def chatgpt_codex_auth(self) -> chatgpt_codex.ChatGptCodexAuth:
-        return chatgpt_codex.get_chatgpt_codex_auth(self.config_dir)
-
-    def _account_auth(self, provider: str) -> chatgpt_plan.ChatGptPlanAuth:
-        return self.chatgpt_codex_auth() if provider == chatgpt_codex.PROVIDER_ID else self.chatgpt_plan_auth()
-
-    async def _account_models(self, provider: str) -> list[LlmModelCatalogItem]:
-        auth = self._account_auth(provider)
-        if not auth.is_usable():
+    async def _account_models(self, account: chatgpt_plan.ChatGptPlanProvider) -> list[LlmModelCatalogItem]:
+        auth = account.auth
+        if not account.is_usable():
             return []
         cached = auth.models_cache
         if cached is None or time.time() - cached[0] > ACCOUNT_MODELS_TTL_SECONDS:
             try:
-                if isinstance(auth, chatgpt_codex.ChatGptCodexAuth):
-                    token, account_id = await auth.get_credentials()
-                    models = await chatgpt_codex.list_models(token, account_id, transport=auth.transport)
-                else:
-                    token = await auth.get_access_token()
-                    models = await chatgpt_plan.list_models(token, transport=auth.transport)
-                auth.models_cache = cached = (time.time(), models)
+                auth.models_cache = cached = (time.time(), await account.fetch_models())
             except Exception as exc:
-                logger.warn("Failed to list ChatGPT account models", {"provider": provider, "error": str(exc)})
+                logger.warn("Failed to list ChatGPT account models", {"provider": account.id, "error": str(exc)})
                 if cached is None:
-                    if provider == chatgpt_codex.PROVIDER_ID:
-                        cached = (0.0, list(chatgpt_codex.FALLBACK_MODELS))
-                    else:
+                    if not account.fallback_models:
                         return []
+                    cached = (0.0, list(account.fallback_models))
         return [
             LlmModelCatalogItem(
                 id=m["slug"],
                 name=m["name"],
-                provider=provider,
+                provider=account.id,
                 api="openai-responses",
                 reasoning=False,
                 supportedThinkingLevels=["off"],
@@ -1122,9 +1112,9 @@ class LlmService:
             for m in cached[1]
         ]
 
-    async def _generate_with_chatgpt_plan(
+    async def _generate_with_account(
         self,
-        provider: str,
+        account: chatgpt_plan.ChatGptPlanProvider,
         opts: LlmGenerateOptions,
         model_id: str,
         start_ms: int,
@@ -1136,40 +1126,24 @@ class LlmService:
             if opts.messages
             else [{"role": "user", "content": opts.prompt}]
         )
-        logger.info("Executing LLM generation", {"provider": provider, "model": model_id})
-        auth = self._account_auth(provider)
+        logger.info("Executing LLM generation", {"provider": account.id, "model": model_id})
         try:
-            if isinstance(auth, chatgpt_codex.ChatGptCodexAuth):
-                token, account_id = await auth.get_credentials()
-                full_text, usage = await chatgpt_codex.stream_response(
-                    token,
-                    account_id,
-                    model=model_id,
-                    instructions=opts.systemPrompt,
-                    messages=messages,
-                    on_delta=on_delta,
-                    transport=auth.transport,
-                )
-            else:
-                token = await auth.get_access_token()
-                full_text, usage = await chatgpt_plan.stream_response(
-                    token,
-                    model=model_id,
-                    instructions=opts.systemPrompt,
-                    messages=messages,
-                    on_delta=on_delta,
-                    transport=auth.transport,
-                )
+            full_text, usage = await account.stream(
+                model=model_id,
+                instructions=opts.systemPrompt,
+                messages=messages,
+                on_delta=on_delta,
+            )
         except chatgpt_plan.ChatGptPlanError as exc:
             logger.error(
                 "ChatGPT plan call failed",
-                {"provider": provider, "model": model_id, "error": str(exc), "code": exc.code, "requestId": exc.request_id},
+                {"provider": account.id, "model": model_id, "error": str(exc), "code": exc.code, "requestId": exc.request_id},
             )
             raise
         usage = usage or {}
         return LlmGenerateResult(
             text=full_text,
-            provider=provider,
+            provider=account.id,
             model=model_id,
             durationMs=max(1, int(time.time() * 1000) - start_ms),
             usage=ChatUsage(
@@ -1186,8 +1160,9 @@ class LlmService:
 
         ChatGPT account providers have no key: they count once the account is signed in.
         """
-        if provider in ACCOUNT_PROVIDER_NAMES:
-            return self._account_auth(provider).is_usable()
+        account = self.account_providers.get(provider)
+        if account is not None:
+            return account.is_usable()
         return self.resolve_api_key(provider, None, settings) is not None
 
     def _is_provider_usable(self, provider: str, settings: LlmSettings) -> bool:
@@ -1294,6 +1269,25 @@ class LlmService:
         return mapping.get(provider.lower(), provider.lower())
 
     async def generate_text(self, raw_options: dict[str, Any] | LlmGenerateOptions) -> LlmGenerateResult:
+        return await self._generate(raw_options)
+
+    generateText = generate_text
+
+    async def stream_text(
+        self,
+        raw_options: dict[str, Any] | LlmGenerateOptions,
+        on_delta: Callable[[str], Any],
+    ) -> LlmGenerateResult:
+        return await self._generate(raw_options, on_delta)
+
+    streamText = stream_text
+
+    async def _generate(
+        self,
+        raw_options: dict[str, Any] | LlmGenerateOptions,
+        on_delta: Callable[[str], Any] | None = None,
+    ) -> LlmGenerateResult:
+        """One generation; streams pieces to ``on_delta`` when it is given."""
         opts = (
             raw_options
             if isinstance(raw_options, LlmGenerateOptions)
@@ -1304,8 +1298,9 @@ class LlmService:
 
         provider = opts.provider or settings.defaultProvider
         model_id = opts.model or settings.defaultModel
-        if provider in ACCOUNT_PROVIDER_NAMES:
-            return await self._generate_with_chatgpt_plan(provider, opts, model_id, start_ms)
+        account = self.account_providers.get(provider)
+        if account is not None:
+            return await self._generate_with_account(account, opts, model_id, start_ms, on_delta)
 
         api_key = self.resolve_api_key(provider, opts.apiKeyOverride, settings)
         if not api_key:
@@ -1344,6 +1339,8 @@ class LlmService:
             "messages": messages,
             "api_key": api_key,
         }
+        if on_delta is not None:
+            kwargs["stream"] = True
         if custom_base:
             kwargs["api_base"] = custom_base
         if provider_cfg and provider_cfg.headers:
@@ -1374,19 +1371,10 @@ class LlmService:
             )
             raise RuntimeError(f"LLM call failed ({provider}/{model_id}): {err_msg}") from exc
 
-        choice = response.choices[0] if getattr(response, "choices", None) else None
-        text_content = ""
-        if choice and getattr(choice, "message", None):
-            text_content = getattr(choice.message, "content", "") or ""
-
-        usage_obj = getattr(response, "usage", None)
-        in_tok = int(getattr(usage_obj, "prompt_tokens", 0) or 0) if usage_obj else 0
-        out_tok = int(getattr(usage_obj, "completion_tokens", 0) or 0) if usage_obj else 0
-        tot_tok = (
-            int(getattr(usage_obj, "total_tokens", in_tok + out_tok) or (in_tok + out_tok))
-            if usage_obj
-            else 0
-        )
+        if on_delta is None:
+            text_content, in_tok, out_tok, tot_tok = self._read_completion(response)
+        else:
+            text_content, in_tok, out_tok, tot_tok = await self._read_completion_stream(response, on_delta)
 
         duration_ms = max(1, int(time.time() * 1000) - start_ms)
         return LlmGenerateResult(
@@ -1401,82 +1389,31 @@ class LlmService:
             ),
         )
 
-    generateText = generate_text
+    @staticmethod
+    def _read_completion(response: Any) -> tuple[str, int, int, int]:
+        choice = response.choices[0] if getattr(response, "choices", None) else None
+        text_content = ""
+        if choice and getattr(choice, "message", None):
+            text_content = getattr(choice.message, "content", "") or ""
 
-    async def stream_text(
-        self,
-        raw_options: dict[str, Any] | LlmGenerateOptions,
-        on_delta: Callable[[str], Any],
-    ) -> LlmGenerateResult:
-        opts = (
-            raw_options
-            if isinstance(raw_options, LlmGenerateOptions)
-            else LlmGenerateOptions.model_validate(raw_options)
+        usage_obj = getattr(response, "usage", None)
+        in_tok = int(getattr(usage_obj, "prompt_tokens", 0) or 0) if usage_obj else 0
+        out_tok = int(getattr(usage_obj, "completion_tokens", 0) or 0) if usage_obj else 0
+        tot_tok = (
+            int(getattr(usage_obj, "total_tokens", in_tok + out_tok) or (in_tok + out_tok))
+            if usage_obj
+            else 0
         )
-        start_ms = int(time.time() * 1000)
-        settings = await self.get_settings()
+        return text_content, in_tok, out_tok, tot_tok
 
-        provider = opts.provider or settings.defaultProvider
-        model_id = opts.model or settings.defaultModel
-        if provider in ACCOUNT_PROVIDER_NAMES:
-            return await self._generate_with_chatgpt_plan(provider, opts, model_id, start_ms, on_delta)
-
-        api_key = self.resolve_api_key(provider, opts.apiKeyOverride, settings)
-        if not api_key:
-            raise RuntimeError(
-                f'No API key configured for provider "{provider}". '
-                "Please configure an API key in settings or pass one in the request."
-            )
-
-        model_info = await self.resolve_model(provider, model_id, opts.baseUrlOverride)
-        messages: list[dict[str, Any]] = []
-        if opts.systemPrompt:
-            messages.append({"role": "system", "content": opts.systemPrompt})
-        if opts.messages:
-            for m in opts.messages:
-                messages.append({"role": m.role, "content": m.content})
-        else:
-            messages.append({"role": "user", "content": opts.prompt})
-
-        effective_reasoning = self.resolve_effective_reasoning(
-            model_info, opts.thinkingLevel, settings.defaultThinkingLevel
-        )
-
-        provider_cfg = settings.providers.get(provider)
-        default_base = DEFAULT_PROVIDER_BASE_URL.get(provider)
-        resolved_base = model_info.get("baseUrl")
-        raw_custom_base = (
-            opts.baseUrlOverride
-            or (provider_cfg.baseUrl if provider_cfg else None)
-            or (resolved_base if resolved_base and resolved_base != default_base else None)
-        )
-        custom_base = normalize_provider_base_url(provider, raw_custom_base)
-        any_provider = self._map_any_llm_provider(provider)
-        kwargs: dict[str, Any] = {
-            "model": model_id,
-            "provider": any_provider,
-            "messages": messages,
-            "api_key": api_key,
-            "stream": True,
-        }
-        if custom_base:
-            kwargs["api_base"] = custom_base
-        if provider_cfg and provider_cfg.headers:
-            kwargs["client_args"] = {"default_headers": provider_cfg.headers}
-        if opts.temperature is not None:
-            kwargs["temperature"] = opts.temperature
-        if opts.maxTokens is not None:
-            kwargs["max_tokens"] = opts.maxTokens
-        if effective_reasoning and effective_reasoning != "off":
-            kwargs["reasoning_effort"] = effective_reasoning
-
-        stream = await any_llm.acompletion(**kwargs)
+    @staticmethod
+    async def _read_completion_stream(stream: Any, on_delta: Callable[[str], Any]) -> tuple[str, int, int, int]:
         full_text = ""
         in_tok = 0
         out_tok = 0
         tot_tok = 0
 
-        async for chunk in stream:  # type: ignore[union-attr]
+        async for chunk in stream:
             choices = getattr(chunk, "choices", None)
             if choices:
                 delta_obj = getattr(choices[0], "delta", None)
@@ -1491,18 +1428,4 @@ class LlmService:
                 in_tok = int(getattr(usage_obj, "prompt_tokens", in_tok) or in_tok)
                 out_tok = int(getattr(usage_obj, "completion_tokens", out_tok) or out_tok)
                 tot_tok = int(getattr(usage_obj, "total_tokens", in_tok + out_tok) or (in_tok + out_tok))
-
-        duration_ms = max(1, int(time.time() * 1000) - start_ms)
-        return LlmGenerateResult(
-            text=full_text,
-            provider=provider,
-            model=model_id,
-            durationMs=duration_ms,
-            usage=ChatUsage(
-                inputTokens=in_tok,
-                outputTokens=out_tok,
-                totalTokens=tot_tok,
-            ),
-        )
-
-    streamText = stream_text
+        return full_text, in_tok, out_tok, tot_tok
