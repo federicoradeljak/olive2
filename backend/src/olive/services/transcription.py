@@ -29,7 +29,8 @@ from ..ml import (
 )
 from ..ml.asr_registry import normalize_asr_model
 from ..ml.identify import identify_cloud_transcript_speakers
-from ..providers.assemblyai import AssemblyAIClient, parse_assemblyai_transcript
+from ..providers.assemblyai import AssemblyAIClient
+from ..providers.assemblyai.transcriber import AssemblyAITranscriber
 from ..providers.modal import ModalCancelledError, ModalClient, prepare_modal_flac
 from ..providers.muse import (
     MuseClient,
@@ -74,6 +75,7 @@ from ..workflows import (
     local_stage_workflow_id,
     register_task_context,
 )
+from .cloud_transcription import CloudTranscriber, CloudTranscriptionRun
 
 STAGE_SPEECHMATICS_TRANSCRIBE = "speechmatics_transcribe"
 STAGE_ASSEMBLYAI_TRANSCRIBE = "assemblyai_transcribe"
@@ -330,6 +332,10 @@ class TranscriptionService:
         self._progress_listeners: dict[str, set[Callable[[TranscriptionProgressUpdate], Any]]] = {}
         self._reidentify_statuses: dict[str, SpeakerReidentificationStatus] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
+        self.cloud_transcribers: dict[str, CloudTranscriber] = {
+            PROVIDER_ASSEMBLYAI: AssemblyAITranscriber(self.assemblyai_client, now=lambda: self.now()),
+            **dict(opts.get("cloudTranscribers") or opts.get("cloud_transcribers") or {}),
+        }
 
         # Local transcription stages run fire-and-forget, so their progress,
         # persistence and clock come from these process-wide hooks rather than a
@@ -1522,6 +1528,22 @@ class TranscriptionService:
             return str(latest["provider"]).strip().lower()
         return None
 
+    def _cloud_run(self) -> CloudTranscriptionRun:
+        return CloudTranscriptionRun(
+            db=self.db,
+            meetings_dir=self.meetings_dir,
+            now=self.now,
+            logger=self.logger,
+            complete=self._complete_cloud_transcription,
+            on_job_id=self._note_cloud_job_id,
+        )
+
+    def _note_cloud_job_id(self, meeting_id: str, stage_run_id: str, job_id: str) -> None:
+        active = self._active_jobs.get(meeting_id)
+        if active:
+            active.stage_run_id = stage_run_id
+            active.job_id = job_id
+
     async def transcribe_meeting(
         self,
         meeting_id: str,
@@ -2506,6 +2528,7 @@ class TranscriptionService:
         provider: str,
         raw_payload: dict[str, Any] | None = None,
         options: dict[str, Any] | None = None,
+        estimate_usage: bool = True,
     ) -> dict[str, Any]:
         """Persist a normalized cloud transcript + identified speakers."""
         with self.db.connect() as conn:
@@ -2577,6 +2600,7 @@ class TranscriptionService:
             t_json,
             paths.transcripts_dir,
             provider,
+            estimate_usage=estimate_usage,
         )
         txt_art_id = await self._ensure_artifact(
             meeting["id"],
@@ -2669,346 +2693,11 @@ class TranscriptionService:
         meeting_id: str,
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        opts = options or {}
-        on_progress = opts.get("onProgress")
-
-        with self.db.connect() as conn:
-            meeting = (
-                conn.execute(
-                    text("SELECT * FROM meetings WHERE id = :id"),
-                    {"id": meeting_id},
-                )
-                .mappings()
-                .first()
-            )
-            if not meeting:
-                raise ValueError(f"Meeting not found: {meeting_id}")
-
-            recording = (
-                conn.execute(
-                    text("SELECT * FROM recordings WHERE meeting_id = :mid ORDER BY created_at ASC LIMIT 1"),
-                    {"mid": meeting_id},
-                )
-                .mappings()
-                .first()
-            )
-            if not recording:
-                raise ValueError(f"No recording found for meeting {meeting_id}")
-
-            stage_run = (
-                conn.execute(
-                    text("SELECT * FROM stage_runs WHERE meeting_id = :mid AND stage = :stage LIMIT 1"),
-                    {"mid": meeting_id, "stage": STAGE_ASSEMBLYAI_TRANSCRIBE},
-                )
-                .mappings()
-                .first()
-            )
-
-        folder = meeting_paths(
-            self.meetings_dir, int(meeting["start_time"]), meeting["title"], meeting["id"]
-        ).folder
-        audio_full_path = str(Path(folder) / recording["path"])
-        if not Path(audio_full_path).exists():
-            raise FileNotFoundError(f"Audio file not found on disk at {audio_full_path}")
-
-        if stage_run and stage_run["status"] == "done" and not opts.get("force"):
-            with self.db.connect() as conn:
-                existing_art = (
-                    conn.execute(
-                        text(
-                            """
-                        SELECT id FROM artifacts
-                        WHERE meeting_id = :mid AND provider = :prov AND kind = 'transcript' AND format = 'json'
-                        LIMIT 1
-                        """
-                        ),
-                        {"mid": meeting_id, "prov": PROVIDER_ASSEMBLYAI},
-                    )
-                    .mappings()
-                    .first()
-                )
-            return {
-                "stageRunId": stage_run["id"],
-                "jobId": stage_run.get("provider_job_id") or "",
-                "status": "done",
-                "transcriptArtifactId": existing_art["id"] if existing_art else None,
-            }
-
-        stage_run_id = stage_run["id"] if stage_run else str(uuid.uuid4())
-        current_time = self.now()
-
-        if callable(on_progress):
-            r = on_progress(
-                TranscriptionProgressUpdate(
-                    stage="uploading",
-                    percent=15,
-                    message="Uploading audio to AssemblyAI (Universal-3.5 Pro)...",
-                )
-            )
-            if inspect.isawaitable(r):
-                await r
-
-        with self.db.begin() as conn:
-            if stage_run:
-                conn.execute(
-                    text(
-                        """
-                        UPDATE stage_runs
-                        SET status = 'running', attempts = :attempts, last_error = NULL,
-                            started_at = :now, updated_at = :now
-                        WHERE id = :id
-                        """
-                    ),
-                    {
-                        "attempts": int(stage_run["attempts"]) + 1,
-                        "now": current_time,
-                        "id": stage_run["id"],
-                    },
-                )
-            else:
-                conn.execute(
-                    text(
-                        """
-                        INSERT INTO stage_runs (
-                          id, meeting_id, stage, status, provider_job_id, attempts,
-                          last_error, started_at, finished_at, created_at, updated_at
-                        ) VALUES (
-                          :id, :mid, :stage, 'running', NULL, 1,
-                          NULL, :now, NULL, :now, :now
-                        )
-                        """
-                    ),
-                    {
-                        "id": stage_run_id,
-                        "mid": meeting_id,
-                        "stage": STAGE_ASSEMBLYAI_TRANSCRIBE,
-                        "now": current_time,
-                    },
-                )
-
-        sig = opts.get("signal")
-        if _signal_aborted(sig):
-            return await self._fail_assemblyai(
-                meeting_id,
-                stage_run_id,
-                "",
-                "Transcription was cancelled.",
-                cancelled=True,
-                on_progress=on_progress,
-            )
-
-        async def _emit_aai(stage: str, percent: float, message: str) -> None:
-            if callable(on_progress):
-                r = on_progress(
-                    TranscriptionProgressUpdate(
-                        stage=stage,  # type: ignore[arg-type]
-                        percent=float(round(percent)),
-                        message=message,
-                    )
-                )
-                if inspect.isawaitable(r):
-                    await r
-
-        # Upload + submit with a heartbeat, since the upload is a single
-        # request with no byte-level progress from the SDK.
-        submit_task = asyncio.create_task(
-            self.assemblyai_client.submit_job(
-                {
-                    "audio": {"path": audio_full_path},
-                    "filename": Path(recording["path"]).name,
-                    "language": opts.get("language"),
-                    "additionalVocab": opts.get("additionalVocab") or opts.get("additional_vocab"),
-                }
-            )
+        return await self._cloud_run().run(
+            self.cloud_transcribers[PROVIDER_ASSEMBLYAI], meeting_id, options or {}
         )
-        submit_start = self.now()
-        submitted: Any
-        try:
-            while not submit_task.done():
-                if _signal_aborted(sig):
-                    submit_task.cancel()
-                    return await self._fail_assemblyai(
-                        meeting_id,
-                        stage_run_id,
-                        "",
-                        "Transcription was cancelled.",
-                        cancelled=True,
-                        on_progress=on_progress,
-                    )
-                done, _pending = await asyncio.wait({submit_task}, timeout=5.0)
-                if done:
-                    break
-                elapsed_s = int((self.now() - submit_start) / 1000)
-                await _emit_aai("uploading", 15, f"Uploading audio to AssemblyAI... ({elapsed_s}s elapsed)")
-            submitted = submit_task.result()
-        except Exception as exc:
-            return await self._fail_assemblyai(
-                meeting_id, stage_run_id, "", str(exc), on_progress=on_progress
-            )
-
-        job_id = str(submitted.get("id") or "") if isinstance(submitted, dict) else ""
-        with self.db.begin() as conn:
-            conn.execute(
-                text("UPDATE stage_runs SET provider_job_id = :jid, updated_at = :now WHERE id = :id"),
-                {"jid": job_id or None, "now": self.now(), "id": stage_run_id},
-            )
-        await _emit_aai(
-            "transcribing",
-            25,
-            f"Submitted to AssemblyAI (job {job_id[:8]}...). Processing...",
-        )
-
-        raw: Any = None
-        if (
-            isinstance(submitted, dict)
-            and submitted.get("status") == "completed"
-            and (submitted.get("words") or submitted.get("utterances"))
-        ):
-            raw = submitted
-        else:
-            interval_ms = int(opts.get("pollIntervalMs") or 5000)
-            max_wait_ms = int(opts.get("maxPollWaitMs") or 3_600_000)
-            duration_s = (recording.get("duration_ms") or 0) / 1000.0
-            expected_s = min(900.0, max(45.0, duration_s / 8.0 if duration_s else 120.0))
-            poll_start = self.now()
-            poll_count = 0
-            while self.now() - poll_start < max_wait_ms:
-                if _signal_aborted(sig):
-                    return await self._fail_assemblyai(
-                        meeting_id,
-                        stage_run_id,
-                        job_id,
-                        "Transcription was cancelled.",
-                        cancelled=True,
-                        on_progress=on_progress,
-                    )
-                state = await self.assemblyai_client.get_transcript(job_id)
-                status = str(state.get("status") or "") if isinstance(state, dict) else ""
-                if status == "completed":
-                    raw = state
-                    break
-                if status == "error":
-                    return await self._fail_assemblyai(
-                        meeting_id,
-                        stage_run_id,
-                        job_id,
-                        str(state.get("error") or "AssemblyAI transcription failed"),
-                        on_progress=on_progress,
-                    )
-                poll_count += 1
-                elapsed_s = int((self.now() - poll_start) / 1000)
-                if status == "queued":
-                    pct = 25.0
-                else:
-                    pct = min(70.0, 25.0 + 45.0 * min(1.0, (elapsed_s / expected_s) if expected_s else 1.0))
-                await _emit_aai(
-                    "transcribing",
-                    pct,
-                    f"AssemblyAI {status or 'processing'} (poll #{poll_count}, {elapsed_s}s elapsed)...",
-                )
-                await asyncio.sleep(interval_ms / 1000.0)
-            if raw is None:
-                return await self._fail_assemblyai(
-                    meeting_id,
-                    stage_run_id,
-                    job_id,
-                    f"AssemblyAI job timed out after {max_wait_ms}ms",
-                    on_progress=on_progress,
-                )
-
-        if callable(on_progress):
-            r = on_progress(
-                TranscriptionProgressUpdate(
-                    stage="finalizing",
-                    percent=72,
-                    message="AssemblyAI transcription complete. Identifying speakers...",
-                )
-            )
-            if inspect.isawaitable(r):
-                await r
-
-        canonical = parse_assemblyai_transcript(raw)
-        res = await self._complete_cloud_transcription(
-            meeting_id,
-            stage_run_id,
-            job_id,
-            canonical,
-            PROVIDER_ASSEMBLYAI,
-            raw_payload=None,
-            options=opts,
-        )
-        if res.get("status") == "cancelled":
-            return await self._fail_assemblyai(
-                meeting_id,
-                stage_run_id,
-                job_id,
-                "Transcription was cancelled.",
-                cancelled=True,
-                on_progress=on_progress,
-            )
-        if callable(on_progress):
-            r = on_progress(
-                TranscriptionProgressUpdate(
-                    stage="done",
-                    percent=100,
-                    message="AssemblyAI transcription complete!",
-                )
-            )
-            if inspect.isawaitable(r):
-                await r
-        return res
 
     transcribeMeetingAssemblyai = transcribe_meeting_assemblyai
-
-    async def _fail_assemblyai(
-        self,
-        meeting_id: str,
-        stage_run_id: str,
-        job_id: str,
-        err_msg: str,
-        cancelled: bool = False,
-        on_progress: Callable[[TranscriptionProgressUpdate], Any] | None = None,
-    ) -> dict[str, Any]:
-        err_time = self.now()
-        with self.db.begin() as conn:
-            conn.execute(
-                text(
-                    """
-                    UPDATE stage_runs
-                    SET status = :st, last_error = :err, finished_at = :t, updated_at = :t
-                    WHERE id = :id
-                    """
-                ),
-                {
-                    "st": "cancelled" if cancelled else "error",
-                    "err": "Cancelled by user" if cancelled else err_msg,
-                    "t": err_time,
-                    "id": stage_run_id,
-                },
-            )
-            if not cancelled:
-                conn.execute(
-                    text("UPDATE meetings SET last_error = :err, updated_at = :t WHERE id = :id"),
-                    {"err": err_msg, "t": err_time, "id": meeting_id},
-                )
-        self.logger.error("AssemblyAI transcription failed", {"meetingId": meeting_id, "error": err_msg})
-        if callable(on_progress):
-            r = on_progress(
-                TranscriptionProgressUpdate(
-                    stage="cancelled" if cancelled else "error",
-                    percent=0,
-                    message="Transcription was cancelled." if cancelled else err_msg,
-                    error=None if cancelled else err_msg,
-                )
-            )
-            if inspect.isawaitable(r):
-                await r
-        return {
-            "stageRunId": stage_run_id,
-            "jobId": job_id,
-            "status": "cancelled" if cancelled else "error",
-            "error": "Cancelled by user" if cancelled else err_msg,
-        }
 
     async def transcribe_meeting_muse(
         self,
@@ -3570,6 +3259,7 @@ class TranscriptionService:
         content: str,
         directory: str,
         provider: str,
+        estimate_usage: bool = True,
     ) -> str:
         dir_path = Path(directory)
         dir_path.mkdir(parents=True, exist_ok=True)
@@ -3624,9 +3314,9 @@ class TranscriptionService:
                         "now": self.now(),
                     },
                 )
-        if kind == "transcript" and fmt == "json" and provider != PROVIDER_MODAL:
-            # Modal runs record measured GPU time in ``transcribe_meeting_modal``.
-            # The JSON artifact is the canonical transcript record (a plain-text
+        if kind == "transcript" and fmt == "json" and estimate_usage and provider != PROVIDER_MODAL:
+            # Providers that measure their own spend (Modal GPU time) skip this
+            # estimate; the cloud run records theirs. The JSON artifact is the canonical transcript record (a plain-text
             # twin is saved alongside it); track spend once against it. The
             # usage row is keyed by artifact id, so re-runs stay idempotent.
             try:
