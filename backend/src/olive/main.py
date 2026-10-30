@@ -43,6 +43,7 @@ def build_default_app(*, start_plaud_poller: bool = False):
             "webRoot": web_root,
             "meetingsDir": runtime_config.paths.meetings_dir,
             "pollIntervalMinutes": app_config.pollIntervalMinutes,
+            "plaudAutoSync": app_config.plaudAutoSync,
             "defaultTranscriptionProvider": app_config.transcriptionProvider,
             "bindHost": runtime_config.bind_host,
             "startPlaudPoller": start_plaud_poller,

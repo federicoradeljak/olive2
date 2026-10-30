@@ -157,14 +157,41 @@ class OAuthManager:
         self.refreshWindowMs = int(cfg.get("refreshWindowMs") or 48 * 60 * 60 * 1000)
         self.tokenStore = cfg.get("tokenStore") or cfg.get("token_store") or FileTokenStore()
         self.token_store = self.tokenStore
+        # Plaud rotates refresh tokens: two concurrent refreshes with the same
+        # token invalidate the session, so only one caller refreshes at a time.
+        self._refresh_lock = asyncio.Lock()
+        # A token whose lifetime is shorter than the refresh window would
+        # otherwise be refreshed on every call; refresh at most this often
+        # while the current token is still valid.
+        self.minRefreshIntervalMs = int(cfg.get("minRefreshIntervalMs") or 60 * 60 * 1000)
+        self._last_refresh_at: int | None = None
+
+    def _needs_refresh(self, tokens: dict[str, Any], now: int) -> bool:
+        expires_at = int(tokens.get("expires_at") or 0)
+        if not expires_at or (expires_at - now) > self.refreshWindowMs:
+            return False
+        recently_refreshed = (
+            self._last_refresh_at is not None and now - self._last_refresh_at < self.minRefreshIntervalMs
+        )
+        return now >= expires_at or not recently_refreshed
 
     async def get_access_token(self) -> str | None:
         tokens = await self.tokenStore.load()
         if not tokens:
             return None
+        if not self._needs_refresh(tokens, int(time.time() * 1000)):
+            return tokens["access_token"]
+        async with self._refresh_lock:
+            # Re-read: another caller may have refreshed while we waited.
+            tokens = await self.tokenStore.load()
+            if not tokens:
+                return None
+            return await self._refresh_if_due(tokens)
+
+    async def _refresh_if_due(self, tokens: dict[str, Any]) -> str | None:
         now = int(time.time() * 1000)
         expires_at = int(tokens.get("expires_at") or 0)
-        if expires_at and (expires_at - now) <= self.refreshWindowMs:
+        if self._needs_refresh(tokens, now):
             refresh_tok = tokens.get("refresh_token")
             if refresh_tok:
                 try:
@@ -235,6 +262,7 @@ class OAuthManager:
 
         data = res.json()
         now_ms = int(time.time() * 1000)
+        self._last_refresh_at = now_ms
         token_set: dict[str, Any] = {
             "access_token": data["access_token"],
             "refresh_token": data.get("refresh_token") or refresh_token,
