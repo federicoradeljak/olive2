@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
 
+from cloud_transcription_helpers import FakeTranscriber, seed_cloud_meeting
 from olive.app import create_app
 from olive.db import create_db
 from olive.services.ingest import IngestService
@@ -31,27 +33,29 @@ def test_default_languages_empty_and_normalized(tmp_path) -> None:
     clear_app_config_cache()
 
 
-def _transcription_service(default_language: str) -> tuple[TranscriptionService, list[dict[str, Any]]]:
+def _transcription_service(
+    tmp_path: Path, default_language: str
+) -> tuple[TranscriptionService, list[dict[str, Any]]]:
     handle = create_db(":memory:")
+    meetings_dir = str(tmp_path / "meetings")
+    seed_cloud_meeting(handle.engine, meetings_dir, "m1")
+    fake = FakeTranscriber()
     svc = TranscriptionService(
-        db=handle.engine, default_provider="assemblyai", default_language=default_language
+        {"cloudTranscribers": {"assemblyai": fake}, "cloudSpeakerIdentifier": lambda *_args: None},
+        db=handle.engine,
+        meetings_dir=meetings_dir,
+        default_provider="assemblyai",
+        default_language=default_language,
     )
-    seen: list[dict[str, Any]] = []
-
-    async def _capture(_meeting_id: str, opts: dict[str, Any]) -> dict[str, Any]:
-        seen.append(opts)
-        return {"status": "done"}
-
-    svc.transcribe_meeting_assemblyai = _capture  # type: ignore[method-assign]
-    return svc, seen
+    return svc, fake.options
 
 
-async def test_transcription_uses_default_language_unless_overridden() -> None:
-    svc, seen = _transcription_service("es")
-    await svc.transcribe_meeting("m1", {})
-    await svc.transcribe_meeting("m1", {"language": "pt"})
+async def test_transcription_uses_default_language_unless_overridden(tmp_path: Path) -> None:
+    svc, seen = _transcription_service(tmp_path, "es")
+    await svc.transcribe_meeting("m1", {"force": True})
+    await svc.transcribe_meeting("m1", {"force": True, "language": "pt"})
     svc.set_default_language("")
-    await svc.transcribe_meeting("m1", {})
+    await svc.transcribe_meeting("m1", {"force": True})
     assert [o.get("language") for o in seen] == ["es", "pt", None]
 
 

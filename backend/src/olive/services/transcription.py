@@ -12,7 +12,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -50,12 +50,8 @@ from ..schemas import (
 from ..settings import normalize_vocabulary
 from ..speaker_labels import is_generic_speaker_label
 from ..workflows import (
-    QUEUE_ASSEMBLYAI,
-    QUEUE_MODAL,
-    QUEUE_MUSE,
     QUEUE_PLAUD_SYNC,
     QUEUE_SPEAKER_EMBED,
-    QUEUE_SPEECHMATICS,
     QUEUE_SUMMARIZE,
     STAGE_LOCAL_TRANSCRIBE,
     STAGE_SEQUENCE,
@@ -72,12 +68,17 @@ from ..workflows import (
     local_stage_workflow_id,
     register_task_context,
 )
-from .cloud_transcription import CloudTranscriber, CloudTranscriptionRun, title_implies_two_speakers
+from .cloud_transcription import (
+    CLOUD_PROVIDERS,
+    CloudTranscriber,
+    CloudTranscriptionRun,
+    title_implies_two_speakers,
+)
 
-STAGE_SPEECHMATICS_TRANSCRIBE = "speechmatics_transcribe"
-STAGE_ASSEMBLYAI_TRANSCRIBE = "assemblyai_transcribe"
-STAGE_MUSE_TRANSCRIBE = "muse_transcribe"
-STAGE_MODAL_TRANSCRIBE = "modal_transcribe"
+STAGE_SPEECHMATICS_TRANSCRIBE = CLOUD_PROVIDERS["speechmatics"].stage
+STAGE_ASSEMBLYAI_TRANSCRIBE = CLOUD_PROVIDERS["assemblyai"].stage
+STAGE_MUSE_TRANSCRIBE = CLOUD_PROVIDERS["muse"].stage
+STAGE_MODAL_TRANSCRIBE = CLOUD_PROVIDERS["modal"].stage
 STAGE_SPEAKER_REIDENTIFY = "speaker_reidentify"
 PROVIDER_SPEECHMATICS = "speechmatics"
 PROVIDER_ASSEMBLYAI = "assemblyai"
@@ -92,33 +93,21 @@ TranscriptionProviderName = Literal["speechmatics", "assemblyai", "muse", "modal
 # here on purpose: it is not a single queue job any more — it is a flat chain of
 # per-stage workflows (decode -> diarize -> {embed || asr} -> align), so its
 # entry point is ``enqueue_local_transcription`` instead.
-TRANSCRIBE_QUEUE_BY_PROVIDER: dict[str, str] = {
-    PROVIDER_SPEECHMATICS: QUEUE_SPEECHMATICS,
-    PROVIDER_ASSEMBLYAI: QUEUE_ASSEMBLYAI,
-    PROVIDER_MUSE: QUEUE_MUSE,
-    PROVIDER_MODAL: QUEUE_MODAL,
-}
+TRANSCRIBE_QUEUE_BY_PROVIDER: dict[str, str] = {name: spec.queue for name, spec in CLOUD_PROVIDERS.items()}
 
 
 def normalize_transcription_provider(value: Any, default: str = PROVIDER_LOCAL) -> str:
     """Maps engine labels (e.g. ``local:cohere``) to a queue-routable provider.
 
-    Mirrors :meth:`TranscriptionService.transcribe_meeting` dispatch: ``None``
-    falls back to ``default``; anything unrecognized executes as
-    ``speechmatics`` there, so it routes to the speechmatics queue here.
+    ``None`` falls back to ``default``; anything unrecognized runs as
+    ``speechmatics``, the original cloud provider.
     """
     if value is None or str(value).strip() == "":
         return str(default)
     raw = str(value).strip().lower()
     if raw.startswith(PROVIDER_LOCAL):
         return PROVIDER_LOCAL
-    if raw == PROVIDER_ASSEMBLYAI:
-        return PROVIDER_ASSEMBLYAI
-    if raw == PROVIDER_MUSE:
-        return PROVIDER_MUSE
-    if raw == PROVIDER_MODAL:
-        return PROVIDER_MODAL
-    return PROVIDER_SPEECHMATICS
+    return raw if raw in CLOUD_PROVIDERS else PROVIDER_SPEECHMATICS
 
 
 def is_known_transcription_provider(value: Any) -> bool:
@@ -126,12 +115,7 @@ def is_known_transcription_provider(value: Any) -> bool:
     if value is None:
         return True
     raw = str(value).strip().lower()
-    return raw.startswith(PROVIDER_LOCAL) or raw in (
-        PROVIDER_SPEECHMATICS,
-        PROVIDER_ASSEMBLYAI,
-        PROVIDER_MUSE,
-        PROVIDER_MODAL,
-    )
+    return raw.startswith(PROVIDER_LOCAL) or raw in CLOUD_PROVIDERS
 
 
 
@@ -561,12 +545,13 @@ class TranscriptionService:
         active = self._active_jobs.get(meeting_id)
         if active:
             active.abort_controller.abort()
-            if active.provider == "speechmatics" and active.job_id:
+            transcriber = self.cloud_transcribers.get(active.provider)
+            if transcriber is not None and active.job_id:
                 try:
-                    await self.client.delete_job(active.job_id)
+                    await transcriber.release(active.job_id)
                 except Exception as exc:
                     self.logger.warn(
-                        "Failed to delete Speechmatics job during cancellation",
+                        f"Failed to release {transcriber.spec.label} job during cancellation",
                         {"jobId": active.job_id, "error": str(exc)},
                     )
 
@@ -1297,7 +1282,8 @@ class TranscriptionService:
         """
         opts = dict(options or {})
         if not is_known_transcription_provider(opts.get("provider")):
-            raise ValueError("provider must be one of 'local', 'speechmatics', 'assemblyai', 'muse'")
+            known = ", ".join(f"'{name}'" for name in (PROVIDER_LOCAL, *CLOUD_PROVIDERS))
+            raise ValueError(f"provider must be one of {known}")
         provider = normalize_transcription_provider(
             opts.get("provider") or self.default_provider,
             default=self.default_provider,
@@ -1557,7 +1543,12 @@ class TranscriptionService:
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         opts = self._with_settings_defaults(options)
-        provider: TranscriptionProviderName = opts.get("provider") or self.default_provider
+        provider = cast(
+            TranscriptionProviderName,
+            normalize_transcription_provider(
+                opts.get("provider") or self.default_provider, default=self.default_provider
+            ),
+        )
 
         self.logger.debug(
             "Initiating meeting transcription",
@@ -1619,15 +1610,9 @@ class TranscriptionService:
         }
 
         try:
-            if provider == "local":
+            if provider == PROVIDER_LOCAL:
                 return await self.transcribe_meeting_local(meeting_id, merged_opts)
-            if provider == "assemblyai":
-                return await self.transcribe_meeting_assemblyai(meeting_id, merged_opts)
-            if provider == "muse":
-                return await self.transcribe_meeting_muse(meeting_id, merged_opts)
-            if provider == "modal":
-                return await self.transcribe_meeting_modal(meeting_id, merged_opts)
-            return await self.transcribe_meeting_speechmatics(meeting_id, merged_opts)
+            return await self._cloud_run().run(self.cloud_transcribers[provider], meeting_id, merged_opts)
         finally:
             if self._active_jobs.get(meeting_id) is active_job:
                 self._active_jobs.pop(meeting_id, None)
@@ -1976,15 +1961,6 @@ class TranscriptionService:
     # Backwards-compatible alias (the finalize path used to be recovery-only).
     complete_recovered_local_transcript = complete_local_transcript
 
-    async def transcribe_meeting_speechmatics(
-        self,
-        meeting_id: str,
-        options: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        return await self._cloud_run().run(self._speechmatics, meeting_id, options or {})
-
-    transcribeMeetingSpeechmatics = transcribe_meeting_speechmatics
-
     def _configured_similarity_threshold(self) -> float | None:
         if not self.config_dir:
             return None
@@ -2229,7 +2205,7 @@ class TranscriptionService:
         if discovered is not None:
             await self._persist_local_discovered_speakers(meeting["id"], json_art_id, discovered)
             await self._link_transcript_speakers(meeting["id"], json_art_id, canonical)
-        elif provider == PROVIDER_SPEECHMATICS and raw_payload is not None:
+        elif raw_payload is not None:
             await self._persist_discovered_speakers(meeting["id"], json_art_id, canonical, raw_payload)
         else:
             await self._persist_discovered_speakers(meeting["id"], json_art_id, canonical, {})
@@ -2284,26 +2260,6 @@ class TranscriptionService:
 
     completeTranscription = complete_transcription
 
-    async def transcribe_meeting_assemblyai(
-        self,
-        meeting_id: str,
-        options: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        return await self._cloud_run().run(
-            self.cloud_transcribers[PROVIDER_ASSEMBLYAI], meeting_id, options or {}
-        )
-
-    transcribeMeetingAssemblyai = transcribe_meeting_assemblyai
-
-    async def transcribe_meeting_muse(
-        self,
-        meeting_id: str,
-        options: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        return await self._cloud_run().run(self.cloud_transcribers[PROVIDER_MUSE], meeting_id, options or {})
-
-    transcribeMeetingMuse = transcribe_meeting_muse
-
     def _default_modal_asr_model(self) -> str | None:
         source = self.modal_asr_model
         return source() if callable(source) else source
@@ -2318,15 +2274,6 @@ class TranscriptionService:
             {"category": "transcription", "meetingId": meeting_id, "engine": engine},
         )
         return "en"
-
-    async def transcribe_meeting_modal(
-        self,
-        meeting_id: str,
-        options: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        return await self._cloud_run().run(self.cloud_transcribers[PROVIDER_MODAL], meeting_id, options or {})
-
-    transcribeMeetingModal = transcribe_meeting_modal
 
     async def _ensure_artifact(
         self,
@@ -2393,7 +2340,7 @@ class TranscriptionService:
                         "now": self.now(),
                     },
                 )
-        if kind == "transcript" and fmt == "json" and estimate_usage and provider != PROVIDER_MODAL:
+        if kind == "transcript" and fmt == "json" and estimate_usage:
             # Providers that measure their own spend (Modal GPU time) skip this
             # estimate; the cloud run records theirs. The JSON artifact is the canonical transcript record (a plain-text
             # twin is saved alongside it); track spend once against it. The
