@@ -31,6 +31,7 @@ from olive.db import create_db
 from olive.workflows import queues as queues_mod
 from olive.workflows import runtime as runtime_mod
 from olive.workflows import transcription_workflow as tw
+from olive.workflows.transcription_run import TranscriptionRun
 from olive.workflows.transcription_workflow import (
     STAGE_ALIGN,
     STAGE_ASR,
@@ -189,14 +190,24 @@ def pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     async def _progress_sink(meeting_id: str, update: dict[str, Any]) -> None:
         harness.progress.append((meeting_id, update))
 
-    async def _complete_sink(meeting_id: str, result: dict[str, Any], wf_id: str | None) -> None:
-        harness.recorder.finalized.append({"meetingId": meeting_id, "result": result, "workflowId": wf_id})
-        tw._mark_local_stage(meeting_id, "local_transcribe", "done")
+    async def _persist(meeting_id: str, result: dict[str, Any]) -> str:
+        """Stand-in for the service's artifact writer; the run itself owns state."""
+        harness.recorder.finalized.append({"meetingId": meeting_id, "result": result})
+        artifact_id = f"art-{uuid.uuid4().hex[:8]}"
+        with harness.engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO artifacts (id, meeting_id, recording_id, kind, provider, format, path, created_at)"
+                    " VALUES (:id, :mid, NULL, 'transcript', 'local', 'json', :path, 0)"
+                ),
+                {"id": artifact_id, "mid": meeting_id, "path": f"transcripts/{artifact_id}.json"},
+            )
+        return artifact_id
 
     tw.configure_recovery_runtime(
         db=harness.engine,
-        progress_sink=_progress_sink,
-        complete_sink=_complete_sink,
+        run=TranscriptionRun(harness.engine, now=lambda: int(time.time() * 1000), progress=_progress_sink),
+        persist=_persist,
         config_dir=harness.config_dir,
         meetings_dir=harness.meetings_dir,
     )
@@ -803,7 +814,7 @@ async def test_legacy_local_workflows_are_cancelled_on_upgrade(
     monkeypatch.setattr(
         tw, "DBOS", type("FakeDBOS", (), {"cancel_workflow_async": staticmethod(fake_cancel)})
     )
-    tw.configure_recovery_runtime(db=handle.engine, progress_sink=None, complete_sink=None)
+    tw.configure_recovery_runtime(db=handle.engine)
 
     count = await tw.cancel_legacy_local_transcription_workflows(
         config_dir=str(tmp_path), meetings_dir=str(tmp_path)
@@ -897,15 +908,18 @@ async def test_stage_failure_marks_the_run_row_and_meeting_error(
     await _enqueue(harness, meeting_id, harness.payload(meeting_id))
 
     assert await harness.wait_for(meeting_id, STAGE_DIARIZE) == "error"
+    await harness.wait_for(meeting_id, "local_transcribe")
     status = harness.stage_status(meeting_id)
     assert status["local_transcribe"] == "error", status
     with harness.engine.connect() as conn:
         meeting = (
-            conn.execute(text("SELECT last_error FROM meetings WHERE id = :id"), {"id": meeting_id})
+            conn.execute(text("SELECT status, last_error FROM meetings WHERE id = :id"), {"id": meeting_id})
             .mappings()
             .one()
         )
     assert "diarizer exploded" in str(meeting["last_error"])
+    # Not stuck in "processing": the meeting shows the failure.
+    assert meeting["status"] == "error"
 
 
 async def test_stage_failure_cancels_the_parallel_sibling(
