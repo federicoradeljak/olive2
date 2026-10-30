@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -645,27 +646,33 @@ def create_app(options: dict[str, Any] | None = None, **kwargs: Any) -> FastAPI:
                     pass
             await asyncio.to_thread(shutdown_dbos)
 
+    from .workflows.transcription_run import TranscriptionRun
     from .workflows.transcription_workflow import configure_recovery_runtime
 
+    # Until the transcription service is built (it reconfigures these hooks
+    # with its own run), resolve it lazily on each call.
     def _progress_sink(meeting_id: str, update: dict[str, Any]) -> None:
-        svc = get_transcription_service()
-        emit = getattr(svc, "emit_progress", None)
+        emit = getattr(get_transcription_service(), "emit_progress", None)
         if callable(emit):
             emit(meeting_id, update)
 
-    def _complete_sink(meeting_id: str, result: dict[str, Any], wf_id: str | None) -> Any:
-        svc = get_transcription_service()
-        complete = getattr(svc, "complete_local_transcript", None) or getattr(
-            svc, "complete_recovered_local_transcript", None
-        )
-        if callable(complete):
-            return complete(meeting_id, result, wf_id)
-        return None
+    async def _after_complete(meeting_id: str) -> None:
+        enqueue: Any = getattr(get_transcription_service(), "_enqueue_auto_summarize", None)
+        if enqueue is not None:
+            await enqueue(meeting_id)
+
+    async def _persist_local(meeting_id: str, result: dict[str, Any]) -> str:
+        return await get_transcription_service().persist_local_transcript(meeting_id, result)
 
     configure_recovery_runtime(
         db=db,
-        progress_sink=_progress_sink,
-        complete_sink=_complete_sink,
+        run=TranscriptionRun(
+            db,
+            now=lambda: int(time.time() * 1000),
+            progress=_progress_sink,
+            after_complete=_after_complete,
+        ),
+        persist=_persist_local,
         config_dir=config_dir,
         meetings_dir=meetings_dir,
     )

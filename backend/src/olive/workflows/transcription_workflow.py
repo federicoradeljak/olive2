@@ -10,7 +10,7 @@ import os
 import sqlite3
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -58,6 +58,7 @@ from .runtime import (
     get_existing_dbos_sqlite_path,
     is_dbos_launched,
 )
+from .transcription_run import TranscriptionRun
 
 STAGE_FFMPEG_DECODE = "ffmpeg_decode"
 STAGE_DIARIZE = "diarize"
@@ -170,9 +171,13 @@ def get_task_context(task_id: str) -> TaskExecutionContext | None:
     return _TASK_CONTEXTS.get(task_id)
 
 
+#: Writes a finished local transcript's artifacts and speakers; returns the
+#: JSON transcript artifact id. Run state is the ``TranscriptionRun``'s job.
+PersistLocalTranscript = Callable[[str, dict[str, Any]], Awaitable[str]]
+
 _RECOVERY_DB: Engine | None = None
-_RECOVERY_PROGRESS_SINK: Callable[[str, dict[str, Any]], Any] | None = None
-_RECOVERY_COMPLETE_SINK: Callable[[str, dict[str, Any], str | None], Any] | None = None
+_LOCAL_RUN: TranscriptionRun | None = None
+_PERSIST_LOCAL: PersistLocalTranscript | None = None
 _RECOVERY_CONFIG_DIR: str | None = None
 _RECOVERY_MEETINGS_DIR: str | None = None
 _RECOVERY_NOW_FN: Callable[[], int] | None = None
@@ -180,8 +185,8 @@ _RECOVERY_NOW_FN: Callable[[], int] | None = None
 
 def configure_recovery_runtime(
     db: Engine | None,
-    progress_sink: Callable[[str, dict[str, Any]], Any] | None,
-    complete_sink: Callable[[str, dict[str, Any], str | None], Any] | None = None,
+    run: TranscriptionRun | None = None,
+    persist: PersistLocalTranscript | None = None,
     *,
     config_dir: str | None = None,
     meetings_dir: str | None = None,
@@ -190,21 +195,31 @@ def configure_recovery_runtime(
     """Set process-wide hooks the flat stage workflows run against.
 
     Stages are fire-and-forget: there is no live caller holding a
-    :class:`TaskExecutionContext`, so progress, persistence and clock access all
-    come from these process-wide hooks instead of a per-request closure.
+    :class:`TaskExecutionContext`, so the run lifecycle (state + progress),
+    persistence and clock access all come from these process-wide hooks
+    instead of a per-request closure.
     """
-    global _RECOVERY_DB, _RECOVERY_PROGRESS_SINK, _RECOVERY_COMPLETE_SINK
+    global _RECOVERY_DB, _LOCAL_RUN, _PERSIST_LOCAL
     global _RECOVERY_CONFIG_DIR, _RECOVERY_MEETINGS_DIR, _RECOVERY_NOW_FN
     _RECOVERY_DB = db
-    _RECOVERY_PROGRESS_SINK = progress_sink
+    _LOCAL_RUN = run
     if now_fn is not None:
         _RECOVERY_NOW_FN = now_fn
-    if complete_sink is not None:
-        _RECOVERY_COMPLETE_SINK = complete_sink
+    if persist is not None:
+        _PERSIST_LOCAL = persist
     if config_dir is not None:
         _RECOVERY_CONFIG_DIR = config_dir
     if meetings_dir is not None:
         _RECOVERY_MEETINGS_DIR = meetings_dir
+
+
+def _local_run() -> TranscriptionRun | None:
+    """The configured run lifecycle, or a progress-less one over the recovery DB."""
+    if _LOCAL_RUN is not None:
+        return _LOCAL_RUN
+    if _RECOVERY_DB is None:
+        return None
+    return TranscriptionRun(_RECOVERY_DB, now=_now_ms)
 
 
 def _now_ms() -> int:
@@ -368,7 +383,10 @@ def _mark_local_stage(
     error: str | None = None,
     job_id: str | None = None,
 ) -> None:
-    """Record one stage's lifecycle in ``stage_runs`` (+ meeting status/error).
+    """Record one stage's lifecycle in its ``stage_runs`` row.
+
+    Only the stage row: the run row and the meeting's status belong to
+    :class:`TranscriptionRun`.
 
     Called from workflow bodies, not steps: DBOS replays a workflow body on
     recovery, and these writes are idempotent upserts, so replay converges on
@@ -431,45 +449,6 @@ def _mark_local_stage(
                     "fin": finished,
                 },
             )
-            if status == "running":
-                conn.execute(
-                    text(
-                        """
-                        UPDATE meetings
-                        SET status = 'processing', last_error = NULL, updated_at = :now
-                        WHERE id = :mid
-                          AND primary_transcript_artifact_id IS NULL
-                          AND status != 'processing'
-                        """
-                    ),
-                    {"now": now, "mid": meeting_id},
-                )
-            elif status == "error":
-                conn.execute(
-                    text("UPDATE meetings SET last_error = :err, updated_at = :now WHERE id = :mid"),
-                    {"err": error, "now": now, "mid": meeting_id},
-                )
-            elif status == "cancelled":
-                existing = (
-                    conn.execute(
-                        text("SELECT primary_transcript_artifact_id FROM meetings WHERE id = :id"),
-                        {"id": meeting_id},
-                    )
-                    .mappings()
-                    .first()
-                )
-                next_status = (
-                    "ready" if (existing and existing.get("primary_transcript_artifact_id")) else "pending"
-                )
-                conn.execute(
-                    text(
-                        """
-                        UPDATE meetings SET status = :st, last_error = NULL, updated_at = :now
-                        WHERE id = :mid AND status = 'processing'
-                        """
-                    ),
-                    {"st": next_status, "now": now, "mid": meeting_id},
-                )
     except Exception as exc:
         logger.warn(
             "Failed to record local transcription stage state",
@@ -497,7 +476,7 @@ def _stage_status(meeting_id: str | None, stage: str) -> str | None:
 
 
 def _reset_local_stage_runs(meeting_id: str, *, job_id: str) -> None:
-    """Reset stage rows and checkpoints atomically for a fresh run."""
+    """Reset stage rows and checkpoints and start the run row, atomically."""
     db = _RECOVERY_DB
     if db is None or not meeting_id:
         return
@@ -526,31 +505,9 @@ def _reset_local_stage_runs(meeting_id: str, *, job_id: str) -> None:
                     ),
                     {"id": str(uuid.uuid4()), "mid": meeting_id, "stage": stage, "now": now},
                 )
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO stage_runs (
-                      id, meeting_id, stage, status, provider_job_id, attempts,
-                      last_error, started_at, finished_at, created_at, updated_at
-                    ) VALUES (
-                      :id, :mid, :stage, 'running', :jid, 1,
-                      NULL, :now, NULL, :now, :now
-                    )
-                    ON CONFLICT(meeting_id, stage) DO UPDATE SET
-                      status = 'running', provider_job_id = excluded.provider_job_id,
-                      attempts = stage_runs.attempts + 1, last_error = NULL,
-                      started_at = excluded.started_at, finished_at = NULL,
-                      updated_at = excluded.updated_at
-                    """
-                ),
-                {
-                    "id": str(uuid.uuid4()),
-                    "mid": meeting_id,
-                    "stage": STAGE_LOCAL_TRANSCRIBE,
-                    "jid": job_id,
-                    "now": now,
-                },
-            )
+            run = _local_run()
+            assert run is not None
+            run.start(meeting_id, STAGE_LOCAL_TRANSCRIBE, job_id=job_id, conn=conn)
     except Exception as exc:
         logger.warn(
             "Failed to reset local transcription stage runs",
@@ -568,7 +525,7 @@ def _ensure_task_context(payload: dict[str, Any]) -> bool:
     if task_id in _TASK_CONTEXTS:
         return False
     meeting_id = payload.get("meetingId")
-    sink = _RECOVERY_PROGRESS_SINK
+    sink = _LOCAL_RUN.progress if _LOCAL_RUN is not None else None
     on_progress = (lambda upd: sink(str(meeting_id), upd)) if sink and meeting_id else None
     wf_id = getattr(DBOS, "workflow_id", None)
     register_task_context(
@@ -1342,30 +1299,13 @@ def _is_local_stage_cancelled(exc: BaseException) -> bool:
     return "cancel" in str(exc).lower()
 
 
-async def _emit_local_stage_failure(
+def _log_local_stage_failure(
     task_id: str,
     meeting_id: str | None,
     exc: BaseException,
     *,
     cancelled: bool,
 ) -> None:
-    message = "Transcription was cancelled." if cancelled else str(exc) or type(exc).__name__
-    sink = _RECOVERY_PROGRESS_SINK
-    if meeting_id and callable(sink):
-        try:
-            res = sink(
-                meeting_id,
-                {
-                    "stage": "cancelled" if cancelled else "error",
-                    "percent": 0,
-                    "message": message,
-                    "error": None if cancelled else message,
-                },
-            )
-            if inspect.isawaitable(res):
-                await res
-        except Exception:
-            pass
     logger.info(
         "Local transcription stage ended without a transcript",
         {
@@ -1436,47 +1376,43 @@ async def run_local_stage(stage: str, payload: dict[str, Any]) -> dict[str, Any]
                 error=message,
                 job_id=job_id,
             )
+            run = _local_run()
+            entry_id = local_run_entry_workflow_id(meeting_id or task_id, task_id)
             if not cancelled:
-                # The run itself is over: surface it on the run row too, or the
-                # meeting looks mid-transcription forever after a stage failure.
-                _mark_local_stage(
-                    meeting_id,
-                    STAGE_LOCAL_TRANSCRIBE,
-                    "error",
-                    error=message,
-                    job_id=local_run_entry_workflow_id(meeting_id or task_id, task_id),
-                )
+                # The run itself is over: close the run row and the meeting too,
+                # or the meeting looks mid-transcription forever.
+                if meeting_id and run is not None:
+                    await run.fail(meeting_id, STAGE_LOCAL_TRANSCRIBE, message, job_id=entry_id)
                 # Stop the run's other in-flight stages instead of letting a
                 # costly sibling burn its queue slot for hours: mark their rows
                 # cancelled, which their next _check_aborted notices. No DBOS
                 # API call from inside a workflow (that path can block on the
                 # very workflow it is cancelling).
                 _abort_local_run_siblings(meeting_id, task_id, failed_stage=stage, error=message)
+            elif meeting_id and run is not None:
+                # No-op when the run already ended: a sibling aborted by a failed
+                # run must not replace the real error with a cancellation.
+                await run.cancel(meeting_id, STAGE_LOCAL_TRANSCRIBE, job_id=entry_id)
             clear_local_stage_checkpoints(meeting_id, task_id=task_id)
-            run_already_failed = (
-                meeting_id is not None and _stage_status(meeting_id, STAGE_LOCAL_TRANSCRIBE) == "error"
-            )
-            if not (cancelled and run_already_failed):
-                # A sibling aborted by a failed run must not replace the real
-                # error with "Transcription was cancelled".
-                await _emit_local_stage_failure(task_id, meeting_id, exc, cancelled=cancelled)
+            _log_local_stage_failure(task_id, meeting_id, exc, cancelled=cancelled)
             raise
 
         if stage == STAGE_ALIGN:
             # Final stage: persist the transcript, then mark the stage done so
             # "align done" always implies a durable transcript. Nothing awaits
             # the run, so completion is owned by the pipeline, not a caller.
-            if meeting_id:
-                sink = _RECOVERY_COMPLETE_SINK
-                if callable(sink):
-                    sink_res = sink(meeting_id, result, job_id)
-                    if inspect.isawaitable(sink_res):
-                        await sink_res
-                else:
-                    logger.warn(
-                        "Local transcript finished without a finalize sink; artifacts not persisted",
-                        {"category": "transcription", "meetingId": meeting_id},
-                    )
+            run = _local_run()
+            persist = _PERSIST_LOCAL
+            if meeting_id and run is not None and persist is not None:
+                artifact_id = await persist(meeting_id, result)
+                await run.complete(
+                    meeting_id, STAGE_LOCAL_TRANSCRIBE, transcript_artifact_id=artifact_id, job_id=job_id
+                )
+            elif meeting_id:
+                logger.warn(
+                    "Local transcript finished without a persist hook; artifacts not persisted",
+                    {"category": "transcription", "meetingId": meeting_id},
+                )
             clear_local_stage_checkpoints(meeting_id, task_id=task_id)
             _mark_local_stage(meeting_id, stage, "done", job_id=job_id)
             return result
@@ -1515,7 +1451,7 @@ _STAGE_QUEUED_PROGRESS: dict[str, tuple[str, int]] = {
 
 
 async def _emit_stage_queued_progress(meeting_id: str | None, queued_stage: str) -> None:
-    sink = _RECOVERY_PROGRESS_SINK
+    sink = _LOCAL_RUN.progress if _LOCAL_RUN is not None else None
     if not meeting_id or not callable(sink):
         return
     message, percent = _STAGE_QUEUED_PROGRESS.get(queued_stage, (None, 0))

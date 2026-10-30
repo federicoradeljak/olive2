@@ -387,8 +387,11 @@ async def test_finalize_is_idempotent(tmp_path: Path) -> None:
     }
 
     try:
-        await transcription_service.complete_local_transcript(meeting_id, result, "wf-1")
-        await transcription_service.complete_local_transcript(meeting_id, result, "wf-1")
+        for _ in range(2):
+            artifact_id = await transcription_service.persist_local_transcript(meeting_id, result)
+            await transcription_service.run.complete(
+                meeting_id, "local_transcribe", transcript_artifact_id=artifact_id, job_id="wf-1"
+            )
 
         with handle.engine.connect() as conn:
             artifacts = (
